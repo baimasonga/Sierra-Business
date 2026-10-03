@@ -16,3 +16,5 @@
 @media(max-width:420px){.sidebar.menu-open .area-navigation{grid-template-columns:1fr}.heading{gap:10px}.heading>.primary{padding:10px;font-size:11px}.metrics{grid-template-columns:1fr}.metrics section{border-right:0;border-bottom:1px solid var(--line)}}
 @media(prefers-reduced-motion:reduce){button{transition:none}}
 input[type=checkbox],input[type=radio]{width:18px;height:18px;min-height:18px;padding:0;flex:none}
+textarea{width:100%;font:inherit;background:white;border:1px solid #cbd6cb;padding:11px;border-radius:3px;color:#203e30;resize:vertical}textarea:focus{outline:2px solid #9ccc82;border-color:#487a43}.search-row{display:flex;gap:16px;align-items:flex-end}.search-row label{flex:1}.search-row button{flex:none}.facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px 24px;margin:20px 0}.facts dt{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);font-weight:650}.facts dd{margin:4px 0 0}.checklist{list-style:none;padding:0}.checklist li{padding:4px 0}
+@media(max-width:800px){.facts{grid-template-columns:1fr}.search-row{flex-direction:column;align-items:stretch}}

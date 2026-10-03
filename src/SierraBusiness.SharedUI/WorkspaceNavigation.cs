@@ -8,6 +8,7 @@ public static class WorkspaceNavigation
         new("Sales & purchases", "⇄", ["New sale", "Receive stock", "Orders & quotations", "Customers & suppliers", "Returns", "Sales controls", "Supplier invoices", "Imports & landed cost"]),
         new("Inventory", "▦", ["Stock summary", "Catalogue", "Product settings", "Barcodes", "Warehouse controls", "Count sessions", "Import from Excel", "Movement register", "Tracking register"]),
         new("Finance", "=", ["Accounting", "Banking", "Tills", "Trial balance", "Periods & tax"]),
+        new("After-sales", "◎", ["Equipment lookup", "Installations", "Equipment setup"]),
         new("People", "♙", ["Payroll"]),
         new("Documents", "▤", ["Documents"]),
         new("Administration", "⚙", ["Users & permissions", "Backups & integrity", "Audit & sync"])

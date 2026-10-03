@@ -1,0 +1,120 @@
+@inject IEquipmentService Equipment
+<section class="panel">
+    <h2>Find a unit</h2>
+    <form class="search-row" @onsubmit="Find" @onsubmit:preventDefault>
+        <label>Serial number, SKU or product name<input @bind="search" placeholder="For example XR-1001" maxlength="100" /></label>
+        <button class="primary" disabled="@busy">Search</button>
+    </form>
+    @if (results is not null)
+    {
+        @if (results.Count == 0) { <p class="empty">No serial units match "@searched".</p> }
+        else
+        {
+            <div class="table-wrap"><table><thead><tr><th>Serial</th><th>Product</th><th>Status</th><th>Customer</th><th></th></tr></thead><tbody>
+            @foreach (var r in results) { <tr><td class="code">@r.Serial</td><td>@r.Sku · @r.Name</td><td>@r.Status</td><td>@r.Customer</td><td><button class="text-button" disabled="@busy" @onclick="() => Open(r.ProductId, r.Serial)">Open</button></td></tr> }
+            </tbody></table></div>
+        }
+    }
+</section>
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+@if (unit is not null)
+{
+    <section class="panel">
+        <div class="panel-title"><h2>@unit.Sku · @unit.Serial</h2><span>@unit.Status.ToUpperInvariant()</span></div>
+        <div class="notice @(unit.Coverage.Covered ? "success" : "")" role="status">@unit.Coverage.Message</div>
+        <dl class="facts">
+            <div><dt>Product</dt><dd>@unit.Name@(unit.Brand.Length + unit.Model.Length > 0 ? $" · {unit.Brand} {unit.Model}" : "")</dd></div>
+            <div><dt>Customer</dt><dd>@(unit.Customer.Length > 0 ? unit.Customer : "—")@(unit.Sold is not null ? $" · sold {unit.Sold:dd MMM yyyy}" : "")</dd></div>
+            <div><dt>Received</dt><dd>@(unit.Received?.ToString("dd MMM yyyy") ?? "—")@(unit.Supplier.Length > 0 ? $" from {unit.Supplier}" : "")@(unit.Cost is not null ? $" · cost NLe {unit.Cost:N2}" : "")</dd></div>
+            <div><dt>Supplier warranty</dt><dd>@(unit.SupplierWarrantyEnd is null ? "Not recorded" : (unit.SupplierWarrantyEnd >= DateOnly.FromDateTime(DateTime.UtcNow) ? "Until " : "Ended ") + unit.SupplierWarrantyEnd.Value.ToString("dd MMM yyyy"))</dd></div>
+            <div><dt>Location</dt><dd>@(unit.Location.Length > 0 ? unit.Location : "—")</dd></div>
+            <div><dt>Sale document</dt><dd class="code">@(unit.SaleNumber.Length > 0 ? unit.SaleNumber : "—")</dd></div>
+        </dl>
+        @if (unit.CanStartWarranty && Actor.Permissions.Contains("sales.create"))
+        {
+            <p class="hint">This sale has no warranty recorded yet (for example, it was sold before warranty terms were set).</p>
+            <button class="secondary" disabled="@busy" @onclick="StartWarranty">Start customer warranty</button>
+        }
+    </section>
+
+    <section class="panel">
+        <h2>Unit specifications</h2>
+        @if (CanEdit)
+        {
+            @foreach (var spec in specs)
+            {
+                <div class="form-grid"><label>Name<input maxlength="60" @bind="spec.Name" placeholder="Processor, RAM, tube, firmware…" /></label><label>Value<input maxlength="160" @bind="spec.Value" /></label></div>
+            }
+            <button class="text-button" disabled="@busy" @onclick="() => specs.Add(new())">+ Add specification</button>
+            <div class="form-grid"><label>Accessories supplied<input maxlength="200" @bind="accessories" placeholder="Power cord, carry case…" /></label><label>Notes<input maxlength="200" @bind="notes" /></label></div>
+            <button class="primary" disabled="@busy" @onclick="SaveProfile">Save unit record</button>
+        }
+        else if (unit.Specifications.Count == 0) { <p class="empty">No specifications recorded.</p> }
+        else { <dl class="facts">@foreach (var s in unit.Specifications) { <div><dt>@s.Name</dt><dd>@s.Value</dd></div> }</dl><p>Accessories: @unit.Accessories</p><p>@unit.Notes</p> }
+    </section>
+
+    <section class="panel">
+        <h2>History</h2>
+        <div class="table-wrap"><table><thead><tr><th>Date</th><th>Event</th><th>Document</th></tr></thead><tbody>
+        @foreach (var e in unit.Timeline) { <tr><td>@e.Date.ToString("dd MMM yyyy")</td><td>@e.Description</td><td class="code">@(e.Document.Length > 8 ? e.Document[^8..] : e.Document)</td></tr> }
+        </tbody></table></div>
+    </section>
+
+    @if (unit.Warranties.Count > 0)
+    {
+        <section class="panel">
+            <h2>Warranties</h2>
+            <div class="table-wrap"><table><thead><tr><th>Customer</th><th>From</th><th>To</th><th>Starts at</th><th>Status</th><th>Coverage</th></tr></thead><tbody>
+            @foreach (var w in unit.Warranties) { <tr><td>@w.Customer</td><td>@w.Start.ToString("dd MMM yyyy")</td><td>@w.End.ToString("dd MMM yyyy")</td><td>@w.Source</td><td><span class="pill">@w.Status</span></td><td>@w.Coverage</td></tr> }
+            </tbody></table></div>
+            <p class="hint">A warranty becomes void when its sale is reversed or the unit is returned; a resale starts a new warranty.</p>
+        </section>
+    }
+
+    <section class="panel">
+        <h2>Compatible accessories, consumables and spare parts</h2>
+        @if (unit.Compatible.Count == 0) { <p class="empty">No compatible items are linked. Link them under Equipment setup.</p> }
+        else
+        {
+            <div class="table-wrap"><table><thead><tr><th>Item</th><th>Type</th><th>Note</th><th class="numeric">In stock</th></tr></thead><tbody>
+            @foreach (var c in unit.Compatible) { <tr><td>@c.Sku · @c.Name</td><td>@(c.Reverse ? "Used with" : c.Kind.ToString())</td><td>@c.Note</td><td class="numeric">@c.OnHand.ToString("0.####")</td></tr> }
+            </tbody></table></div>
+        }
+    </section>
+}
+
+@code {
+    [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
+    private sealed class SpecInput { public string Name { get; set; } = ""; public string Value { get; set; } = ""; }
+    private IReadOnlyList<EquipmentSearchResult>? results;
+    private EquipmentUnitView? unit;
+    private List<SpecInput> specs = [];
+    private string search = "", searched = "", accessories = "", notes = "", error = "", message = "";
+    private bool busy;
+    private bool CanEdit => Actor.Permissions.Contains("catalogue.write") || Actor.Permissions.Contains("inventory.receive") || Actor.Permissions.Contains("sales.create");
+    public bool HasDraft => unit is not null && CanEdit && (accessories != unit.Accessories || notes != unit.Notes || specs.Count(x => x.Name.Length + x.Value.Length > 0) != unit.Specifications.Count);
+    private async Task Run(Func<Task> action)
+    {
+        if (busy) return; busy = true; error = message = "";
+        try { await action(); }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
+        catch (Exception) { error = "The operation could not complete. Refresh and try again."; }
+        finally { busy = false; }
+    }
+    private Task Find() => Run(async () => { searched = search.Trim(); unit = null; if (searched.Length < 2) { error = "Enter at least two characters."; results = null; return; } results = await Equipment.Search(searched); if (results.Count == 1) await Load(results[0].ProductId, results[0].Serial); });
+    private Task Open(Guid productId, string serial) => Run(() => Load(productId, serial));
+    private async Task Load(Guid productId, string serial)
+    {
+        unit = await Equipment.Unit(productId, serial);
+        specs = unit?.Specifications.Select(x => new SpecInput { Name = x.Name, Value = x.Value }).ToList() ?? [];
+        if (specs.Count == 0) specs.Add(new());
+        accessories = unit?.Accessories ?? ""; notes = unit?.Notes ?? "";
+    }
+    private Task SaveProfile() => Run(async () =>
+    {
+        await Equipment.SaveProfile(new(Guid.NewGuid(), unit!.ProductId, unit.Serial, unit.ProfileVersion, specs.Select(x => new UnitSpecification(x.Name, x.Value)).ToList(), accessories, notes));
+        await Load(unit.ProductId, unit.Serial); message = "Unit record saved. Earlier versions are kept for audit.";
+    });
+    private Task StartWarranty() => Run(async () => { await Equipment.StartWarranty(new(Guid.NewGuid(), unit!.ProductId, unit.Serial)); await Load(unit.ProductId, unit.Serial); message = "Customer warranty started."; });
+}

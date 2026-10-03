@@ -1,0 +1,87 @@
+@inject IEquipmentService Equipment
+@inject IBusinessService Business
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+
+<section class="panel">
+    <h2>Warranty and installation terms</h2>
+    <p class="hint">Set these for each equipment model. New terms apply to sales and installations from now on; existing warranties keep the terms they started with.</p>
+    <div class="form-grid">
+        <label>Product<select @bind="productId" @bind:after="LoadTerms"><option value="@Guid.Empty">Select a product</option>@foreach (var p in products.OrderBy(x => x.Tracking != TrackingMode.Serial).ThenBy(x => x.Sku)) { <option value="@p.Id">@p.Sku · @p.Name@(p.Tracking == TrackingMode.Serial ? "" : " (not serial-tracked)")</option> }</select></label>
+    </div>
+    @if (productId != Guid.Empty)
+    {
+        <div class="form-grid">
+            <label>Customer warranty (months)<input type="number" min="0" max="120" step="1" @bind="customerMonths" /><span class="hint">0 means no customer warranty.</span></label>
+            <label>Customer warranty starts<select @bind="startsAt"><option value="@WarrantyStart.Sale">On the sale or delivery date</option><option value="@WarrantyStart.Installation">When installation is completed</option></select></label>
+            <label>Supplier warranty to us (months)<input type="number" min="0" max="120" step="1" @bind="supplierMonths" /><span class="hint">Counted from the date the unit was received.</span></label>
+            <label>Coverage<input maxlength="200" @bind="coverage" placeholder="For example: parts and labour, excludes consumables" /></label>
+        </div>
+        <label class="check"><input type="checkbox" @bind="requiresInstallation" /> Installation and commissioning required</label>
+        <label>Commissioning checklist (one check per line)<textarea rows="5" @bind="checklist" placeholder="Power and earthing checked&#10;Calibration verified&#10;Operator training given"></textarea></label>
+        <button class="primary" disabled="@busy" @onclick="SaveTerms">Save terms</button>
+    }
+    @if (terms.Count > 0)
+    {
+        <div class="table-wrap"><table><thead><tr><th>Product</th><th class="numeric">Customer warranty</th><th>Starts</th><th class="numeric">Supplier warranty</th><th>Installation</th><th class="numeric">Checks</th></tr></thead><tbody>
+        @foreach (var t in terms) { <tr><td>@Sku(t.ProductId)</td><td class="numeric">@t.CustomerWarrantyMonths months</td><td>@(t.StartsAt == WarrantyStart.Sale ? "At sale" : "At installation")</td><td class="numeric">@t.SupplierWarrantyMonths months</td><td>@(t.RequiresInstallation ? "Required" : "—")</td><td class="numeric">@(t.Checklist?.Count ?? 0)</td></tr> }
+        </tbody></table></div>
+    }
+</section>
+
+<section class="panel">
+    <h2>Compatible accessories, consumables and spare parts</h2>
+    <div class="form-grid">
+        <label>Equipment<select @bind="equipmentId"><option value="@Guid.Empty">Select equipment</option>@foreach (var p in products.OrderBy(x => x.Sku)) { <option value="@p.Id">@p.Sku · @p.Name</option> }</select></label>
+        <label>Works with<select @bind="itemId"><option value="@Guid.Empty">Select item</option>@foreach (var p in products.Where(x => x.Id != equipmentId).OrderBy(x => x.Sku)) { <option value="@p.Id">@p.Sku · @p.Name</option> }</select></label>
+        <label>Type<select @bind="kind"><option value="@CompatibilityKind.Accessory">Accessory</option><option value="@CompatibilityKind.Consumable">Consumable</option><option value="@CompatibilityKind.SparePart">Spare part</option></select></label>
+        <label>Note<input maxlength="120" @bind="linkNote" placeholder="For example: yields 3,000 pages" /></label>
+    </div>
+    <button class="secondary" disabled="@(busy || equipmentId == Guid.Empty || itemId == Guid.Empty)" @onclick="Link">Link products</button>
+    @if (links.Count > 0)
+    {
+        <label>Reason for removing a link<input maxlength="160" @bind="unlinkReason" /></label>
+        <div class="table-wrap"><table><thead><tr><th>Equipment</th><th>Works with</th><th>Type</th><th>Note</th><th></th></tr></thead><tbody>
+        @foreach (var l in links) { <tr><td>@Sku(l.EquipmentProductId)</td><td>@Sku(l.ItemProductId)</td><td>@l.Kind</td><td>@l.Note</td><td><button class="text-button" disabled="@(busy || unlinkReason.Trim().Length == 0)" @onclick="() => Unlink(l.Id)">Remove</button></td></tr> }
+        </tbody></table></div>
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
+    private IReadOnlyList<ProductView> products = [];
+    private IReadOnlyList<EquipmentTerms> terms = [];
+    private IReadOnlyList<CompatibilityLink> links = [];
+    private Guid productId, equipmentId, itemId;
+    private int customerMonths, supplierMonths, version;
+    private WarrantyStart startsAt;
+    private bool requiresInstallation, busy;
+    private CompatibilityKind kind = CompatibilityKind.Accessory;
+    private string coverage = "", checklist = "", linkNote = "", unlinkReason = "", error = "", message = "";
+    public bool HasDraft => linkNote.Length > 0;
+    private string Sku(Guid id) => products.FirstOrDefault(x => x.Id == id) is { } p ? $"{p.Sku} · {p.Name}" : "";
+
+    protected override Task OnInitializedAsync() => Run(Load);
+    private async Task Load() { products = (await Business.Read(Actor)).Products; terms = await Equipment.Terms(); links = await Equipment.Compatibility(); }
+    private async Task Run(Func<Task> action)
+    {
+        if (busy) return; busy = true; error = message = "";
+        try { await action(); }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
+        catch (Exception) { error = "The operation could not complete. Refresh and try again."; }
+        finally { busy = false; }
+    }
+    private void LoadTerms()
+    {
+        var t = terms.FirstOrDefault(x => x.ProductId == productId) ?? new EquipmentTerms(productId);
+        version = t.Version; customerMonths = t.CustomerWarrantyMonths; supplierMonths = t.SupplierWarrantyMonths; startsAt = t.StartsAt; requiresInstallation = t.RequiresInstallation; coverage = t.Coverage;
+        checklist = string.Join("\n", t.Checklist ?? []);
+    }
+    private Task SaveTerms() => Run(async () =>
+    {
+        await Equipment.SaveTerms(new(Guid.NewGuid(), new(productId, version, customerMonths, startsAt, supplierMonths, requiresInstallation, checklist.Split('\n').Select(x => x.Trim()).Where(x => x.Length > 0).ToList(), coverage)));
+        await Load(); LoadTerms(); message = "Terms saved.";
+    });
+    private Task Link() => Run(async () => { await Equipment.Link(new(Guid.NewGuid(), equipmentId, itemId, kind, linkNote)); itemId = Guid.Empty; linkNote = ""; await Load(); message = "Products linked."; });
+    private Task Unlink(Guid id) => Run(async () => { await Equipment.Unlink(new(Guid.NewGuid(), id, unlinkReason)); unlinkReason = ""; await Load(); message = "Link removed. The removal is kept in the audit history."; });
+}

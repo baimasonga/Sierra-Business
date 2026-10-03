@@ -1,0 +1,134 @@
+@inject IEquipmentService Equipment
+@inject Microsoft.JSInterop.IJSRuntime JS
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+
+@if (CanWrite)
+{
+    <section class="panel">
+        <h2>Schedule an installation</h2>
+        @if (installable.Count == 0) { <p class="empty">No sold serial units are waiting for installation.</p> }
+        else
+        {
+            <div class="form-grid">
+                <label>Sale or delivery<select @bind="saleId" @bind:after="ChooseSale"><option value="@Guid.Empty">Select a sale</option>@foreach (var s in installable) { <option value="@s.SaleId">@s.Customer · @s.Date.ToString("dd MMM yyyy") · @s.Number[^8..] (@s.Units.Count)</option> }</select></label>
+                <label>Installation site<input maxlength="160" @bind="site" placeholder="Department, building, town" /></label>
+                <label>Planned date<input type="date" @bind="scheduled" /></label>
+                <label>Engineer<input maxlength="100" @bind="engineer" /></label>
+                <label>Notes<input maxlength="200" @bind="notes" placeholder="Access, power, items to bring" /></label>
+            </div>
+            @if (Sale is not null)
+            {
+                <h3>Units to install</h3>
+                @foreach (var u in Sale.Units) { <label class="check"><input type="checkbox" checked="@chosen.Contains(u.Serial)" @onchange="e => Toggle(u.Serial, (bool)(e.Value ?? false))" /> @u.Sku · @u.Name · <span class="code">@u.Serial</span></label> }
+                <button class="primary" disabled="@(busy || chosen.Count == 0)" @onclick="Schedule">Schedule installation</button>
+            }
+        }
+    </section>
+}
+
+<section class="panel">
+    <div class="panel-title"><h2>Installations</h2><button class="secondary" disabled="@busy" @onclick="Refresh">Refresh</button></div>
+    @if (jobs.Count == 0) { <p class="empty">No installations yet.</p> }
+    else
+    {
+        <div class="table-wrap"><table><thead><tr><th>Customer / site</th><th>Units</th><th>Planned</th><th>Engineer</th><th>Status</th><th></th></tr></thead><tbody>
+        @foreach (var j in jobs) { <tr><td>@j.Customer<br /><span class="hint">@j.Site</span></td><td>@string.Join(", ", j.Units.Select(u => u.Serial))</td><td>@j.Scheduled.ToString("dd MMM yyyy")</td><td>@j.Engineer</td><td><span class="pill">@j.Status</span></td><td><button class="text-button" disabled="@busy" @onclick="() => Select(j)">Open</button></td></tr> }
+        </tbody></table></div>
+    }
+</section>
+
+@if (selected is not null)
+{
+    <section class="panel">
+        <div id="installation-print">
+            <h1>@(CompanyName.Length == 0 ? "Sierra Business" : CompanyName)</h1>
+            <h2>@(selected.Status == "Completed" ? "Installation and commissioning certificate" : "Installation job sheet")</h2>
+            <p class="code">@selected.Number</p>
+            <p>Customer: @selected.Customer<br />Site: @selected.Site<br />Sale document: @selected.SaleNumber (@selected.SaleDate.ToString("dd MMM yyyy"))<br />Engineer: @selected.Engineer<br />Planned: @selected.Scheduled.ToString("dd MMM yyyy")@(selected.Completed is not null ? $" · Completed: {selected.Completed:dd MMM yyyy}" : "")</p>
+            <table><thead><tr><th>Equipment</th><th>Serial number</th></tr></thead><tbody>@foreach (var u in selected.Units) { <tr><td>@u.Sku · @u.Name</td><td>@u.Serial</td></tr> }</tbody></table>
+            @if (selected.Checklist.Count > 0)
+            {
+                <h3>Commissioning checklist</h3>
+                <ul class="checklist">@foreach (var c in selected.Checklist) { <li>@(selected.ChecklistDone.Contains(c, StringComparer.OrdinalIgnoreCase) ? "☑" : "☐") @c</li> }</ul>
+            }
+            @if (selected.Notes.Length > 0) { <p>Job notes: @selected.Notes</p> }
+            @if (selected.Status == "Completed")
+            {
+                <p>Accepted by: <strong>@selected.AcceptedBy</strong>@(selected.TrainingGivenTo.Length > 0 ? $" · Training given to: {selected.TrainingGivenTo}" : "")</p>
+                @if (selected.CompletionNotes.Length > 0) { <p>Completion notes: @selected.CompletionNotes</p> }
+            }
+            @if (selected.Status == "Cancelled") { <p><strong>CANCELLED</strong> — @selected.CancelReason</p> }
+            <p>Engineer signature: ____________________ &nbsp; Customer signature: ____________________</p>
+        </div>
+        <PrintButton Target="installation-print" />
+
+        @if (CanWrite && selected.Status.StartsWith("Scheduled", StringComparison.Ordinal))
+        {
+            <h3>Complete the installation</h3>
+            @if (selected.Checklist.Count > 0)
+            {
+                <p class="hint">Tick each check as it is done. All checks are needed to complete.</p>
+                @foreach (var c in selected.Checklist) { <label class="check"><input type="checkbox" checked="@done.Contains(c)" @onchange="e => Tick(c, (bool)(e.Value ?? false))" /> @c</label> }
+            }
+            <div class="form-grid">
+                <label>Completed on<input type="date" @bind="completed" /></label>
+                <label>Accepted by (customer representative)<input maxlength="120" @bind="acceptedBy" /></label>
+                <label>Training given to<input maxlength="160" @bind="trainingGivenTo" placeholder="Names or roles of users trained" /></label>
+                <label>Completion notes<input maxlength="200" @bind="completionNotes" /></label>
+            </div>
+            <button class="primary" disabled="@busy" @onclick="Complete">Record completion</button>
+            <details><summary>Cancel this installation</summary><label>Reason<input maxlength="160" @bind="cancelReason" /></label><button class="danger" disabled="@busy" @onclick="Cancel">Cancel installation</button></details>
+        }
+    </section>
+}
+
+@code {
+    [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
+    [Parameter] public string CompanyName { get; set; } = "";
+    private IReadOnlyList<InstallableSale> installable = [];
+    private IReadOnlyList<InstallationView> jobs = [];
+    private InstallationView? selected;
+    private readonly HashSet<string> chosen = [];
+    private readonly HashSet<string> done = new(StringComparer.OrdinalIgnoreCase);
+    private Guid saleId, operation = Guid.NewGuid(), completeOperation = Guid.NewGuid();
+    private string site = "", engineer = "", notes = "", acceptedBy = "", trainingGivenTo = "", completionNotes = "", cancelReason = "", error = "", message = "";
+    private DateOnly scheduled = DateOnly.FromDateTime(DateTime.UtcNow), completed = DateOnly.FromDateTime(DateTime.UtcNow);
+    private bool busy;
+    private bool CanWrite => Actor.Permissions.Contains("sales.create");
+    private InstallableSale? Sale => installable.FirstOrDefault(x => x.SaleId == saleId);
+    public bool HasDraft => chosen.Count > 0 && site.Length > 0 || done.Count > 0 || acceptedBy.Length > 0;
+
+    protected override Task OnInitializedAsync() => Run(Load);
+    private async Task Load() { installable = await Equipment.Installable(); jobs = await Equipment.Installations(); if (selected is not null) selected = jobs.FirstOrDefault(x => x.Id == selected.Id); }
+    private Task Refresh() => Run(Load);
+    private async Task Run(Func<Task> action)
+    {
+        if (busy) return; busy = true; error = message = "";
+        try { await action(); }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
+        catch (Exception) { error = "The operation could not complete. Refresh and check the installation list before retrying."; }
+        finally { busy = false; }
+    }
+    private void ChooseSale() { chosen.Clear(); foreach (var u in Sale?.Units ?? []) chosen.Add(u.Serial); if (Sale is not null && scheduled < Sale.Date) scheduled = Sale.Date; }
+    private void Toggle(string serial, bool on) { if (on) chosen.Add(serial); else chosen.Remove(serial); }
+    private void Tick(string check, bool on) { if (on) done.Add(check); else done.Remove(check); }
+    private void Select(InstallationView job) { selected = job; done.Clear(); acceptedBy = trainingGivenTo = completionNotes = cancelReason = ""; completed = DateOnly.FromDateTime(DateTime.UtcNow); completeOperation = Guid.NewGuid(); }
+    private Task Schedule() => Run(async () =>
+    {
+        var sale = Sale!;
+        var id = await Equipment.ScheduleInstallation(new(operation, sale.SaleId, site, scheduled, engineer, sale.Units.Where(u => chosen.Contains(u.Serial)).Select(u => new InstallationUnitInput(u.ProductId, u.Serial)).ToList(), notes));
+        operation = Guid.NewGuid(); saleId = Guid.Empty; chosen.Clear(); site = notes = "";
+        await Load(); Select(jobs.Single(x => x.Id == id)); message = "Installation scheduled. Print the job sheet for the engineer.";
+    });
+    private Task Complete() => Run(async () =>
+    {
+        await Equipment.CompleteInstallation(new(completeOperation, selected!.Id, completed, done.ToList(), acceptedBy, trainingGivenTo, completionNotes));
+        await Load(); Select(selected!); message = "Installation completed. Warranties that start at installation are now running; print the commissioning certificate for the customer.";
+    });
+    private async Task Cancel()
+    {
+        if (!await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", "Cancel this installation? The units can then be scheduled again.")) return;
+        await Run(async () => { await Equipment.CancelInstallation(new(Guid.NewGuid(), selected!.Id, cancelReason)); await Load(); message = "Installation cancelled."; });
+    }
+}

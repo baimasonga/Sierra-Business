@@ -802,6 +802,52 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.ToTable("Employees");
                 });
 
+            modelBuilder.Entity("SierraBusiness.Infrastructure.EquipmentTermsVersion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ChecklistJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Coverage")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("CustomerWarrantyMonths")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("RequiresInstallation")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("StartsAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("SupplierWarrantyMonths")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProductId", "Version")
+                        .IsUnique();
+
+                    b.ToTable("EquipmentTerms");
+                });
+
             modelBuilder.Entity("SierraBusiness.Infrastructure.ExchangeRate", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1099,6 +1145,165 @@ namespace SierraBusiness.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("ImportRows");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.Installation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Branch")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Customer")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Engineer")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Notes")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Number")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("SaleId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateOnly>("Scheduled")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Site")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Number")
+                        .IsUnique();
+
+                    b.HasIndex("SaleId");
+
+                    b.ToTable("Installations");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.InstallationCancellation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("InstallationId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InstallationId")
+                        .IsUnique();
+
+                    b.ToTable("InstallationCancellations");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.InstallationCompletion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AcceptedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ChecklistDoneJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateOnly>("Completed")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("InstallationId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Notes")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrainingGivenTo")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InstallationId")
+                        .IsUnique();
+
+                    b.ToTable("InstallationCompletions");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.InstallationUnit", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ChecklistJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("InstallationId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Serial")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Serial");
+
+                    b.HasIndex("InstallationId", "ProductId", "Serial")
+                        .IsUnique();
+
+                    b.ToTable("InstallationUnits");
                 });
 
             modelBuilder.Entity("SierraBusiness.Infrastructure.IntegritySeal", b =>
@@ -1875,6 +2080,67 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.ToTable("ProductBarcodes");
                 });
 
+            modelBuilder.Entity("SierraBusiness.Infrastructure.ProductLink", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("EquipmentProductId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ItemProductId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Note")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EquipmentProductId");
+
+                    b.HasIndex("ItemProductId");
+
+                    b.ToTable("ProductLinks");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.ProductLinkRemoval", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("LinkId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LinkId")
+                        .IsUnique();
+
+                    b.ToTable("ProductLinkRemovals");
+                });
+
             modelBuilder.Entity("SierraBusiness.Infrastructure.ReceivedCheque", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2322,6 +2588,109 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.ToTable("TradeOrderLines");
                 });
 
+            modelBuilder.Entity("SierraBusiness.Infrastructure.UnitProfile", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Accessories")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Notes")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Serial")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SpecificationsJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProductId", "Serial", "Version")
+                        .IsUnique();
+
+                    b.ToTable("UnitProfiles");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.Warranty", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Branch")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Coverage")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Customer")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateOnly>("End")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("InstallationId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Months")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("SaleId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Serial")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateOnly>("Start")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Serial");
+
+                    b.HasIndex("SaleId", "ProductId", "Serial")
+                        .IsUnique();
+
+                    b.ToTable("Warranties");
+                });
+
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<string>", b =>
                 {
                     b.HasOne("Microsoft.AspNetCore.Identity.IdentityRole", null)
@@ -2509,6 +2878,15 @@ namespace SierraBusiness.Infrastructure.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("SierraBusiness.Infrastructure.EquipmentTermsVersion", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.Product", null)
+                        .WithMany()
+                        .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("SierraBusiness.Infrastructure.ForeignBill", b =>
                 {
                     b.HasOne("SierraBusiness.Infrastructure.BusinessDocument", null)
@@ -2553,6 +2931,42 @@ namespace SierraBusiness.Infrastructure.Migrations
                         .WithMany()
                         .HasForeignKey("BatchId")
                         .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.Installation", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.BusinessDocument", null)
+                        .WithMany()
+                        .HasForeignKey("SaleId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.InstallationCancellation", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.Installation", null)
+                        .WithMany()
+                        .HasForeignKey("InstallationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.InstallationCompletion", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.Installation", null)
+                        .WithMany()
+                        .HasForeignKey("InstallationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.InstallationUnit", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.Installation", null)
+                        .WithMany()
+                        .HasForeignKey("InstallationId")
+                        .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });
 
@@ -2697,6 +3111,30 @@ namespace SierraBusiness.Infrastructure.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("SierraBusiness.Infrastructure.ProductLink", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.Product", null)
+                        .WithMany()
+                        .HasForeignKey("EquipmentProductId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SierraBusiness.Infrastructure.Product", null)
+                        .WithMany()
+                        .HasForeignKey("ItemProductId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.ProductLinkRemoval", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.ProductLink", null)
+                        .WithMany()
+                        .HasForeignKey("LinkId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("SierraBusiness.Infrastructure.ReceivedCheque", b =>
                 {
                     b.HasOne("SierraBusiness.Infrastructure.BusinessDocument", null)
@@ -2827,6 +3265,15 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.HasOne("SierraBusiness.Infrastructure.Product", null)
                         .WithMany()
                         .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.Warranty", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.BusinessDocument", null)
+                        .WithMany()
+                        .HasForeignKey("SaleId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

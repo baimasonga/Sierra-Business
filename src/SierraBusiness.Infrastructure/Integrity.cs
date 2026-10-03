@@ -41,7 +41,8 @@ public static class HistoryProtection
         typeof(LedgerAccount), typeof(BillAllocation), typeof(BankMatch), typeof(BankMatchCancellation), typeof(LedgerBudget),
         typeof(TradeOrder), typeof(TradeOrderLine), typeof(OrderFulfillment), typeof(OrderClosure), typeof(StockLocation),
         typeof(PeriodClosure), typeof(SalesTaxRate), typeof(ReturnAllocation), typeof(PayrollItem),
-        typeof(ExchangeRate), typeof(ForeignBill), typeof(ForeignSettlement), typeof(LandedCostAllocation), typeof(InvoiceMatch), typeof(OrderCurrency)
+        typeof(ExchangeRate), typeof(ForeignBill), typeof(ForeignSettlement), typeof(LandedCostAllocation), typeof(InvoiceMatch), typeof(OrderCurrency),
+        typeof(EquipmentTermsVersion), typeof(ProductLink), typeof(ProductLinkRemoval), typeof(UnitProfile), typeof(Installation), typeof(InstallationUnit), typeof(InstallationCompletion), typeof(InstallationCancellation), typeof(Warranty)
     };
 
     private static bool IsSqlite(BusinessDb db) => db.Database.ProviderName == "Microsoft.EntityFrameworkCore.Sqlite";

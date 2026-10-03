@@ -182,6 +182,7 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
             if (delivery) posting = AccountingEngine.Balanced([new((Account)1250, cost, 0), new(Account.Inventory, 0, cost)]);
             else if (delivered is not null) posting = posting.Select(x => x.Account == Account.Inventory ? x with { Account = (Account)1250 } : x).ToArray();
             AddJournal(db, doc, posting);
+            if (sale && delivered is null) await EquipmentRules.StartAtSale(db, doc, movements.Where(x => x.DocumentId == doc.Id), actor.Id, cancellationToken); // customer warranties that start at sale
             if (input.HeldSaleId is not null) db.HeldSaleEnds.Add(new() { Id = Guid.NewGuid(), HeldSaleId = input.HeldSaleId.Value, DocumentId = doc.Id, Reason = "Posted as sale" });
             if (sale && !delivery && input.Payment == PaymentMethod.Cheque) await BankingRules.NewCheque(db, doc, input.PaymentReference!, input.Bank!, input.PaymentDate!.Value);
             return doc.Id;
@@ -205,6 +206,7 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
             if (await db.SupplierCreditUses.AnyAsync(x => db.SupplierCredits.Any(c => c.Id == x.CreditId && c.ReturnId == original.Id) && !db.Documents.Any(r => r.Reverses == x.DocumentId), cancellationToken)) throw new BusinessException("Reverse the supplier credit refunds/allocations before reversing this debit note.");
             if (await db.LandedCostAllocations.AnyAsync(x => db.Movements.Any(m => m.Id == x.ReceiptMovementId && m.DocumentId == original.Id) && !db.Documents.Any(r => r.Reverses == x.DocumentId), cancellationToken)) throw new BusinessException("Reverse the landed cost documents allocated to this receipt first.");
             if (await db.ForeignSettlements.AnyAsync(x => x.BillId == original.Id && !db.Documents.Any(r => r.Reverses == x.VoucherId), cancellationToken)) throw new BusinessException("Reverse the foreign-currency payments of this bill first.");
+            if (await db.Installations.AnyAsync(x => x.SaleId == original.Id && !db.InstallationCompletions.Any(c => c.InstallationId == x.Id) && !db.InstallationCancellations.Any(c => c.InstallationId == x.Id), cancellationToken)) throw new BusinessException("Cancel the scheduled installation for this sale first.");
             if (await db.InvoiceMatches.AnyAsync(x => x.ReceiptId == original.Id && !db.Documents.Any(r => r.Reverses == x.InvoiceId), cancellationToken)) throw new BusinessException("Reverse the supplier invoices matched to this receipt first.");
             var date = DateOnly.FromDateTime(DateTime.UtcNow);
             if (date <= await PeriodControls.ClosedThrough(db, actor.Branch, settings.ClosedThrough)) throw new BusinessException("Current period is closed.");
