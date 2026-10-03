@@ -1169,6 +1169,61 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.ToTable("InventoryRevisions");
                 });
 
+            modelBuilder.Entity("SierraBusiness.Infrastructure.InvoiceMatch", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("CostOfSalesAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("ExpectedSource")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("GoodsCleared")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("InventoryAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("InvoiceId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("PriceVariance")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("Quantity")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ReceiptId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ReceiptMovementId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("SourceAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ReceiptId");
+
+                    b.HasIndex("ReceiptMovementId");
+
+                    b.HasIndex("InvoiceId", "ReceiptMovementId")
+                        .IsUnique();
+
+                    b.ToTable("InvoiceMatches");
+                });
+
             modelBuilder.Entity("SierraBusiness.Infrastructure.JournalLine", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1349,6 +1404,14 @@ namespace SierraBusiness.Infrastructure.Migrations
                             Control = true,
                             Group = 1,
                             Name = "Trade payables"
+                        },
+                        new
+                        {
+                            Id = 2050,
+                            CashOrBank = false,
+                            Control = true,
+                            Group = 1,
+                            Name = "Goods received not invoiced"
                         },
                         new
                         {
@@ -1615,6 +1678,28 @@ namespace SierraBusiness.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("OrderClosures");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.OrderCurrency", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrderId")
+                        .IsUnique();
+
+                    b.ToTable("OrderCurrencies");
                 });
 
             modelBuilder.Entity("SierraBusiness.Infrastructure.OrderFulfillment", b =>
@@ -2471,6 +2556,27 @@ namespace SierraBusiness.Infrastructure.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("SierraBusiness.Infrastructure.InvoiceMatch", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.BusinessDocument", null)
+                        .WithMany()
+                        .HasForeignKey("InvoiceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SierraBusiness.Infrastructure.BusinessDocument", null)
+                        .WithMany()
+                        .HasForeignKey("ReceiptId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SierraBusiness.Infrastructure.Movement", null)
+                        .WithMany()
+                        .HasForeignKey("ReceiptMovementId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("SierraBusiness.Infrastructure.JournalLine", b =>
                 {
                     b.HasOne("SierraBusiness.Infrastructure.BusinessDocument", null)
@@ -2526,6 +2632,15 @@ namespace SierraBusiness.Infrastructure.Migrations
                 });
 
             modelBuilder.Entity("SierraBusiness.Infrastructure.OrderClosure", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.TradeOrder", null)
+                        .WithMany()
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.OrderCurrency", b =>
                 {
                     b.HasOne("SierraBusiness.Infrastructure.TradeOrder", null)
                         .WithMany()

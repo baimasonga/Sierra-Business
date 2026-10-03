@@ -62,6 +62,9 @@ public sealed class ReturnService(IDbContextFactory<BusinessDb> factory, IActorS
         var returned = await db.ReturnAllocations.Where(x => x.OriginalDocumentId == original.Id && !db.Documents.Any(r => r.Reverses == x.ReturnDocumentId)).ToListAsync();
         var doc = new BusinessDocument { Id = Guid.NewGuid(), Branch = actor.Branch, Number = $"{actor.Branch}-{options.Value.Device}-RET-{input.OperationId:N}", Kind = sale ? DocumentKind.SalesReturn : DocumentKind.PurchaseReturn, Party = original.Party, BusinessDate = date, Settlement = original.Settlement, Detail = JsonSerializer.Serialize(new { Request = input, Reason = Rules.Required(input.Reason, "Reason") }) };
         decimal net = 0, tax = 0, cost = 0;
+        // Receipts awaiting the supplier's invoice: uninvoiced goods go back against goods received not invoiced; invoiced goods need a supplier credit or refund.
+        var grniLines = !sale && Grni.IsAwaiting(original) ? await Grni.Lines(db, actor.Branch, [original.Id]) : null;
+        bool? beforeInvoice = null;
         foreach (var line in input.Lines)
         {
             Rules.Positive(line.Quantity, "Return quantity");
@@ -77,6 +80,16 @@ public sealed class ReturnService(IDbContextFactory<BusinessDb> factory, IActorS
             // Cumulative rounding ensures repeated partial returns equal the original full amount.
             var cumulative = earlier.Sum(x => x.Quantity) + line.Quantity;
             var refundNet = AccountingEngine.Money(lineNet * cumulative / originalQuantity) - earlier.Sum(x => x.Net);
+            if (grniLines is not null)
+            {
+                var g = grniLines.Single(x => x.ProductId == line.ProductId && x.Serial == serial && x.Batch == batch && x.Expiry == line.Expiry);
+                var thisDoc = returned.Where(x => x.ReturnDocumentId == doc.Id && x.ProductId == line.ProductId && x.Serial == serial && x.Batch == batch && x.Expiry == line.Expiry).ToList();
+                var uninvoiced = g.Outstanding - thisDoc.Sum(x => x.Quantity);
+                var lineBefore = uninvoiced >= line.Quantity ? true : uninvoiced <= 0 ? false : throw new BusinessException($"Only {uninvoiced:0.####} of these units are not yet invoiced. Return those first, then the invoiced units separately.");
+                if (beforeInvoice is not null && beforeInvoice != lineBefore) throw new BusinessException("Return goods not yet invoiced and goods already invoiced on separate return documents.");
+                beforeInvoice = lineBefore;
+                if (lineBefore) refundNet = Grni.Clear(g.Value, g.Received, g.Consumed + thisDoc.Sum(x => x.Quantity), line.Quantity, g.Cleared + thisDoc.Sum(x => x.BillCredit));
+            }
             var originalCost = Math.Abs(matching.Sum(x => x.Value));
             var returnCost = AccountingEngine.Money(originalCost * cumulative / originalQuantity) - earlier.Sum(x => x.Cost);
             var stock = movements.Where(x => x.ProductId == line.ProductId && x.Location == matching[0].Location && x.Serial == serial && x.Batch == batch && x.Expiry == line.Expiry).ToList();
@@ -90,6 +103,7 @@ public sealed class ReturnService(IDbContextFactory<BusinessDb> factory, IActorS
             // Tax is allocated across all returns at invoice level, with full-return residual correction below.
             var refundTax = sale ? AccountingEngine.Money(taxTotal * refundNet / originalNet) : 0;
             var allocation = new ReturnAllocation { Id = Guid.NewGuid(), OriginalDocumentId = original.Id, ReturnDocumentId = doc.Id, ProductId = line.ProductId, Serial = serial, Batch = batch, Expiry = line.Expiry, Quantity = line.Quantity, Net = refundNet, Tax = refundTax, Cost = returnCost };
+            if (beforeInvoice == true) allocation.BillCredit = refundNet; // clears goods received not invoiced line by line
             returned.Add(allocation); db.ReturnAllocations.Add(allocation);
             var movement = new Movement { Id = Guid.NewGuid(), DocumentId = doc.Id, Branch = actor.Branch, ProductId = line.ProductId, Location = matching[0].Location, Serial = serial, Batch = batch, Expiry = line.Expiry, Quantity = sale ? line.Quantity : -line.Quantity, Value = sale ? returnCost : -returnCost };
             movements.Add(movement); db.Movements.Add(movement); net += refundNet; tax += refundTax; cost += returnCost;
@@ -100,7 +114,10 @@ public sealed class ReturnService(IDbContextFactory<BusinessDb> factory, IActorS
         returned.Last().Tax += correctedTax - tax; tax = correctedTax;
         var refund = net + tax;
         decimal billCredit = 0;
-        if (!sale || original.Settlement == "Credit")
+        if (beforeInvoice == true && input.Disposition != ReturnDisposition.Original) throw new BusinessException("These goods are not yet invoiced, so nothing has been paid: choose 'Original settlement'. The return reduces goods received not invoiced.");
+        if (beforeInvoice == false && input.Disposition == ReturnDisposition.Original) throw new BusinessException("These goods are already on a supplier invoice. Choose a supplier credit (then allocate it to that invoice under Banking) or a cash/bank refund.");
+        if (beforeInvoice is not null) billCredit = beforeInvoice.Value ? net : 0;
+        else if (!sale || original.Settlement == "Credit")
         {
             var settled = (await db.BillAllocations.Where(x => x.InvoiceId == original.Id && !db.Documents.Any(r => r.Reverses == x.VoucherId)).ToListAsync()).Sum(x => x.Amount);
             var earlierBillCredits = returned.Where(x => x.ReturnDocumentId != doc.Id).Sum(x => x.BillCredit);
@@ -108,7 +125,7 @@ public sealed class ReturnService(IDbContextFactory<BusinessDb> factory, IActorS
             if (input.Disposition == ReturnDisposition.Original && refund > outstanding) throw new BusinessException("Select a cash/bank refund or customer/supplier credit for the already-paid portion.");
             billCredit = Math.Min(refund, outstanding);
         }
-        returned.Last().BillCredit = billCredit;
+        if (beforeInvoice is null) returned.Last().BillCredit = billCredit;
         doc.Total = -refund;
         doc.Detail = JsonSerializer.Serialize(new { Request = input, Net = net, Tax = tax, BillCredit = billCredit, RefundOrCredit = refund - billCredit });
         db.Documents.Add(doc);
@@ -128,9 +145,9 @@ public sealed class ReturnService(IDbContextFactory<BusinessDb> factory, IActorS
         else
         {
             var destination = input.Disposition == ReturnDisposition.CashRefund ? Account.Cash : input.Disposition == ReturnDisposition.BankRefund ? Account.Bank : (Account)1300;
-            posting.AddRange([new(Account.Payables, billCredit, 0), new(destination, net - billCredit, 0), new(Account.Inventory, 0, cost), new((Account)5100, Math.Max(0, cost - net), Math.Max(0, net - cost))]);
+            posting.AddRange([new(beforeInvoice == true ? Grni.Account : Account.Payables, billCredit, 0), new(destination, net - billCredit, 0), new(Account.Inventory, 0, cost), new((Account)5100, Math.Max(0, cost - net), Math.Max(0, net - cost))]);
             if (destination == (Account)1300 && net > billCredit) db.SupplierCredits.Add(new() { Id = Guid.NewGuid(), ReturnId = doc.Id, Amount = net - billCredit });
-            doc.Settlement = billCredit == refund ? "Purchase bill credit" : input.Disposition.ToString();
+            doc.Settlement = beforeInvoice == true ? "Returned before invoicing" : billCredit == refund ? "Purchase bill credit" : input.Disposition.ToString();
         }
         foreach (var p in AccountingEngine.Balanced(posting)) db.Journal.Add(new() { Id = Guid.NewGuid(), DocumentId = doc.Id, Branch = actor.Branch, Account = p.Account, Debit = p.Debit, Credit = p.Credit });
         db.Operations.Add(new() { Id = input.OperationId, ResultId = doc.Id, Branch = actor.Branch, Actor = actor.Id, Action = "document.return", Time = DateTimeOffset.UtcNow, Payload = payload, Fingerprint = hash });

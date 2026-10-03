@@ -2,6 +2,8 @@
 
 A Microsoft .NET implementation based on [the supplied engineering specification](docs/engineering-specification.md). This repository contains an initial working vertical slice, not the full production system described in that specification.
 
+**Supplier invoices 0.13.0:** receipts can wait for the supplier's invoice (goods received not invoiced), invoice matching with price and exchange differences, foreign-currency purchase orders, and credit sales only to registered customers. See [supplier invoice notes](docs/supplier-invoices-0.13.0.md).
+
 **Purchasing & imports 0.12.0:** effective-dated exchange rates, foreign-currency goods receipts and bills, foreign supplier payments with exchange gains/losses, and landed-cost allocation (value, quantity or manual) to stock on hand and cost of sales. See [purchasing notes](docs/purchasing-imports-0.12.0.md).
 
 **Excel import 0.11.0:** product catalogue, opening stock (quantity, serial, batch/expiry), price update and stock-count imports with generated templates, column matching, row-level validation, error workbooks and retry-safe commits. See [Excel import notes](docs/excel-import-0.11.0.md).
@@ -38,7 +40,7 @@ A Microsoft .NET implementation based on [the supplied engineering specification
 
 ### Windows desktop package
 
-The **Windows installer is ready** at `artifacts\windows\0.12.0\SierraBusiness-Setup-x64.exe`. Double-click it to install, open Sierra Business from the Start menu, and create your owner account on first use. Existing users should back up and close the app before updating. The package includes the application runtimes, offline WebView2 prerequisite and English OCR dependencies. It is an unsigned development preview; full clean-machine installation and UI acceptance testing are still outstanding. See [Windows package instructions and status](docs/windows-package.md).
+The **Windows installer is ready** at `artifacts\windows\0.13.0\SierraBusiness-Setup-x64.exe`. Double-click it to install, open Sierra Business from the Start menu, and create your owner account on first use. Existing users should back up and close the app before updating. The package includes the application runtimes, offline WebView2 prerequisite and English OCR dependencies. It is an unsigned development preview; full clean-machine installation and UI acceptance testing are still outstanding. See [Windows package instructions and status](docs/windows-package.md).
 
 Desktop owners can create integrity-checked backups from the workspace sidebar, including captured originals and review revisions. Backup restoration and permission checks pass in the primary .NET 10 suite (126 tests total). A Windows CI workflow is also prepared to build the native app and installer once this project is hosted in a GitHub repository; it has not yet been run.
 
@@ -73,7 +75,7 @@ The existing runnable diagnostic host is a local **Blazor Server** application. 
 
 Tax defaults to **zero as a development configuration, not a statement of Sierra Leone tax law**. `Trading:TaxRate` is stored on each posted sale. Effective-dated tax configuration and verified fiscal compliance remain required before production use.
 
-Cheque tracking, reviewed bank reconciliation, bill allocations, credit limits, party masters and ageing are implemented; see the release instructions for their limits. Goods receipts recognize inventory/payables directly. Foreign-currency purchasing and landed cost are implemented (0.12.0); separate supplier invoice matching remains unfinished.
+Cheque tracking, reviewed bank reconciliation, bill allocations, credit limits, party masters and ageing are implemented; see the release instructions for their limits. Goods receipts recognize inventory/payables directly, or wait for supplier-invoice matching through goods received not invoiced (0.13.0). Foreign-currency purchasing and landed cost are implemented (0.12.0).
 
 Read [implementation status](docs/implementation-status.md) before using the system with live records.
 

@@ -19,6 +19,16 @@ public sealed record LandedReceiptView(Guid Id, string Number, string Party, Dat
 public sealed record LandedAllocationView(Guid MovementId, string Sku, string Location, decimal Weight, decimal Allocated, decimal ToInventory, decimal ToCostOfSales);
 public sealed record LandedCostPreview(decimal LocalTotal, decimal Rate, IReadOnlyList<LandedAllocationView> Lines);
 
+/// <summary>One receipt line (product, warehouse, serial/batch) still waiting for the supplier's invoice. Quantities are base units; amounts in the receipt currency unless marked NLe.</summary>
+public sealed record AwaitingInvoiceLine(Guid LineId, Guid ReceiptId, string ReceiptNumber, DateOnly ReceiptDate, string Supplier, string Sku, string Product, string Unit, string Location, string? Serial, string? Batch,
+    decimal Received, decimal Invoiced, decimal Returned, decimal Outstanding, string Currency, decimal OutstandingAmount, decimal OutstandingLocal, int AgeDays);
+/// <summary>Invoice line: base quantity being invoiced and the supplier's line amount (receipt currency) for it.</summary>
+public sealed record InvoiceMatchInput(Guid LineId, decimal Quantity, decimal Amount);
+public sealed record SupplierInvoiceCommand(Guid OperationId, string Supplier, string InvoiceNumber, DateOnly Date, DateOnly? DueDate, List<InvoiceMatchInput> Lines, string VarianceReason = "");
+public sealed record InvoiceMatchView(Guid LineId, string ReceiptNumber, string Sku, decimal Quantity, decimal Expected, decimal Invoiced, decimal GoodsCleared, decimal PriceVariance, decimal ToInventory, decimal ToCostOfSales);
+/// <summary>Amounts in NLe unless stated. ExchangeDifference is positive for a loss.</summary>
+public sealed record SupplierInvoicePreview(string Currency, decimal Rate, decimal SourceTotal, decimal LocalTotal, decimal GoodsCleared, decimal PriceVariance, decimal ExchangeDifference, bool NeedsReason, IReadOnlyList<InvoiceMatchView> Lines);
+
 public interface IPurchasingService
 {
     Task<IReadOnlyList<ExchangeRateView>> Rates();
@@ -28,4 +38,7 @@ public interface IPurchasingService
     Task<IReadOnlyList<LandedReceiptView>> Receipts();
     Task<LandedCostPreview> PreviewLandedCost(LandedCostCommand input);
     Task<Guid> PostLandedCost(LandedCostCommand input);
+    Task<IReadOnlyList<AwaitingInvoiceLine>> AwaitingInvoice();
+    Task<SupplierInvoicePreview> PreviewSupplierInvoice(SupplierInvoiceCommand input);
+    Task<Guid> PostSupplierInvoice(SupplierInvoiceCommand input);
 }

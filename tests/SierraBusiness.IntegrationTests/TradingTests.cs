@@ -86,6 +86,7 @@ public sealed class TradingTests : IAsyncLifetime
     }
     [Fact] public async Task CreditPostsReceivableAndChequeNeedsBankDetails()
     {
+        await TestParties.Register(factory, "ABC School");
         var p = await Product(); await service.Post(owner, Receipt(p)); await service.Post(owner, Sale(p, payment: null));
         await Assert.ThrowsAsync<BusinessException>(() => service.Post(owner, Sale(p, payment: PaymentMethod.Cheque)));
         Assert.Equal(200, (await service.Read(owner)).Ledger.Single(x => x.Account == Account.Receivables).Debit);

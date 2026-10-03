@@ -117,7 +117,7 @@ public sealed class BankingService(IDbContextFactory<BusinessDb> factory, IActor
         if (input.RefundAccount is not null) await Funds(db, destination);
         else
         {
-            var invoice = await db.Documents.SingleOrDefaultAsync(x => x.Id == input.InvoiceId && x.Branch == actor.Branch && x.Kind == DocumentKind.Receipt && x.Party.ToUpper() == source.Party.ToUpper() && !db.Documents.Any(d => d.Reverses == x.Id)) ?? throw new BusinessException("Select an outstanding purchase bill for the same supplier."); await Fx.RejectLocalSettlement(db, invoice.Id);
+            var invoice = await db.Documents.SingleOrDefaultAsync(x => x.Id == input.InvoiceId && x.Branch == actor.Branch && (x.Kind == DocumentKind.Receipt || x.Kind == DocumentKind.SupplierInvoice) && x.Settlement.StartsWith("Supplier payable") && x.Party.ToUpper() == source.Party.ToUpper() && !db.Documents.Any(d => d.Reverses == x.Id)) ?? throw new BusinessException("Select an outstanding purchase bill for the same supplier."); await Fx.RejectLocalSettlement(db, invoice.Id);
             if (input.Amount > await Outstanding(db, invoice)) throw new BusinessException("Credit exceeds the outstanding purchase bill.");
             db.BillAllocations.Add(new() { Id = Guid.NewGuid(), InvoiceId = invoice.Id, VoucherId = doc.Id, Amount = input.Amount });
         }

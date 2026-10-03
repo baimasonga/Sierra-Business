@@ -99,7 +99,7 @@ public sealed class PurchasingTests : IAsyncLifetime
         await Receive(paper, 6, 50, order: order);
         await Assert.ThrowsAsync<BusinessException>(() => Receive(paper, 1, 50, order: order));
         Assert.Equal(10, (await Snapshot()).Stock.Single().Quantity);
-        Assert.Contains("purchase orders", (await Assert.ThrowsAsync<BusinessException>(() => Receive(pens, 1, 10, "USD", order: order))).Message);
+        Assert.Contains("order is in NLe", (await Assert.ThrowsAsync<BusinessException>(() => Receive(pens, 1, 10, "USD", order: order))).Message);
     }
 
     [Fact] public async Task LandedCostByValueGoesToStockOnHandAndCostOfSalesForUnitsSold()

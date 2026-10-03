@@ -19,6 +19,7 @@ public sealed class LedgerAccount
         new() { Id=2400, Name="Customer credits", Group=LedgerGroup.Liability, Control=true },
         new() { Id=1200, Name="Inventory", Group=LedgerGroup.Asset, Control=true },
         new() { Id=2000, Name="Trade payables", Group=LedgerGroup.Liability, Control=true },
+        new() { Id=2050, Name="Goods received not invoiced", Group=LedgerGroup.Liability, Control=true },
         new() { Id=2100, Name="Tax payable", Group=LedgerGroup.Liability },
         new() { Id=2200, Name="Payroll payable", Group=LedgerGroup.Liability },
         new() { Id=2300, Name="Payroll deductions payable", Group=LedgerGroup.Liability },

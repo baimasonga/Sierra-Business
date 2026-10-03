@@ -22,9 +22,10 @@ public sealed class OrderService(IDbContextFactory<BusinessDb> factory, IActorSe
         var lines = await db.TradeOrderLines.AsNoTracking().Where(x => db.TradeOrders.Any(o => o.Id == x.OrderId && o.Branch == actor.Branch)).ToListAsync();
         var products = await db.Products.AsNoTracking().ToDictionaryAsync(x => x.Id);
         var fulfilled = await db.OrderFulfillments.AsNoTracking().Where(x => db.TradeOrders.Any(o => o.Id == x.OrderId && o.Branch == actor.Branch) && !db.Documents.Any(d => d.Reverses == x.DocumentId)).ToListAsync();
+        var currencies = await db.OrderCurrencies.AsNoTracking().Where(x => db.TradeOrders.Any(o => o.Id == x.OrderId && o.Branch == actor.Branch)).ToDictionaryAsync(x => x.OrderId, x => x.Currency);
         var closed = (await db.OrderClosures.Where(x => db.TradeOrders.Any(o => o.Id == x.OrderId && o.Branch == actor.Branch)).Select(x => x.OrderId).ToListAsync()).ToHashSet();
         return orders.Select(o => new OrderView(o.Id, o.Number, o.Type, o.Party, o.Date, o.DueDate, o.Reference, closed.Contains(o.Id), orders.SingleOrDefault(x => x.QuotationId == o.Id)?.Id,
-            lines.Where(x => x.OrderId == o.Id).Select(l => new OrderLineView(l.ProductId, products[l.ProductId].Sku, products[l.ProductId].Name, l.Quantity, l.UnitPrice, fulfilled.Where(f => f.OrderId == o.Id && f.ProductId == l.ProductId).Sum(f => f.Quantity), products[l.ProductId].Unit)).ToArray())).ToArray();
+            lines.Where(x => x.OrderId == o.Id).Select(l => new OrderLineView(l.ProductId, products[l.ProductId].Sku, products[l.ProductId].Name, l.Quantity, l.UnitPrice, fulfilled.Where(f => f.OrderId == o.Id && f.ProductId == l.ProductId).Sum(f => f.Quantity), products[l.ProductId].Unit)).ToArray(), currencies.GetValueOrDefault(o.Id) ?? Fx.Local)).ToArray();
     }
     public Task<Guid> Create(OrderCommand input) => Execute(input.OperationId, "order.create", input, async (db, actor) =>
     {
@@ -43,6 +44,12 @@ public sealed class OrderService(IDbContextFactory<BusinessDb> factory, IActorSe
         }
         var order = new TradeOrder { Id = Guid.NewGuid(), Branch = actor.Branch, Number = $"{actor.Branch}-{options.Value.Device}-O-{input.OperationId:N}", Type = input.Type, Party = party, Date = input.Date, DueDate = input.DueDate, Reference = input.Reference.Trim(), QuotationId = input.QuotationId };
         db.TradeOrders.Add(order);
+        var currency = Fx.Normalize(input.Currency);
+        if (currency is not null)
+        {
+            if (input.Type != OrderType.PurchaseOrder) throw new BusinessException("Quotations and sales orders are in NLe. Foreign currency applies to purchase orders.");
+            db.OrderCurrencies.Add(new() { Id = Guid.NewGuid(), OrderId = order.Id, Currency = currency });
+        }
         foreach (var line in input.Lines)
         {
             Rules.Positive(line.Quantity, "Quantity"); Rules.Positive(line.UnitPrice, "Price per base unit");
@@ -66,7 +73,7 @@ public sealed class OrderService(IDbContextFactory<BusinessDb> factory, IActorSe
         var payload = JsonSerializer.Serialize(input); var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(actor.Branch + actor.Id + action + payload)));
         await using var db = await factory.CreateDbContextAsync(); await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         var previous = await db.Operations.SingleOrDefaultAsync(x => x.Id == operationId);
-        if (previous is not null) { if (hash != previous.Fingerprint) throw new BusinessException("Operation ID already used with different data or identity."); return previous.ResultId; }
+        if (previous is not null) { if (hash != previous.Fingerprint && (previous.Actor != actor.Id || previous.Branch != actor.Branch || previous.Action != action || JsonSerializer.Serialize(JsonSerializer.Deserialize<T>(previous.Payload)) != payload)) throw new BusinessException("Operation ID already used with different data or identity."); return previous.ResultId; }
         var id = await work(db, actor); db.Operations.Add(new() { Id = operationId, ResultId = id, Branch = actor.Branch, Actor = actor.Id, Action = action, Time = DateTimeOffset.UtcNow, Payload = payload, Fingerprint = hash });
         await db.SaveChangesAsync(); await tx.CommitAsync(); return id;
     }

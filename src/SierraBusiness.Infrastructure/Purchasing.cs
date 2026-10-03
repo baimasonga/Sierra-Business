@@ -74,7 +74,7 @@ internal static class Commands
     }
 }
 
-public sealed class PurchasingService(IDbContextFactory<BusinessDb> factory, IActorSession session, IOptions<TradingOptions> options) : IPurchasingService
+public sealed partial class PurchasingService(IDbContextFactory<BusinessDb> factory, IActorSession session, IOptions<TradingOptions> options) : IPurchasingService
 {
     private async Task<Actor> Authorize(params string[] permissions)
     {

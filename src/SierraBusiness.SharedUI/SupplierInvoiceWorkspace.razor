@@ -1,0 +1,110 @@
+@inject IPurchasingService Purchasing
+@inject Microsoft.JSInterop.IJSRuntime JS
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+
+<section class="panel">
+    <div class="panel-title"><h2>Goods received, waiting for the supplier's invoice</h2><button class="secondary" disabled="@busy" @onclick="Refresh">Refresh</button></div>
+    <p class="hint">Receipts posted with "supplier invoice to follow". Their value sits in 2050 Goods received not invoiced until the invoice is matched below; then it becomes a supplier bill.</p>
+    @if (awaiting.Count == 0) { <p class="empty">Nothing is waiting for a supplier invoice.</p> }
+    else
+    {
+        <div class="table-wrap"><table><thead><tr><th>Supplier</th><th class="numeric">Receipt lines</th><th class="numeric">Oldest (days)</th><th class="numeric">Expected</th><th class="numeric">NLe at receipt rates</th></tr></thead><tbody>
+        @foreach (var g in awaiting.GroupBy(x => (x.Supplier, x.Currency)).OrderBy(x => x.Key.Supplier))
+        {
+            <tr><td>@g.Key.Supplier</td><td class="numeric">@g.Count()</td><td class="numeric">@g.Max(x => x.AgeDays)</td><td class="numeric">@Label(g.Key.Currency) @g.Sum(x => x.OutstandingAmount).ToString("N2")</td><td class="numeric">@g.Sum(x => x.OutstandingLocal).ToString("N2")</td></tr>
+        }
+        </tbody><tfoot><tr><td>Total goods received not invoiced</td><td></td><td></td><td></td><td class="numeric">@awaiting.Sum(x => x.OutstandingLocal).ToString("N2")</td></tr></tfoot></table></div>
+    }
+</section>
+
+@if (CanWrite && awaiting.Count > 0)
+{
+    <section class="panel">
+        <h2>Record a supplier invoice</h2>
+        <p class="hint">Choose the supplier, tick the receipt lines on the invoice and enter the quantities and amounts exactly as the supplier billed them. "Check against receipts" shows any price or exchange-rate difference before you post.</p>
+        <div class="form-grid">
+            <label>Supplier<select @bind="supplierKey" @bind:after="LoadEntries"><option value="">Select supplier</option>@foreach (var g in awaiting.GroupBy(x => (x.Supplier, x.Currency)).OrderBy(x => x.Key.Supplier)) { <option value="@Key(g.Key.Supplier, g.Key.Currency)">@g.Key.Supplier (@Label(g.Key.Currency))</option> }</select></label>
+            <label>Supplier's invoice number<input maxlength="60" @bind="invoiceNumber" /></label>
+            <label>Invoice date<input type="date" @bind="invoiceDate" @bind:after="ClearPreview" /></label>
+            <label>Due date<input type="date" @bind="dueDate" /><span class="hint">Leave empty to use the supplier's payment terms.</span></label>
+        </div>
+        @if (entries.Count > 0)
+        {
+            <div class="table-wrap"><table><thead><tr><th>On invoice</th><th>Receipt</th><th>Product</th><th>Warehouse / tracking</th><th class="numeric">Awaiting</th><th class="numeric">Quantity invoiced</th><th class="numeric">Invoice amount (@Label(entries[0].Line.Currency))</th></tr></thead><tbody>
+            @foreach (var e in entries)
+            {
+                <tr><td><input type="checkbox" aria-label="Include @e.Line.Sku from @e.Line.ReceiptNumber" checked="@e.Include" @onchange="v => { e.Include = (bool)(v.Value ?? false); preview = null; }" /></td>
+                <td class="code">@e.Line.ReceiptNumber[^8..]<br />@e.Line.ReceiptDate.ToString("dd MMM yyyy")</td><td>@e.Line.Sku · @e.Line.Product</td><td>@e.Line.Location @e.Line.Serial @e.Line.Batch</td>
+                <td class="numeric">@e.Line.Outstanding.ToString("0.####") @e.Line.Unit</td>
+                <td class="numeric"><input aria-label="Quantity invoiced for @e.Line.Sku" type="number" min="0.0001" step="0.0001" max="@e.Line.Outstanding" @bind:get="e.Quantity" @bind:set="v => SetQuantity(e, v)" /></td>
+                <td class="numeric"><input aria-label="Invoice amount for @e.Line.Sku" type="number" min="0.01" step="0.01" @bind="e.Amount" @bind:after="ClearPreview" /></td></tr>
+            }
+            </tbody></table></div>
+            <p>Invoice total @Label(entries[0].Line.Currency) <strong>@entries.Where(x => x.Include).Sum(x => x.Amount).ToString("N2")</strong></p>
+            <button class="secondary" disabled="@(busy || !entries.Any(x => x.Include))" @onclick="Check">Check against receipts</button>
+        }
+        @if (preview is not null)
+        {
+            <div class="table-wrap"><table><thead><tr><th>Receipt</th><th>Product</th><th class="numeric">Quantity</th><th class="numeric">Expected</th><th class="numeric">Invoiced</th><th class="numeric">Price difference (NLe)</th><th class="numeric">To stock on hand</th><th class="numeric">To cost of sales</th></tr></thead><tbody>
+            @foreach (var l in preview.Lines) { <tr class="@(l.Expected != l.Invoiced ? "variance" : "")"><td class="code">@l.ReceiptNumber[^8..]</td><td>@l.Sku</td><td class="numeric">@l.Quantity.ToString("0.####")</td><td class="numeric">@l.Expected.ToString("N2")</td><td class="numeric">@l.Invoiced.ToString("N2")</td><td class="numeric">@l.PriceVariance.ToString("N2")</td><td class="numeric">@l.ToInventory.ToString("N2")</td><td class="numeric">@l.ToCostOfSales.ToString("N2")</td></tr> }
+            </tbody></table></div>
+            <p>Supplier bill NLe <strong>@preview.LocalTotal.ToString("N2")</strong>@(preview.Currency != "SLE" ? $" ({preview.Currency} {preview.SourceTotal:N2} at {preview.Rate:N4})" : ""). Clears NLe @preview.GoodsCleared.ToString("N2") of goods received not invoiced@(preview.PriceVariance != 0 ? $"; price difference NLe {preview.PriceVariance:N2}" : "")@(preview.ExchangeDifference != 0 ? (preview.ExchangeDifference > 0 ? $"; exchange loss NLe {preview.ExchangeDifference:N2}" : $"; exchange gain NLe {-preview.ExchangeDifference:N2}") : "").</p>
+            @if (preview.NeedsReason) { <label>Reason for the price difference<input maxlength="200" @bind="reason" placeholder="For example: supplier price increase, agreed discount" /></label> }
+            else { <p class="hint">Quantities and prices agree with the receipts.</p> }
+            <button class="primary" disabled="@busy" @onclick="Post">Post supplier invoice</button>
+        }
+    </section>
+}
+
+@code {
+    [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
+    private sealed class Entry { public AwaitingInvoiceLine Line { get; init; } = null!; public bool Include { get; set; } public decimal Quantity { get; set; } public decimal Amount { get; set; } }
+    private List<AwaitingInvoiceLine> awaiting = [];
+    private readonly List<Entry> entries = [];
+    private SupplierInvoicePreview? preview;
+    private string supplierKey = "", invoiceNumber = "", reason = "", error = "", message = "";
+    private DateOnly invoiceDate = DateOnly.FromDateTime(DateTime.UtcNow);
+    private DateOnly? dueDate;
+    private Guid operation = Guid.NewGuid();
+    private bool busy;
+    private bool CanWrite => Actor.Permissions.Contains("accounting.write");
+    public bool HasDraft => entries.Any(x => x.Include) || invoiceNumber.Length > 0;
+    private static string Label(string currency) => currency == "SLE" ? "NLe" : currency;
+    private static string Key(string supplier, string currency) => supplier + "\u001f" + currency;
+
+    protected override Task OnInitializedAsync() => Run(Load);
+    private async Task Load() { awaiting = (await Purchasing.AwaitingInvoice()).ToList(); LoadEntries(); }
+    private Task Refresh() => Run(Load);
+    private void LoadEntries()
+    {
+        entries.Clear(); preview = null;
+        entries.AddRange(awaiting.Where(x => Key(x.Supplier, x.Currency) == supplierKey).Select(x => new Entry { Line = x, Include = false, Quantity = x.Outstanding, Amount = x.OutstandingAmount }));
+    }
+    private void ClearPreview() => preview = null;
+    private void SetQuantity(Entry e, decimal value)
+    {
+        e.Quantity = value; preview = null;
+        e.Amount = value >= e.Line.Outstanding ? e.Line.OutstandingAmount : Math.Round(e.Line.OutstandingAmount * value / e.Line.Outstanding, 2, MidpointRounding.AwayFromZero);
+    }
+    private SupplierInvoiceCommand Command() => new(operation, entries.FirstOrDefault()?.Line.Supplier ?? "", invoiceNumber, invoiceDate, dueDate, entries.Where(x => x.Include).Select(x => new InvoiceMatchInput(x.Line.LineId, x.Quantity, x.Amount)).ToList(), reason);
+    private async Task Run(Func<Task> action)
+    {
+        if (busy) return; busy = true; error = message = "";
+        try { await action(); }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
+        catch (Exception) { error = "The operation could not complete. Refresh and check Documents before retrying."; }
+        finally { busy = false; }
+    }
+    private Task Check() => Run(async () => preview = await Purchasing.PreviewSupplierInvoice(Command()));
+    private async Task Post()
+    {
+        if (preview is null || !await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", $"Post supplier invoice {invoiceNumber} for NLe {preview.LocalTotal:N2}? It can be corrected only by reversal.")) return;
+        await Run(async () =>
+        {
+            await Purchasing.PostSupplierInvoice(Command());
+            operation = Guid.NewGuid(); invoiceNumber = reason = ""; dueDate = null; supplierKey = "";
+            await Load(); message = "Supplier invoice posted. It is now a supplier bill under Accounting (or Foreign-currency bills).";
+        });
+    }
+}

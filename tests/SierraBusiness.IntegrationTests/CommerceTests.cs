@@ -13,7 +13,7 @@ public sealed class CommerceTests : IAsyncLifetime
     private readonly DateOnly today = DateOnly.FromDateTime(DateTime.UtcNow); private Guid product;
     public async Task InitializeAsync()
     {
-        factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite($"Data Source={path};Pooling=False").Options); await using var db = factory.CreateDbContext(); await db.Database.MigrateAsync();
+        factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite($"Data Source={path};Pooling=False").Options); await using var db = factory.CreateDbContext(); await db.Database.MigrateAsync(); await TestParties.Register(factory, "School"); await TestParties.Register(factory, "Other school");
         var options = Options.Create(new TradingOptions()); business = new(factory, options); commerce = new(factory, session, options); orders = new(factory, session, options); returns = new(factory, session, options); finance = new(factory, session, options); inventory = new(factory, session, options);
         product = await business.AddProduct(session.Actor, new(Guid.NewGuid(), "PAPER", "Paper", "Office", "ream", 100, TrackingMode.Quantity, 60));
         await business.Post(session.Actor, new(Guid.NewGuid(), DocumentKind.Receipt, "Supplier", today, [new(product, 20, 40)], null));

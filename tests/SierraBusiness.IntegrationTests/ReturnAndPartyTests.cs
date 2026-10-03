@@ -23,6 +23,7 @@ public sealed class ReturnAndPartyTests : IAsyncLifetime
     private Task<FinanceSnapshot> Report() => finance.Read(today.AddYears(-1), today);
     [Fact] public async Task PartialSalesReturnsReconcileStockTaxAndOutstandingAndCannotOverReturn()
     {
+        await TestParties.Register(factory, "School");
         await Receive(); var sale = await Sell(); var command = new ReturnCommand(Guid.NewGuid(), sale, "Damaged item", [new(product, null, null, null, 1)]);
         var id = await returns.Post(command); Assert.Equal(id, await returns.Post(command));
         Assert.Equal(115, (await Report()).Bills.Single(x => x.Id == sale).Outstanding);
@@ -49,6 +50,7 @@ public sealed class ReturnAndPartyTests : IAsyncLifetime
     }
     [Fact] public async Task ReturnCannotOverCreditPaidBillAndReceiptCannotOverpayReturnedBill()
     {
+        await TestParties.Register(factory, "School");
         await Receive(); var sale = await Sell();
         await returns.Post(new(Guid.NewGuid(), sale, "One unit", [new(product, null, null, null, 1)]));
         await Assert.ThrowsAsync<BusinessException>(() => finance.PostVoucher(new(Guid.NewGuid(), VoucherType.Receipt, today, "Too much", [new(1000, 200, 0), new(1100, 0, 200)], [new(sale, 200)])));
@@ -58,6 +60,7 @@ public sealed class ReturnAndPartyTests : IAsyncLifetime
     }
     [Fact] public async Task UnconsumedSalesReturnCanBeReversedAndQuantityReturnedAgain()
     {
+        await TestParties.Register(factory, "School");
         await Receive(); var sale = await Sell(); var input = new ReturnCommand(Guid.NewGuid(), sale, "Return", [new(product, null, null, null, 1)]);
         var returned = await returns.Post(input); await business.Reverse(session.Actor, new(Guid.NewGuid(), returned, "Wrong return"));
         Assert.Equal(230, (await Report()).Bills.Single(x => x.Id == sale).Outstanding);

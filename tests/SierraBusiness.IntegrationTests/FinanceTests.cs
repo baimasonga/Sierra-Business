@@ -17,7 +17,7 @@ public sealed class FinanceTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite($"Data Source={path};Pooling=False").Options);
-        await using var db = factory.CreateDbContext(); await db.Database.MigrateAsync();
+        await using var db = factory.CreateDbContext(); await db.Database.MigrateAsync(); await TestParties.Register(factory, "School");
         finance = new(factory, session, Options.Create(new TradingOptions())); trading = new(factory, Options.Create(new TradingOptions()));
     }
     public Task DisposeAsync() { File.Delete(path); return Task.CompletedTask; }
