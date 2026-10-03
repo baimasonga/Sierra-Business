@@ -141,6 +141,9 @@ public sealed class DocumentLibrary(IDbContextFactory<BusinessDb> factory, IActo
             case DocumentLinkTarget.Installation when Guid.TryParse(key, out var id):
                 var job = await db.Installations.SingleOrDefaultAsync(x => x.Id == id && x.Branch == actor.Branch) ?? throw new BusinessException("Installation not found.");
                 return (id.ToString(), $"Installation {Short(job.Number)} · {job.Customer} · {job.Site}");
+            case DocumentLinkTarget.Tender when Guid.TryParse(key, out var id):
+                var tender = await db.Tenders.SingleOrDefaultAsync(x => x.Id == id && x.Branch == actor.Branch) ?? throw new BusinessException("Tender not found.");
+                return (id.ToString(), $"Tender {tender.Reference} · {tender.Institution} · closes {tender.Closing:dd MMM yyyy}");
             default: throw new BusinessException("Choose what to link the document to.");
         }
     }
@@ -212,6 +215,34 @@ public sealed class DocumentLibrary(IDbContextFactory<BusinessDb> factory, IActo
         return new(file.FileName, file.ContentType, content);
     }
 
+    public async Task<DocumentPreview> Preview(Guid fileId)
+    {
+        var file = await Download(fileId); // same visibility and fingerprint checks as a download
+        return DocumentPreviews.For(file.FileName, file.ContentType, file.Content);
+    }
+
+    public async Task<IReadOnlyDictionary<Guid, byte[]>> Thumbnails(IReadOnlyCollection<Guid> fileIds)
+    {
+        var actor = await Authorize(); await using var db = await factory.CreateDbContextAsync();
+        var ids = fileIds.Distinct().Take(500).ToList();
+        var stored = await db.StoredFiles.AsNoTracking().Where(x => ids.Contains(x.Id)).Select(x => new { x.Id, x.DocumentId, x.Sha256 }).ToListAsync();
+        var visible = (await Rows(db, actor, stored.Select(x => x.DocumentId).Distinct().ToList())).Select(x => x.Doc.Id).ToHashSet();
+        var hashes = stored.Where(x => visible.Contains(x.DocumentId)).Select(x => x.Sha256).Distinct().ToList();
+        var pictures = await db.DocumentThumbnails.AsNoTracking().Where(x => hashes.Contains(x.Sha256)).ToDictionaryAsync(x => x.Sha256, x => x.Content);
+        return stored.Where(x => visible.Contains(x.DocumentId) && pictures.ContainsKey(x.Sha256)).ToDictionary(x => x.Id, x => pictures[x.Sha256]);
+    }
+
+    public async Task SaveThumbnail(Guid fileId, byte[] jpeg)
+    {
+        var actor = await Authorize(write: true); await using var db = await factory.CreateDbContextAsync();
+        if (jpeg is null || jpeg.Length is < 4 or > 250_000 || jpeg[0] != 0xFF || jpeg[1] != 0xD8 || jpeg[2] != 0xFF) throw new BusinessException("The preview picture must be a JPEG of at most 250 KB.");
+        var file = await db.StoredFiles.AsNoTracking().SingleOrDefaultAsync(x => x.Id == fileId) ?? throw new BusinessException("File not found.");
+        if ((await Rows(db, actor, [file.DocumentId])).Count == 0) throw new BusinessException("File not found.");
+        if (await db.DocumentThumbnails.AnyAsync(x => x.Sha256 == file.Sha256)) return; // first picture wins; it is derived from the same bytes
+        db.DocumentThumbnails.Add(new() { Id = Guid.NewGuid(), Sha256 = file.Sha256, Content = jpeg, Created = DateTimeOffset.UtcNow });
+        try { await db.SaveChangesAsync(); } catch (DbUpdateException) { } // another screen saved it at the same moment
+    }
+
     public async Task<IReadOnlyList<DocumentDeadline>> Deadlines(int days = 60)
     {
         var actor = await Authorize(); await using var db = await factory.CreateDbContextAsync();
@@ -245,6 +276,8 @@ public sealed class DocumentLibrary(IDbContextFactory<BusinessDb> factory, IActo
                 .Where(x => t.Length == 0 || (x.Sku + " " + x.Serial).Contains(u, StringComparison.OrdinalIgnoreCase)).OrderBy(x => x.Serial).Select(x => new LinkTargetOption($"{x.ProductId}|{x.Serial}", $"{x.Sku} · serial {x.Serial}")),
             DocumentLinkTarget.Installation => (await db.Installations.AsNoTracking().Where(x => x.Branch == actor.Branch).OrderByDescending(x => x.Scheduled).ToListAsync())
                 .Where(x => t.Length == 0 || (x.Number + " " + x.Customer + " " + x.Site).Contains(t, StringComparison.OrdinalIgnoreCase)).Select(x => new LinkTargetOption(x.Id.ToString(), $"Installation {Short(x.Number)} · {x.Customer} · {x.Site}")),
+            DocumentLinkTarget.Tender => (await db.Tenders.AsNoTracking().Where(x => x.Branch == actor.Branch).OrderByDescending(x => x.Closing).ToListAsync())
+                .Where(x => t.Length == 0 || (x.Reference + " " + x.Institution + " " + x.Title).Contains(t, StringComparison.OrdinalIgnoreCase)).Select(x => new LinkTargetOption(x.Id.ToString(), $"Tender {x.Reference} · {x.Institution} · {x.Title}")),
             _ => []
         };
         return options.Take(30).ToArray();

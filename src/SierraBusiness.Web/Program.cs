@@ -11,7 +11,7 @@ using SierraBusiness.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseStaticWebAssets();
-builder.Services.AddRazorComponents().AddInteractiveServerComponents();
+builder.Services.AddRazorComponents().AddInteractiveServerComponents().AddHubOptions(o => o.MaximumReceiveMessageSize = 512 * 1024); // document thumbnails come back from the browser
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddAuthentication(IdentityConstants.ApplicationScheme).AddIdentityCookies();
 builder.Services.AddAuthorization();
@@ -44,6 +44,7 @@ builder.Services.AddScoped<IIntegrityService, IntegrityService>();
 builder.Services.AddScoped<IImportService, SierraBusiness.Infrastructure.Imports.ImportService>();
 builder.Services.AddScoped<IPurchasingService, PurchasingService>();
 builder.Services.AddScoped<IEquipmentService, EquipmentService>();
+builder.Services.AddScoped<ITenderService, TenderService>();
 builder.Services.AddSingleton<IFileStore, DatabaseFileStore>();
 builder.Services.AddScoped<IDocumentLibrary, DocumentLibrary>();
 builder.Services.AddProblemDetails();

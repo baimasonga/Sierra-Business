@@ -56,18 +56,43 @@
 }
 
 <section class="panel">
-    <div class="panel-title"><h2>Library</h2><span>@results.Count SHOWN</span></div>
+    <div class="panel-title"><h2>Library</h2>
+        <div class="view-toggle" role="group" aria-label="Library view"><button type="button" class="@(cards ? "active" : "")" aria-pressed="@cards" @onclick="() => cards = true">Cards</button><button type="button" class="@(cards ? "" : "active")" aria-pressed="@(!cards)" @onclick="() => cards = false">List</button></div>
+    </div>
     <form class="search-row" @onsubmit="Search" @onsubmit:preventDefault>
         <label>Search title, reference, party, tags or text inside documents<input @bind="query" maxlength="100" /></label>
         <label>Type<select @bind="filterType"><option value="">All types</option>@foreach (var t in Enum.GetValues<LibraryDocumentType>()) { <option value="@t">@DocumentHints.Name(t)</option> }</select></label>
         <label class="check"><input type="checkbox" @bind="includeVoided" /> Include voided</label>
         <button class="primary" disabled="@busy">Search</button>
     </form>
+    <p class="library-count">@results.Count document@(results.Count == 1 ? "" : "s")</p>
     @if (results.Count == 0) { <p class="empty">No documents found.</p> }
+    else if (cards)
+    {
+        <div class="doc-grid">
+        @foreach (var d in results)
+        {
+            <button type="button" class="doc-card @(selected?.Item.Id == d.Id ? "selected" : "") @(d.Voided ? "voided" : "")" disabled="@busy" @onclick="() => Open(d.Id)" aria-label="Open @d.Details.Title">
+                <span class="doc-thumb">
+                    @if (thumbs.TryGetValue(d.LatestFileId, out var picture)) { <img src="@picture" alt="" /> }
+                    else { <span class="file-tile @Family(d.LatestContentType)"><span>@Extension(d.LatestFileName)</span></span> }
+                    @if (d.Voided) { <span class="doc-ribbon">Voided</span> }
+                </span>
+                <span class="doc-body">
+                    <span class="doc-badges"><span class="type-badge t-@d.Details.Type">@DocumentHints.Name(d.Details.Type)</span>@if (d.Details.Confidential) { <span class="lock-badge">Confidential</span> }</span>
+                    <span class="doc-title">@d.Details.Title</span>
+                    @if (Meta(d) is { Length: > 0 } meta) { <span class="doc-meta">@meta</span> }
+                    @if (d.Details.DueDate is DateOnly due) { var left = due.DayNumber - Today.DayNumber; <span class="due-chip @(left < 0 ? "overdue" : left <= 7 ? "soon" : "")">@DueText(left, due)</span> }
+                </span>
+                <span class="doc-foot"><span>@((d.Details.DocumentDate ?? DateOnly.FromDateTime(d.Created.LocalDateTime)).ToString("dd MMM yyyy"))</span><span>@d.Files file@(d.Files == 1 ? "" : "s") · @d.Links link@(d.Links == 1 ? "" : "s")</span></span>
+            </button>
+        }
+        </div>
+    }
     else
     {
         <div class="table-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>Title / reference</th><th>Party</th><th>Due</th><th class="numeric">Files</th><th class="numeric">Links</th><th></th></tr></thead><tbody>
-        @foreach (var d in results) { <tr class="@(selected?.Item.Id == d.Id ? "selected" : "")"><td>@(d.Details.DocumentDate?.ToString("dd MMM yyyy") ?? d.Created.ToString("dd MMM yyyy"))</td><td>@DocumentHints.Name(d.Details.Type)@if (d.Details.Confidential) { <span class="pill">Confidential</span> }@if (d.Voided) { <span class="pill">Voided</span> }</td><td>@d.Details.Title<br /><span class="hint">@d.Details.Reference</span></td><td>@d.Details.Party</td><td>@d.Details.DueDate?.ToString("dd MMM yyyy")</td><td class="numeric">@d.Files</td><td class="numeric">@d.Links</td><td><button class="text-button" disabled="@busy" @onclick="() => Open(d.Id)">Open</button></td></tr> }
+        @foreach (var d in results) { <tr class="@(selected?.Item.Id == d.Id ? "selected" : "")"><td>@(d.Details.DocumentDate?.ToString("dd MMM yyyy") ?? d.Created.ToString("dd MMM yyyy"))</td><td><span class="type-badge t-@d.Details.Type">@DocumentHints.Name(d.Details.Type)</span>@if (d.Details.Confidential) { <span class="pill">Confidential</span> }@if (d.Voided) { <span class="pill">Voided</span> }</td><td>@d.Details.Title<br /><span class="hint">@d.Details.Reference</span></td><td>@d.Details.Party</td><td>@d.Details.DueDate?.ToString("dd MMM yyyy")</td><td class="numeric">@d.Files</td><td class="numeric">@d.Links</td><td><button class="text-button" disabled="@busy" @onclick="() => Open(d.Id)">Open</button></td></tr> }
         </tbody></table></div>
     }
 </section>
@@ -78,23 +103,29 @@
     <section class="panel">
         <div class="panel-title"><h2>@d.Title</h2><span>@item.Number@(item.Voided ? " · VOIDED" : "")</span></div>
         @if (item.Voided) { <div class="notice error">Voided: @selected.VoidReason</div> }
-        <dl class="facts">
-            <div><dt>Type</dt><dd>@DocumentHints.Name(d.Type)@(d.Confidential ? " · confidential" : "")</dd></div>
-            <div><dt>Reference</dt><dd>@(d.Reference.Length > 0 ? d.Reference : "—")</dd></div>
-            <div><dt>Party</dt><dd>@(d.Party.Length > 0 ? d.Party : "—")</dd></div>
-            <div><dt>Document date</dt><dd>@(d.DocumentDate?.ToString("dd MMM yyyy") ?? "—")</dd></div>
-            <div><dt>Amount</dt><dd>@(d.Amount is null ? "—" : $"{(d.Currency.Length > 0 ? d.Currency : "SLE")} {d.Amount:N2}")</dd></div>
-            <div><dt>Deadline / expiry</dt><dd>@(d.DueDate?.ToString("dd MMM yyyy") ?? "—")</dd></div>
-            <div><dt>Tags</dt><dd>@(d.Tags.Length > 0 ? d.Tags : "—")</dd></div>
-            <div><dt>Notes</dt><dd>@(d.Notes.Length > 0 ? d.Notes : "—")</dd></div>
-            <div><dt>Filed</dt><dd>@item.Created.ToLocalTime().ToString("dd MMM yyyy HH:mm") by @item.CreatedBy</dd></div>
-        </dl>
-        <div class="capture-buttons">
-            <button class="primary" disabled="@busy" @onclick="() => Download(item.LatestFileId)">Download original</button>
-            @if (DocumentFiles.CanPreview(item.LatestContentType)) { <button class="secondary" disabled="@busy" @onclick="() => Preview(item.LatestFileId)">Show here</button> }
-            @if (CanWrite && !item.Voided) { <button class="secondary" disabled="@busy" @onclick="StartEdit">Edit details</button> }
+        <div class="doc-open">
+            <div class="doc-open-viewer">
+                @if (viewFileId != Guid.Empty) { <DocumentViewer FileId="viewFileId" /> }
+                @if (selected.Files.Count > 1 && selected.Files.FirstOrDefault(x => x.Id == viewFileId) is { } showing) { <p class="hint">Showing version @showing.Version · @showing.FileName. Choose another version under File versions.</p> }
+            </div>
+            <div class="doc-open-details">
+        <dl class="facts facts-stack">
+                    <div><dt>Type</dt><dd>@DocumentHints.Name(d.Type)@(d.Confidential ? " · confidential" : "")</dd></div>
+                    <div><dt>Reference</dt><dd>@(d.Reference.Length > 0 ? d.Reference : "—")</dd></div>
+                    <div><dt>Party</dt><dd>@(d.Party.Length > 0 ? d.Party : "—")</dd></div>
+                    <div><dt>Document date</dt><dd>@(d.DocumentDate?.ToString("dd MMM yyyy") ?? "—")</dd></div>
+                    <div><dt>Amount</dt><dd>@(d.Amount is null ? "—" : $"{(d.Currency.Length > 0 ? d.Currency : "SLE")} {d.Amount:N2}")</dd></div>
+                    <div><dt>Deadline / expiry</dt><dd>@(d.DueDate?.ToString("dd MMM yyyy") ?? "—")</dd></div>
+                    <div><dt>Tags</dt><dd>@(d.Tags.Length > 0 ? d.Tags : "—")</dd></div>
+                    <div><dt>Notes</dt><dd>@(d.Notes.Length > 0 ? d.Notes : "—")</dd></div>
+                    <div><dt>Filed</dt><dd>@item.Created.ToLocalTime().ToString("dd MMM yyyy HH:mm") by @item.CreatedBy</dd></div>
+                </dl>
+                <div class="capture-buttons">
+                    <button class="primary" disabled="@busy" @onclick="() => Download(viewFileId)">Download original</button>
+                    @if (CanWrite && !item.Voided) { <button class="secondary" disabled="@busy" @onclick="StartEdit">Edit details</button> }
+                </div>
+            </div>
         </div>
-        <iframe id="document-preview" class="document-preview @(previewing ? "" : "hidden")" title="Document preview"></iframe>
         @if (editing is not null)
         {
             <h3>Edit details</h3>
@@ -107,7 +138,7 @@
     <section class="panel">
         <h2>File versions</h2>
         <div class="table-wrap"><table><thead><tr><th>Version</th><th>File</th><th class="numeric">Size</th><th>Added</th><th>Reason</th><th>Fingerprint</th><th></th></tr></thead><tbody>
-        @foreach (var f in selected.Files) { <tr><td>@f.Version</td><td>@f.FileName@(f.Pages > 0 ? $" · {f.Pages} page(s)" : "")</td><td class="numeric">@Size(f.Size)</td><td>@f.Created.ToLocalTime().ToString("dd MMM yyyy HH:mm") · @f.CreatedBy</td><td>@f.Reason</td><td class="code" title="SHA-256 @f.Sha256">@f.Sha256[..12]…</td><td><button class="text-button" disabled="@busy" @onclick="() => Download(f.Id)">Download</button> @if (DocumentFiles.CanPreview(f.ContentType)) { <button class="text-button" disabled="@busy" @onclick="() => Preview(f.Id)">Show</button> }</td></tr> }
+        @foreach (var f in selected.Files) { <tr><td>@f.Version</td><td>@f.FileName@(f.Pages > 0 ? $" · {f.Pages} page(s)" : "")</td><td class="numeric">@Size(f.Size)</td><td>@f.Created.ToLocalTime().ToString("dd MMM yyyy HH:mm") · @f.CreatedBy</td><td>@f.Reason</td><td class="code" title="SHA-256 @f.Sha256">@f.Sha256[..12]…</td><td><button class="text-button" disabled="@busy" @onclick="() => Download(f.Id)">Download</button> <button class="text-button" disabled="@(busy || viewFileId == f.Id)" @onclick="() => viewFileId = f.Id">@(viewFileId == f.Id ? "Showing" : "Show")</button></td></tr> }
         </tbody></table></div>
         @if (CanWrite && !item.Voided)
         {
@@ -172,13 +203,17 @@
     private string text = "", query = "", filterType = "", progress = "", linkSearch = "", linkKey = "", editReason = "", versionReason = "", unlinkReason = "", voidReason = "", apiKey = "", model = "gpt-4.1-mini", error = "", message = "";
     private int pages; private float confidence;
     private DocumentLinkTarget linkTarget;
-    private bool busy, includeVoided, hinted, previewing, consent;
+    private bool busy, includeVoided, hinted, consent, cards = true, generating, disposed;
+    private Guid viewFileId;
+    private readonly Dictionary<Guid, string> thumbs = [];
+    private readonly HashSet<Guid> noThumb = [];
+    private static DateOnly Today => DateOnly.FromDateTime(DateTime.Now);
     private CancellationTokenSource? cancellation;
     private bool CanWrite => new[] { "sales.create", "inventory.receive", "accounting.write", "catalogue.write", "users.manage" }.Any(Actor.Permissions.Contains);
     private bool SeesConfidential => Actor.Permissions.Contains("accounting.read") || Actor.Permissions.Contains("users.manage");
     public bool HasDraft => file is not null || editing is not null || versionFile is not null;
     private static string Size(long bytes) => bytes >= 1024 * 1024 ? $"{bytes / 1024d / 1024d:0.0} MB" : $"{Math.Max(1, bytes / 1024)} KB";
-    private static string TargetName(DocumentLinkTarget t) => t switch { DocumentLinkTarget.Transaction => "Transaction", DocumentLinkTarget.Party => "Customer / supplier", DocumentLinkTarget.Cheque => "Received cheque", DocumentLinkTarget.SerialUnit => "Equipment serial", _ => "Installation" };
+    private static string TargetName(DocumentLinkTarget t) => t switch { DocumentLinkTarget.Transaction => "Transaction", DocumentLinkTarget.Party => "Customer / supplier", DocumentLinkTarget.Cheque => "Received cheque", DocumentLinkTarget.SerialUnit => "Equipment serial", DocumentLinkTarget.Tender => "Tender", _ => "Installation" };
 
     protected override Task OnInitializedAsync() => Run(async () =>
     {
@@ -189,8 +224,49 @@
     {
         results = await Library.Search(new(query, Enum.TryParse<LibraryDocumentType>(filterType, out var t) ? t : null, includeVoided));
         deadlines = await Library.Deadlines();
-        if (selected is not null) selected = await Library.Get(selected.Item.Id);
+        if (selected is not null) { selected = await Library.Get(selected.Item.Id); if (selected.Files.All(x => x.Id != viewFileId)) viewFileId = selected.Item.LatestFileId; }
+        foreach (var (id, jpeg) in await Library.Thumbnails(results.Select(x => x.LatestFileId).Where(x => !thumbs.ContainsKey(x)).ToList())) thumbs[id] = "data:image/jpeg;base64," + Convert.ToBase64String(jpeg);
     }
+
+    // Library cards show a picture of the first page. Pictures are made once in the viewer script and cached against the file's fingerprint.
+    private static bool Pictured(string type) => type is "application/pdf" or "image/tiff" || type.StartsWith("image/", StringComparison.Ordinal);
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (generating || !cards) return;
+        var missing = results.Where(x => !thumbs.ContainsKey(x.LatestFileId) && !noThumb.Contains(x.LatestFileId) && Pictured(x.LatestContentType)).Take(24).ToList();
+        if (missing.Count == 0) return;
+        generating = true;
+        try
+        {
+            foreach (var d in missing)
+            {
+                if (disposed) return;
+                try
+                {
+                    var original = await Library.Download(d.LatestFileId);
+                    var jpeg = await JS.InvokeAsync<string?>("sierraThumbnail", new object?[] { Convert.ToBase64String(original.Content), original.ContentType });
+                    if (jpeg is null) { noThumb.Add(d.LatestFileId); continue; }
+                    thumbs[d.LatestFileId] = "data:image/jpeg;base64," + jpeg;
+                    if (CanWrite) await Library.SaveThumbnail(d.LatestFileId, Convert.FromBase64String(jpeg));
+                }
+                catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException or Microsoft.JSInterop.JSException or FormatException or TaskCanceledException or InvalidOperationException) { noThumb.Add(d.LatestFileId); }
+                if (!disposed) StateHasChanged();
+            }
+        }
+        finally { generating = false; }
+    }
+    private static string Extension(string name) { var e = Path.GetExtension(name).TrimStart('.').ToUpperInvariant(); return e.Length is > 0 and <= 4 ? e : "FILE"; }
+    private static string Family(string type) => type switch
+    {
+        "application/pdf" => "pdf",
+        _ when type.Contains("wordprocessing") || type == "application/msword" => "word",
+        _ when type.Contains("spreadsheet") || type == "application/vnd.ms-excel" || type == "text/csv" => "excel",
+        _ when type.Contains("presentation") => "slides",
+        _ when type.StartsWith("image/", StringComparison.Ordinal) => "image",
+        _ => "text"
+    };
+    private static string Meta(LibraryItemView d) => string.Join(" · ", new[] { d.Details.Reference, d.Details.Party, d.Details.Amount is decimal a ? $"{(d.Details.Currency.Length > 0 ? d.Details.Currency : "SLE")} {a:N2}" : "" }.Where(x => x.Length > 0));
+    private static string DueText(int left, DateOnly due) => left < 0 ? $"Overdue {-left} day{(left == -1 ? "" : "s")}" : left == 0 ? "Due today" : left <= 60 ? $"Due in {left} day{(left == 1 ? "" : "s")}" : $"Due {due:dd MMM yyyy}";
     private async Task Run(Func<Task> action)
     {
         if (busy) return; busy = true; error = message = ""; cancellation = new();
@@ -201,7 +277,7 @@
         finally { busy = false; progress = ""; cancellation?.Dispose(); cancellation = null; }
     }
     private Task Search() => Run(Reload);
-    private Task Open(Guid id) => Run(async () => { selected = await Library.Get(id); editing = null; previewing = false; versionFile = null; versionReason = unlinkReason = voidReason = ""; ClearOptions(); });
+    private Task Open(Guid id) => Run(async () => { selected = await Library.Get(id); viewFileId = selected.Item.LatestFileId; editing = null; versionFile = null; versionReason = unlinkReason = voidReason = ""; ClearOptions(); });
 
     private async Task<(string, byte[])> Read(InputFileChangeEventArgs e)
     {
@@ -252,7 +328,6 @@
         Reset(); await Reload(); selected = await Library.Get(id); message = "Document stored. The original and its fingerprint are kept with the company records and included in backups.";
     });
     private Task Download(Guid fileId) => Run(async () => message = await DocumentFiles.Save(Services, JS, await Library.Download(fileId)));
-    private Task Preview(Guid fileId) => Run(async () => { previewing = true; StateHasChanged(); await DocumentFiles.Preview(JS, "document-preview", await Library.Download(fileId)); });
     private void StartEdit() { editing = DocumentDetailsModel.From(selected!.Item.Details); editReason = ""; }
     private Task SaveEdit() => Run(async () => { await Library.Update(new(Guid.NewGuid(), selected!.Item.Id, selected.Item.Version, editing!.ToDetails(), editReason)); editing = null; await Reload(); message = "Details saved. The earlier details remain in the history."; });
     private Task PickedVersion(InputFileChangeEventArgs e) => Run(async () => versionFile = await Read(e));
@@ -260,5 +335,5 @@
     private Task LinkSelected() => Run(async () => { await Library.Link(new(Guid.NewGuid(), selected!.Item.Id, linkTarget, linkKey)); ClearOptions(); await Reload(); message = "Linked."; });
     private Task Unlink(Guid linkId) => Run(async () => { await Library.Unlink(new(Guid.NewGuid(), linkId, unlinkReason)); unlinkReason = ""; await Reload(); message = "Link removed. The removal is kept in the audit history."; });
     private Task VoidSelected() => Run(async () => { await Library.Void(new(Guid.NewGuid(), selected!.Item.Id, selected.Item.Version, voidReason)); voidReason = ""; includeVoided = true; await Reload(); message = "Document voided. Its files and history are kept."; });
-    public void Dispose() { cancellation?.Cancel(); apiKey = ""; }
+    public void Dispose() { disposed = true; cancellation?.Cancel(); apiKey = ""; }
 }

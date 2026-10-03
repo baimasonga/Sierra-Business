@@ -130,6 +130,11 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
     public DbSet<StoredDocumentRevision> StoredDocumentRevisions => Set<StoredDocumentRevision>();
     public DbSet<StoredFile> StoredFiles => Set<StoredFile>();
     public DbSet<FileBlob> FileBlobs => Set<FileBlob>();
+    public DbSet<DocumentThumbnail> DocumentThumbnails => Set<DocumentThumbnail>();
+    public DbSet<Tender> Tenders => Set<Tender>();
+    public DbSet<TenderBid> TenderBids => Set<TenderBid>();
+    public DbSet<TenderEvent> TenderEvents => Set<TenderEvent>();
+    public DbSet<TenderAward> TenderAwards => Set<TenderAward>();
     public DbSet<StoredDocumentLink> StoredDocumentLinks => Set<StoredDocumentLink>();
     public DbSet<StoredDocumentLinkRemoval> StoredDocumentLinkRemovals => Set<StoredDocumentLinkRemoval>();
     protected override void OnModelCreating(ModelBuilder builder)
@@ -242,6 +247,15 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
         builder.Entity<InstallationCompletion>().HasOne<Installation>().WithMany().HasForeignKey(x => x.InstallationId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<InstallationCancellation>().HasIndex(x => x.InstallationId).IsUnique();
         builder.Entity<InstallationCancellation>().HasOne<Installation>().WithMany().HasForeignKey(x => x.InstallationId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<DocumentThumbnail>().HasIndex(x => x.Sha256).IsUnique();
+        builder.Entity<Tender>().HasIndex(x => x.Number).IsUnique();
+        builder.Entity<TenderBid>().HasIndex(x => new { x.TenderId, x.Version }).IsUnique();
+        builder.Entity<TenderBid>().HasOne<Tender>().WithMany().HasForeignKey(x => x.TenderId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<TenderEvent>().HasIndex(x => new { x.TenderId, x.Sequence }).IsUnique();
+        builder.Entity<TenderEvent>().HasOne<Tender>().WithMany().HasForeignKey(x => x.TenderId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<TenderAward>().HasIndex(x => x.TenderId).IsUnique();
+        builder.Entity<TenderAward>().HasOne<Tender>().WithMany().HasForeignKey(x => x.TenderId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<TenderAward>().HasOne<TradeOrder>().WithMany().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<Warranty>().HasIndex(x => new { x.SaleId, x.ProductId, x.Serial }).IsUnique();
         builder.Entity<Warranty>().HasIndex(x => x.Serial);
         builder.Entity<Warranty>().HasOne<BusinessDocument>().WithMany().HasForeignKey(x => x.SaleId).OnDelete(DeleteBehavior.Restrict);

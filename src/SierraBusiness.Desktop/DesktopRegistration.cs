@@ -49,6 +49,7 @@ public static class DesktopRegistration
         services.AddSingleton<IFileExport, DesktopFileExport>();
         services.AddTransient<IPurchasingService, PurchasingService>();
         services.AddTransient<IEquipmentService, EquipmentService>();
+        services.AddTransient<ITenderService, TenderService>();
         services.AddSingleton<IFileStore, DatabaseFileStore>();
         services.AddTransient<IDocumentLibrary, DocumentLibrary>();
         services.AddTransient<DocumentCaptureService>();

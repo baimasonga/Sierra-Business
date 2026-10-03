@@ -746,6 +746,32 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.ToTable("DeliveryInvoices");
                 });
 
+            modelBuilder.Entity("SierraBusiness.Infrastructure.DocumentThumbnail", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<byte[]>("Content")
+                        .IsRequired()
+                        .HasColumnType("BLOB");
+
+                    b.Property<DateTimeOffset>("Created")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Sha256")
+                        .IsUnique();
+
+                    b.ToTable("DocumentThumbnails");
+                });
+
             modelBuilder.Entity("SierraBusiness.Infrastructure.Employee", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2653,6 +2679,210 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.ToTable("SupplierCreditUses");
                 });
 
+            modelBuilder.Entity("SierraBusiness.Infrastructure.Tender", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Branch")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateOnly>("Closing")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ClosingTime")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("Created")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Institution")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Notes")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Number")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Officer")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reference")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SubmissionMethod")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Number")
+                        .IsUnique();
+
+                    b.ToTable("Tenders");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.TenderAward", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("BidVersion")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("LinesJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("TenderId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrderId");
+
+                    b.HasIndex("TenderId")
+                        .IsUnique();
+
+                    b.ToTable("TenderAwards");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.TenderBid", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("CostTotal")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("Created")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("LinesJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("Subtotal")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("Tax")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("TaxRate")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("TenderId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("Total")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenderId", "Version")
+                        .IsUnique();
+
+                    b.ToTable("TenderBids");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.TenderEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Actor")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("BidVersion")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("DataJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Sequence")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("TenderId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("Time")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenderId", "Sequence")
+                        .IsUnique();
+
+                    b.ToTable("TenderEvents");
+                });
+
             modelBuilder.Entity("SierraBusiness.Infrastructure.TillClose", b =>
                 {
                     b.Property<Guid>("Id")
@@ -3487,6 +3717,39 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.HasOne("SierraBusiness.Infrastructure.BusinessDocument", null)
                         .WithMany()
                         .HasForeignKey("DocumentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.TenderAward", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.TradeOrder", null)
+                        .WithMany()
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SierraBusiness.Infrastructure.Tender", null)
+                        .WithMany()
+                        .HasForeignKey("TenderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.TenderBid", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.Tender", null)
+                        .WithMany()
+                        .HasForeignKey("TenderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.TenderEvent", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.Tender", null)
+                        .WithMany()
+                        .HasForeignKey("TenderId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

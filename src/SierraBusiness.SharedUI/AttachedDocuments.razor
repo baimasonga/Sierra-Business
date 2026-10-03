@@ -12,8 +12,9 @@
             else
             {
                 <div class="table-wrap"><table><thead><tr><th>Document</th><th>Type</th><th>Date</th><th>File</th><th></th></tr></thead><tbody>
-                @foreach (var d in items) { <tr><td>@d.Details.Title<br /><span class="hint">@d.Number</span></td><td>@DocumentHints.Name(d.Details.Type)</td><td>@d.Details.DocumentDate?.ToString("dd MMM yyyy")</td><td>@d.LatestFileName</td><td><button class="text-button" disabled="@busy" @onclick="() => Download(d)">Download</button></td></tr> }
+                @foreach (var d in items) { <tr><td>@d.Details.Title<br /><span class="hint">@d.Number</span></td><td>@DocumentHints.Name(d.Details.Type)</td><td>@d.Details.DocumentDate?.ToString("dd MMM yyyy")</td><td>@d.LatestFileName</td><td><button class="text-button" disabled="@busy" @onclick="() => viewing = viewing == d.LatestFileId ? Guid.Empty : d.LatestFileId">@(viewing == d.LatestFileId ? "Hide" : "Show")</button> <button class="text-button" disabled="@busy" @onclick="() => Download(d)">Download</button></td></tr> }
                 </tbody></table></div>
+                @if (viewing != Guid.Empty) { <DocumentViewer FileId="viewing" /> }
                 <p class="hint">Open the Document library to see versions, history and other links.</p>
             }
             @if (CanWrite)
@@ -30,6 +31,7 @@
 }
 
 @code {
+    private Guid viewing;
     [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
     [Parameter, EditorRequired] public DocumentLinkTarget Target { get; set; }
     [Parameter, EditorRequired] public string Key { get; set; } = "";

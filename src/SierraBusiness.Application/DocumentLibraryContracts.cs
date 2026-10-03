@@ -3,7 +3,7 @@ namespace SierraBusiness.Application;
 
 /// <summary>Document library (0.15.0): originals of tenders, cheques, invoices, contracts and other business papers, with versions, links and history.</summary>
 public enum LibraryDocumentType { TenderDocument, Cheque, SupplierInvoice, Receipt, Contract, DeliveryNote, Proforma, Certificate, Correspondence, Other }
-public enum DocumentLinkTarget { Transaction, Party, Cheque, SerialUnit, Installation }
+public enum DocumentLinkTarget { Transaction, Party, Cheque, SerialUnit, Installation, Tender }
 
 public sealed record DocumentDetails(LibraryDocumentType Type, string Title, string Reference = "", string Party = "", DateOnly? DocumentDate = null, decimal? Amount = null, string Currency = "",
     DateOnly? DueDate = null, string Tags = "", string Notes = "", bool Confidential = false);
@@ -24,6 +24,9 @@ public sealed record DocumentRevisionView(int Version, string Action, string Act
 public sealed record LibraryItemView(Guid Id, string Number, int Version, DocumentDetails Details, bool Voided, DateTimeOffset Created, string CreatedBy, int Files, int Links, Guid LatestFileId, string LatestFileName, string LatestContentType);
 public sealed record LibraryDocumentView(LibraryItemView Item, IReadOnlyList<DocumentFileView> Files, IReadOnlyList<DocumentLinkView> Links, IReadOnlyList<DocumentRevisionView> History, string Text, string VoidReason);
 public sealed record DocumentContent(string FileName, string ContentType, byte[] Content);
+/// <summary>Native: the viewer script renders Content (PDF, images, TIFF, text). Html: a formatted read-only rendering made on this computer (Word, Excel, PowerPoint, CSV). None: Message explains why.</summary>
+public enum PreviewKind { Native, Html, None }
+public sealed record DocumentPreview(PreviewKind Kind, string FileName, string ContentType, byte[] Content, string Html, string Message);
 public sealed record DocumentDeadline(Guid Id, string Number, string Title, LibraryDocumentType Type, string Party, DateOnly DueDate, int DaysLeft);
 public sealed record LinkTargetOption(string Key, string Label);
 
@@ -32,6 +35,10 @@ public interface IDocumentLibrary
     Task<IReadOnlyList<LibraryItemView>> Search(DocumentQuery query);
     Task<LibraryDocumentView> Get(Guid id);
     Task<DocumentContent> Download(Guid fileId);
+    Task<DocumentPreview> Preview(Guid fileId);
+    /// <summary>Cached first-page pictures (JPEG) for the given files, where one exists and the caller may see the file.</summary>
+    Task<IReadOnlyDictionary<Guid, byte[]>> Thumbnails(IReadOnlyCollection<Guid> fileIds);
+    Task SaveThumbnail(Guid fileId, byte[] jpeg);
     Task<IReadOnlyList<DocumentDeadline>> Deadlines(int days = 60);
     Task<LibraryItemView?> FindDuplicate(byte[] content);
     Task<IReadOnlyList<LinkTargetOption>> Targets(DocumentLinkTarget target, string text);

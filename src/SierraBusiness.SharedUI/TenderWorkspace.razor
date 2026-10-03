@@ -1,0 +1,303 @@
+@inject ITenderService Tenders
+@inject IBusinessService Business
+@inject IServiceProvider Services
+@inject Microsoft.JSInterop.IJSRuntime JS
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+
+<section class="panel">
+    <div class="panel-title"><h2>Tender register</h2><button class="secondary" disabled="@busy" @onclick="Refresh">Refresh</button></div>
+    @if (tenders.Count == 0) { <p class="empty">No tenders yet. Register the first one below.</p> }
+    else
+    {
+        <div class="tender-list">
+        @foreach (var t in tenders)
+        {
+            <button type="button" class="tender-row @(selected?.Id == t.Id ? "selected" : "")" disabled="@busy" @onclick="() => Select(t.Id)">
+                <span class="tender-main"><span class="tender-ref">@t.Reference</span><span class="tender-title">@t.Title</span><span class="tender-inst">@t.Institution</span></span>
+                <span class="tender-side">
+                    <span class="status-badge s-@t.Status">@StatusName(t.Status)</span>
+                    @if (!Final(t.Status)) { <span class="due-chip @(t.DaysLeft < 0 ? "overdue" : t.DaysLeft <= 7 ? "soon" : "")">@Closing(t)</span> }
+                    else if (t.Bids.Count > 0) { <span class="tender-amount">NLe @t.Bids[0].Total.ToString("N2")</span> }
+                </span>
+            </button>
+        }
+        </div>
+    }
+</section>
+
+@if (CanWrite)
+{
+    <section class="panel">
+        <details open="@(tenders.Count == 0)"><summary><strong>Register a tender</strong></summary>
+            <div class="form-grid">
+                <label>Tender reference<input maxlength="120" @bind="reference" placeholder="As printed on the invitation" /></label>
+                <label>Institution<input maxlength="160" list="tender-parties" @bind="institution" /><datalist id="tender-parties">@foreach (var p in parties) { <option value="@p" /> }</datalist></label>
+                <label>Title<input maxlength="200" @bind="title" /></label>
+                <label>Closing date<input type="date" @bind="closing" /></label>
+                <label>Closing time<input type="time" @bind="closingTime" /></label>
+                <label>Responsible officer<input maxlength="100" @bind="officer" /></label>
+                <label>Submission method<input maxlength="120" @bind="method" placeholder="Hand delivery, email, e-procurement portal…" /></label>
+                <label>Notes<input maxlength="200" @bind="notes" /></label>
+            </div>
+            <button class="primary" disabled="@busy" @onclick="Create">Register tender</button>
+        </details>
+    </section>
+}
+
+@if (selected is not null)
+{
+    var t = selected; var bid = ShownBid;
+    <section class="panel">
+        <div class="panel-title"><h2>@t.Reference · @t.Title</h2><span class="status-badge s-@t.Status">@StatusName(t.Status)</span></div>
+        <dl class="facts">
+            <div><dt>Institution</dt><dd>@t.Institution</dd></div>
+            <div><dt>Closing</dt><dd>@t.Closing.ToString("dd MMM yyyy") @t.ClosingTime @if (!Final(t.Status)) { <span class="due-chip @(t.DaysLeft < 0 ? "overdue" : t.DaysLeft <= 7 ? "soon" : "")">@Closing(t)</span> }</dd></div>
+            <div><dt>Responsible officer</dt><dd>@(t.Officer.Length > 0 ? t.Officer : "—")</dd></div>
+            <div><dt>Submission</dt><dd>@(t.SubmissionMethod.Length > 0 ? t.SubmissionMethod : "—")</dd></div>
+            <div><dt>Latest bid</dt><dd>@(t.Bids.Count == 0 ? "None yet" : $"Version {t.Bids[0].Version} · NLe {t.Bids[0].Total:N2}")</dd></div>
+            <div><dt>Outcome</dt><dd>@(t.Outcome.Length > 0 ? t.Outcome : "—")@if (t.OrderId is not null) { <br /><span class="code">Sales order @Short(t.OrderNumber)</span> }</dd></div>
+        </dl>
+        @if (t.Notes.Length > 0) { <p class="hint">@t.Notes</p> }
+        <ol class="tender-steps">
+            @foreach (var step in Steps) { <li class="@(StepState(t, step))">@StatusName(step)</li> }
+        </ol>
+    </section>
+
+    @if (CanWrite && Editable(t.Status))
+    {
+        <section class="panel">
+            <h2>@(t.Bids.Count == 0 ? "Prepare the bid" : $"Prepare version {t.Bids[0].Version + 1}")</h2>
+            <p class="hint">Cost each item: supplier price × exchange rate × (1 + landed cost %) gives the NLe cost; the margin gives a suggested bid price. Enter the price you will bid. Alternative offers are listed separately and are not added to the total.</p>
+            <div class="table-wrap"><table class="bid-editor"><thead><tr><th>#</th><th>Product (optional)</th><th>Description</th><th class="numeric">Qty</th><th>Unit</th>@if (t.CostsVisible) { <th class="numeric">Supplier cost</th><th>Currency</th><th class="numeric">Rate</th><th class="numeric">Landed %</th><th class="numeric">Margin %</th><th class="numeric">Suggested</th> }<th class="numeric">Bid price (NLe)</th><th>Alternative to</th><th class="numeric">Line total</th><th></th></tr></thead><tbody>
+            @for (var i = 0; i < draft.Count; i++)
+            {
+                var n = i + 1; var l = draft[i];
+                <tr class="@(t.CostsVisible && l.UnitPrice > 0 && l.UnitPrice < Local(l) ? "below-cost" : "")">
+                    <td>@n</td>
+                    <td><select aria-label="Product for line @n" @bind="l.ProductId" @bind:after="() => Fill(l)"><option value="@Guid.Empty">—</option>@foreach (var p in products) { <option value="@p.Id">@p.Sku</option> }</select></td>
+                    <td><input aria-label="Description for line @n" maxlength="160" @bind="l.Description" /></td>
+                    <td><input aria-label="Quantity for line @n" class="num" type="number" min="0.0001" step="0.0001" @bind="l.Quantity" /></td>
+                    <td><input aria-label="Unit for line @n" class="unit" maxlength="30" @bind="l.Unit" /></td>
+                    @if (t.CostsVisible)
+                    {
+                        <td><input aria-label="Supplier cost for line @n" class="num" type="number" min="0" step="0.01" @bind="l.SupplierCost" /></td>
+                        <td><select aria-label="Cost currency for line @n" @bind="l.Currency" @bind:after="() => Rate(l)"><option value="SLE">NLe</option>@foreach (var c in currencies) { <option value="@c.Key">@c.Key</option> }</select></td>
+                        <td><input aria-label="Exchange rate for line @n" class="num" type="number" min="0.0001" step="0.0001" disabled="@(l.Currency == "SLE")" @bind="l.Rate" /></td>
+                        <td><input aria-label="Landed cost percent for line @n" class="num" type="number" step="0.1" @bind="l.Landed" /></td>
+                        <td><input aria-label="Margin percent for line @n" class="num" type="number" step="0.1" @bind="l.Margin" /></td>
+                        <td class="numeric"><button class="text-button" title="Use the suggested price" @onclick="() => l.UnitPrice = Suggested(l)">@Suggested(l).ToString("N2")</button></td>
+                    }
+                    <td><input aria-label="Bid price for line @n" class="num" type="number" min="0.0001" step="0.01" @bind="l.UnitPrice" /></td>
+                    <td><select aria-label="Alternative to for line @n" @bind="l.AlternativeTo"><option value="0">Main item</option>@for (var j = 1; j < n; j++) { var k = j; <option value="@k">Line @k</option> }</select></td>
+                    <td class="numeric">@(Math.Round(l.Quantity * l.UnitPrice, 2, MidpointRounding.AwayFromZero).ToString("N2"))</td>
+                    <td><button class="text-button" disabled="@(draft.Count == 1)" @onclick="() => draft.Remove(l)">Remove</button></td>
+                </tr>
+            }
+            </tbody></table></div>
+            <button class="text-button" @onclick="() => draft.Add(new())">+ Add line</button>
+            <div class="bid-summary">
+                <span>Bid subtotal <strong>NLe @DraftSubtotal.ToString("N2")</strong></span>
+                @if (t.CostsVisible) { <span>Cost NLe @DraftCost.ToString("N2") · margin <strong class="@(DraftSubtotal > 0 && DraftSubtotal < DraftCost ? "negative" : "")">@(DraftSubtotal == 0 ? "—" : $"{(DraftSubtotal - DraftCost) / DraftSubtotal * 100:0.0}%")</strong></span> }
+                <span class="hint">Sales tax at the configured rate is added when saved.</span>
+            </div>
+            @if (t.Bids.Count > 0) { <label>Reason for this new version<input maxlength="200" @bind="bidReason" placeholder="For example: supplier price change, clarification answer" /></label> }
+            <button class="primary" disabled="@busy" @onclick="SaveBid">Save bid version</button>
+        </section>
+    }
+
+    @if (t.Bids.Count > 0)
+    {
+        <section class="panel">
+            <div class="panel-title"><h2>Bid versions</h2><span>NEVER OVERWRITTEN</span></div>
+            <div class="version-chips">
+                @foreach (var b in t.Bids) { <button type="button" class="version-chip @(bid?.Version == b.Version ? "active" : "")" @onclick="() => shownVersion = b.Version">v@(b.Version) · NLe @b.Total.ToString("N0")@(b.Submitted ? " · submitted" : b.ApprovedBy.Length > 0 ? " · approved" : "")</button> }
+            </div>
+            @if (bid is not null)
+            {
+                <div id="tender-print" class="price-schedule">
+                    <h1>@(CompanyName.Length == 0 ? "Sierra Business" : CompanyName)</h1>
+                    <h2>Price schedule · @t.Reference</h2>
+                    <p>@t.Institution · @t.Title<br />Bid version @bid.Version · prepared @bid.Created.ToLocalTime().ToString("dd MMM yyyy")</p>
+                    <table><thead><tr><th>#</th><th>Description</th><th class="numeric">Quantity</th><th>Unit</th><th class="numeric">Unit price (NLe)</th><th class="numeric">Total (NLe)</th></tr></thead><tbody>
+                    @foreach (var l in bid.Lines.Where(x => x.AlternativeTo is null)) { <tr><td>@l.Line</td><td>@l.Description@(l.Sku.Length > 0 ? $" ({l.Sku})" : "")</td><td class="numeric">@l.Quantity.ToString("0.####")</td><td>@l.Unit</td><td class="numeric">@l.UnitPrice.ToString("N2")</td><td class="numeric">@l.LineTotal.ToString("N2")</td></tr> }
+                    </tbody><tfoot>
+                        <tr><td colspan="5">Subtotal</td><td class="numeric">@bid.Subtotal.ToString("N2")</td></tr>
+                        <tr><td colspan="5">Sales tax (@((bid.TaxRate * 100).ToString("0.##"))%)</td><td class="numeric">@bid.Tax.ToString("N2")</td></tr>
+                        <tr><td colspan="5"><strong>Total bid price</strong></td><td class="numeric"><strong>@bid.Total.ToString("N2")</strong></td></tr>
+                    </tfoot></table>
+                    @if (bid.Lines.Any(x => x.AlternativeTo is not null))
+                    {
+                        <h3>Alternative offers (not included in the total)</h3>
+                        <table><tbody>@foreach (var l in bid.Lines.Where(x => x.AlternativeTo is not null)) { <tr><td>Alternative to line @l.AlternativeTo</td><td>@l.Description</td><td class="numeric">@l.Quantity.ToString("0.####") @l.Unit</td><td class="numeric">@l.UnitPrice.ToString("N2")</td><td class="numeric">@l.LineTotal.ToString("N2")</td></tr> }</tbody></table>
+                    }
+                    <p>Prices are in Sierra Leonean Leones (NLe).</p>
+                    <p>Authorised signature: ____________________ &nbsp; Date: ______________</p>
+                </div>
+                <PrintButton Target="tender-print" />
+                @if (t.CostsVisible)
+                {
+                    <details><summary>Costing for version @bid.Version (internal)</summary>
+                        <p>Cost NLe @bid.CostTotal.ToString("N2") · margin @bid.MarginPercent.ToString("0.0")% · @(bid.Reason.Length > 0 ? bid.Reason : "first version") · by @bid.CreatedBy@(bid.ApprovedBy.Length > 0 ? $" · approved by {bid.ApprovedBy}" : "")</p>
+                        <div class="table-wrap"><table><thead><tr><th>#</th><th>Description</th><th class="numeric">Supplier cost</th><th class="numeric">NLe cost</th><th class="numeric">Suggested</th><th class="numeric">Bid</th><th class="numeric">Margin</th></tr></thead><tbody>
+                        @foreach (var l in bid.Lines) { <tr class="@(l.BelowCost ? "below-cost" : "")"><td>@l.Line</td><td>@l.Description</td><td class="numeric">@l.CostCurrency @l.SupplierCost.ToString("N2")@(l.CostCurrency != "SLE" ? $" @ {l.ExchangeRate:0.####}" : "")</td><td class="numeric">@l.LocalUnitCost.ToString("N2")</td><td class="numeric">@l.SuggestedPrice.ToString("N2")</td><td class="numeric">@l.UnitPrice.ToString("N2")</td><td class="numeric">@l.ActualMarginPercent.ToString("0.0")%</td></tr> }
+                        </tbody></table></div>
+                    </details>
+                }
+            }
+        </section>
+    }
+
+    @if (CanWrite && !Final(t.Status))
+    {
+        <section class="panel">
+            <h2>Next step</h2>
+            @if (t.Status == TenderStatus.BidPreparation)
+            {
+                @if (CanApprove) { <p>Approve version @t.Bids[0].Version (total NLe @t.Bids[0].Total.ToString("N2")) for submission.</p><label>Approval note<input maxlength="160" @bind="note" /></label><button class="primary" disabled="@busy" @onclick="Approve">Approve price</button> }
+                else { <p class="hint">Waiting for approval by someone with pricing authority.</p> }
+            }
+            @if (t.Status == TenderStatus.Approved)
+            {
+                <div class="form-grid"><label>Submitted on<input type="date" @bind="submittedOn" /></label><label>Submission receipt / reference<input maxlength="120" @bind="receipt" /></label></div>
+                <button class="primary" disabled="@busy" @onclick="Submit">Record submission of version @t.ApprovedVersion</button>
+            }
+            @if (t.Status is TenderStatus.Submitted or TenderStatus.Clarification)
+            {
+                <div class="outcome-grid">
+                    <div>
+                        <h3>Won</h3>
+                        <div class="form-grid"><label>Award letter / contract reference<input maxlength="100" @bind="award" /></label><label>Order date<input type="date" @bind="orderDate" /></label><label>Delivery due<input type="date" @bind="dueDate" /></label></div>
+                        @foreach (var l in Submitted?.Lines ?? []) { <label class="check award-line"><input type="checkbox" checked="@awarded.ContainsKey(l.Line)" disabled="@(l.ProductId is null)" @onchange="e => ToggleAward(l, (bool)(e.Value ?? false))" /> Line @l.Line · @l.Description@(l.ProductId is null ? " (no catalogue product)" : "") @if (awarded.ContainsKey(l.Line)) { <input aria-label="Awarded quantity for line @l.Line" class="num" type="number" min="0.0001" step="0.0001" max="@l.Quantity" @bind="awarded[l.Line]" /> }</label> }
+                        <button class="primary" disabled="@(busy || awarded.Count == 0)" @onclick="Win">Record win and create sales order</button>
+                    </div>
+                    <div>
+                        <h3>Lost</h3>
+                        <div class="form-grid"><label>Reason or feedback<input maxlength="200" @bind="lostReason" /></label><label>Winning bidder<input maxlength="160" @bind="winner" /></label><label>Winning amount (NLe)<input type="number" min="0" step="0.01" @bind="winningAmount" /></label></div>
+                        <button class="secondary" disabled="@busy" @onclick="Lose">Record loss</button>
+                    </div>
+                </div>
+                @if (t.Status == TenderStatus.Submitted)
+                {
+                    <details><summary>Institution asked for a clarification or revised price</summary><label>What was asked<input maxlength="200" @bind="note" /></label><button class="secondary" disabled="@busy" @onclick="Clarify">Record clarification</button><p class="hint">A revised bid then needs approval and resubmission. The submitted version stays on record.</p></details>
+                }
+            }
+            <details><summary>Closing date extended</summary><div class="form-grid"><label>New closing date<input type="date" @bind="newClosing" /></label><label>Time<input type="time" @bind="newClosingTime" /></label><label>Reason<input maxlength="160" @bind="closingReason" placeholder="Addendum or notice reference" /></label></div><button class="secondary" disabled="@busy" @onclick="ChangeClosing">Record new closing date</button></details>
+            <details><summary>Cancel this tender</summary><label>Reason<input maxlength="200" @bind="cancelReason" placeholder="For example: decided not to bid" /></label><button class="danger" disabled="@busy" @onclick="Cancel">Cancel tender</button></details>
+        </section>
+    }
+
+    <AttachedDocuments Actor="Actor" Target="DocumentLinkTarget.Tender" Key="@t.Id.ToString()" DefaultType="LibraryDocumentType.TenderDocument" DefaultTitle="@($"{t.Reference} – ")" Heading="Tender documents (dossier, addenda, submission receipt…)" />
+
+    <section class="panel">
+        <h2>History</h2>
+        <div class="table-wrap"><table><thead><tr><th>#</th><th>Change</th><th>Status</th><th>Version</th><th>When</th><th>By</th><th>Note</th></tr></thead><tbody>
+        @foreach (var e in t.Events) { <tr><td>@e.Sequence</td><td>@EventName(e.Kind)</td><td>@StatusName(e.Status)</td><td>@e.Version</td><td>@e.Time.ToLocalTime().ToString("dd MMM yyyy HH:mm")</td><td>@e.Actor</td><td>@e.Reason</td></tr> }
+        </tbody></table></div>
+    </section>
+}
+
+@code {
+    [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
+    [Parameter] public string CompanyName { get; set; } = "";
+    private sealed class LineDraft { public Guid ProductId { get; set; } public string Description { get; set; } = ""; public decimal Quantity { get; set; } = 1; public string Unit { get; set; } = "unit"; public decimal SupplierCost { get; set; } public string Currency { get; set; } = "SLE"; public decimal Rate { get; set; } = 1; public decimal Landed { get; set; } public decimal Margin { get; set; } = 25; public decimal UnitPrice { get; set; } public int AlternativeTo { get; set; } }
+    private static readonly TenderStatus[] Steps = [TenderStatus.Draft, TenderStatus.BidPreparation, TenderStatus.Approved, TenderStatus.Submitted, TenderStatus.Won];
+    private IReadOnlyList<TenderView> tenders = [];
+    private IReadOnlyList<ProductView> products = [];
+    private IReadOnlyList<string> parties = [];
+    private Dictionary<string, decimal> currencies = [];
+    private TenderView? selected;
+    private List<LineDraft> draft = [new()];
+    private readonly Dictionary<int, decimal> awarded = [];
+    private int? shownVersion;
+    private string reference = "", institution = "", title = "", officer = "", method = "", notes = "", bidReason = "", note = "", receipt = "", award = "", lostReason = "", winner = "", closingReason = "", cancelReason = "", error = "", message = "";
+    private TimeOnly? closingTime, newClosingTime;
+    private DateOnly closing = DateOnly.FromDateTime(DateTime.Today).AddDays(14), submittedOn = DateOnly.FromDateTime(DateTime.Today), orderDate = DateOnly.FromDateTime(DateTime.Today), dueDate = DateOnly.FromDateTime(DateTime.Today).AddDays(30), newClosing = DateOnly.FromDateTime(DateTime.Today).AddDays(14);
+    private decimal? winningAmount;
+    private bool busy;
+    private bool CanWrite => Actor.Permissions.Contains("sales.create");
+    private bool CanApprove => Actor.Permissions.Contains("pricing.manage");
+    public bool HasDraft => reference.Length > 0 || draft.Any(x => x.Description.Length > 0 || x.UnitPrice > 0);
+    private TenderBidView? ShownBid => selected?.Bids.FirstOrDefault(x => x.Version == shownVersion) ?? selected?.Bids.FirstOrDefault();
+    private TenderBidView? Submitted => selected?.Bids.FirstOrDefault(x => x.Version == selected.SubmittedVersion);
+    private static bool Final(TenderStatus s) => s is TenderStatus.Won or TenderStatus.Lost or TenderStatus.Cancelled;
+    private static bool Editable(TenderStatus s) => s is TenderStatus.Draft or TenderStatus.BidPreparation or TenderStatus.Approved or TenderStatus.Clarification;
+    private static string StatusName(TenderStatus s) => s switch { TenderStatus.BidPreparation => "Bid preparation", _ => s.ToString() };
+    private static string EventName(string kind) => kind switch { "BidSaved" => "Bid version saved", "ClosingChanged" => "Closing date changed", "Clarification" => "Clarification requested", _ => kind };
+    private static string Closing(TenderView t) => t.DaysLeft < 0 ? $"Closed {-t.DaysLeft} day{(t.DaysLeft == -1 ? "" : "s")} ago" : t.DaysLeft == 0 ? "Closes today" : $"Closes in {t.DaysLeft} day{(t.DaysLeft == 1 ? "" : "s")}";
+    private static string Short(string number) => number.Length > 8 ? number[^8..] : number;
+    private static string StepState(TenderView t, TenderStatus step)
+    {
+        var order = Array.IndexOf(Steps, t.Status is TenderStatus.Clarification ? TenderStatus.Submitted : t.Status is TenderStatus.Lost or TenderStatus.Cancelled ? TenderStatus.Won : t.Status);
+        var mine = Array.IndexOf(Steps, step);
+        if (step == TenderStatus.Won && t.Status is TenderStatus.Lost or TenderStatus.Cancelled) return "ended";
+        return mine < order || mine == order && Final(t.Status) ? "done" : mine == order ? "current" : "";
+    }
+    private static decimal Local(LineDraft l) => Math.Round(l.SupplierCost * (l.Currency == "SLE" ? 1 : l.Rate) * (1 + l.Landed / 100), 4);
+    private static decimal Suggested(LineDraft l) => Math.Round(Local(l) * (1 + l.Margin / 100), 2, MidpointRounding.AwayFromZero);
+    private decimal DraftSubtotal => draft.Where(x => x.AlternativeTo == 0).Sum(x => Math.Round(x.Quantity * x.UnitPrice, 2, MidpointRounding.AwayFromZero));
+    private decimal DraftCost => draft.Where(x => x.AlternativeTo == 0).Sum(x => Math.Round(x.Quantity * Local(x), 2, MidpointRounding.AwayFromZero));
+
+    protected override Task OnInitializedAsync() => Run(async () =>
+    {
+        await Load();
+        products = (await Business.Read(Actor)).Products;
+        if (Services.GetService(typeof(IPartyService)) is IPartyService partyService) parties = (await partyService.Read()).Where(x => x.Type != PartyType.Supplier).Select(x => x.Name).ToArray();
+        if (Services.GetService(typeof(IPurchasingService)) is IPurchasingService purchasing) currencies = (await purchasing.Rates()).GroupBy(x => x.Currency).ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.EffectiveFrom).First().Rate);
+    });
+    private async Task Load() { tenders = await Tenders.List(); if (selected is not null) selected = tenders.FirstOrDefault(x => x.Id == selected.Id); }
+    private Task Refresh() => Run(Load);
+    private async Task Run(Func<Task> action)
+    {
+        if (busy) return; busy = true; error = message = "";
+        try { await action(); }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
+        catch (Exception) { error = "The operation could not complete. Refresh and check the tender history before retrying."; }
+        finally { busy = false; }
+    }
+    private void Select(Guid id)
+    {
+        selected = tenders.First(x => x.Id == id); shownVersion = null; awarded.Clear(); note = bidReason = "";
+        var latest = selected.Bids.FirstOrDefault();
+        draft = latest is null ? [new()] : latest.Lines.Select(l => new LineDraft { ProductId = l.ProductId ?? Guid.Empty, Description = l.Description, Quantity = l.Quantity, Unit = l.Unit, SupplierCost = l.SupplierCost, Currency = l.CostCurrency, Rate = l.ExchangeRate == 0 ? 1 : l.ExchangeRate, Landed = l.LandedPercent, Margin = l.MarginPercent, UnitPrice = l.UnitPrice, AlternativeTo = l.AlternativeTo ?? 0 }).ToList();
+        newClosing = selected.Closing;
+    }
+    private void Fill(LineDraft l)
+    {
+        if (products.FirstOrDefault(x => x.Id == l.ProductId) is not { } p) return;
+        if (l.Description.Length == 0) l.Description = p.Name;
+        l.Unit = p.Unit;
+        if (l.UnitPrice == 0) l.UnitPrice = p.Price;
+    }
+    private void Rate(LineDraft l) => l.Rate = l.Currency == "SLE" ? 1 : currencies.GetValueOrDefault(l.Currency, l.Rate);
+    private void ToggleAward(TenderLineView l, bool on) { if (on) awarded[l.Line] = l.Quantity; else awarded.Remove(l.Line); }
+    private async Task After(string text) { await Load(); if (selected is not null) Select(selected.Id); message = text; }
+
+    private Task Create() => Run(async () =>
+    {
+        var id = await Tenders.Create(new(Guid.NewGuid(), reference, institution, title, closing, closingTime?.ToString("HH:mm") ?? "", officer, method, notes));
+        reference = institution = title = officer = method = notes = ""; closingTime = null;
+        await Load(); Select(id); message = "Tender registered. Attach the dossier below and prepare the bid.";
+    });
+    private Task SaveBid() => Run(async () =>
+    {
+        var lines = draft.Select(l => new TenderLineInput(l.ProductId == Guid.Empty ? null : l.ProductId, l.Description, l.Quantity, l.Unit, l.SupplierCost, l.Currency, l.Currency == "SLE" ? 1 : l.Rate, l.Landed, l.Margin, l.UnitPrice, l.AlternativeTo == 0 ? null : l.AlternativeTo)).ToList();
+        await Tenders.SaveBid(new(Guid.NewGuid(), selected!.Id, selected.Bids.FirstOrDefault()?.Version ?? 0, lines, bidReason));
+        await After("Bid version saved. It needs price approval before submission.");
+    });
+    private Task Approve() => Run(async () => { await Tenders.Approve(new(Guid.NewGuid(), selected!.Id, selected.Bids[0].Version, note)); await After("Price approved. Record the submission when the bid is delivered."); });
+    private Task Submit() => Run(async () => { await Tenders.Submit(new(Guid.NewGuid(), selected!.Id, selected.ApprovedVersion ?? 0, submittedOn, receipt)); receipt = ""; await After("Submission recorded. This bid version is now locked."); });
+    private Task Clarify() => Run(async () => { await Tenders.Clarify(new(Guid.NewGuid(), selected!.Id, note)); await After("Clarification recorded. Prepare a revised version if a new price is needed."); });
+    private Task ChangeClosing() => Run(async () => { await Tenders.ChangeClosing(new(Guid.NewGuid(), selected!.Id, newClosing, newClosingTime?.ToString("HH:mm") ?? "", closingReason)); closingReason = ""; await After("Closing date updated. The earlier date stays in the history."); });
+    private Task Win() => Run(async () =>
+    {
+        await Tenders.Win(new(Guid.NewGuid(), selected!.Id, award, orderDate, dueDate, awarded.Select(x => new AwardLine(x.Key, x.Value)).ToList()));
+        award = ""; await After("Tender won. A sales order with the awarded lines and bid prices is under Orders & quotations; reserve stock or deliver from there.");
+    });
+    private Task Lose() => Run(async () => { await Tenders.Lose(new(Guid.NewGuid(), selected!.Id, lostReason, winner, winningAmount)); lostReason = winner = ""; winningAmount = null; await After("Loss recorded with the feedback for future bids."); });
+    private async Task Cancel()
+    {
+        if (!await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", "Cancel this tender? It cannot be reopened.")) return;
+        await Run(async () => { await Tenders.Cancel(new(Guid.NewGuid(), selected!.Id, cancelReason)); cancelReason = ""; await After("Tender cancelled."); });
+    }
+}

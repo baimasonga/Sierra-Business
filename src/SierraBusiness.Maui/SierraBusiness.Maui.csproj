@@ -30,6 +30,7 @@
     <MauiIcon Include="Resources/AppIcon/appicon.svg" Color="#163e34" />
     <Content Include="../SierraBusiness.Web/wwwroot/app.css" Link="wwwroot/app.css" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../SierraBusiness.Web/wwwroot/print.js" Link="wwwroot/print.js" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../SierraBusiness.Web/wwwroot/lib/**/*" Link="wwwroot/lib/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <MauiAsset Include="Resources/Raw/**" LogicalName="%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

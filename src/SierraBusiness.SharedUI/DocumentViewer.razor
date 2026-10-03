@@ -1,0 +1,33 @@
+@inject IDocumentLibrary Library
+@inject Microsoft.JSInterop.IJSRuntime JS
+<div class="viewer" role="region" aria-label="Document preview">
+    @if (preview is null) { <p class="viewer-status">@status</p> }
+    else if (preview.Kind == PreviewKind.Html) { <div class="viewer-html">@((MarkupString)preview.Html)</div> }
+    else if (preview.Kind == PreviewKind.None) { <p class="viewer-status">@preview.Message</p> }
+    <div id="@elementId" class="viewer-pages @(preview?.Kind == PreviewKind.Native ? "" : "hidden")"></div>
+</div>
+
+@code {
+    /// <summary>The stored file to show. Changing it opens the new file.</summary>
+    [Parameter, EditorRequired] public Guid FileId { get; set; }
+    private readonly string elementId = "viewer-" + Guid.NewGuid().ToString("N");
+    private DocumentPreview? preview;
+    private Guid shown;
+    private bool pending;
+    private string status = "Opening…";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (FileId == shown) return;
+        shown = FileId; preview = null; status = "Opening…"; pending = false;
+        try { preview = await Library.Preview(FileId); pending = preview.Kind == PreviewKind.Native; }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { preview = new(PreviewKind.None, "", "", [], "", ex.Message); }
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!pending || preview is null) return;
+        pending = false;
+        try { await JS.InvokeAsync<string>("sierraRender", new object?[] { elementId, Convert.ToBase64String(preview.Content), preview.ContentType }); }
+        catch (Microsoft.JSInterop.JSException) { preview = new(PreviewKind.None, preview.FileName, preview.ContentType, [], "", "This file could not be shown here. Download the original to open it."); StateHasChanged(); }
+    }
+}
