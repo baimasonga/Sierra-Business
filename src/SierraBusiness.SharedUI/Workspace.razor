@@ -24,7 +24,7 @@
         </div>
     </aside>
     <main id="workspace-content" tabindex="-1">
-        <header class="workspace-header"><span class="breadcrumb">@ActiveArea.Name @if (page != ActiveArea.Name) { <span aria-hidden="true">/</span><strong>@(page)</strong> }</span><span class="user" title="@Actor.Id">@DateTime.UtcNow.ToString("dd MMM yyyy") · @Actor.Id</span></header>
+        <header class="workspace-header"><span class="breadcrumb">@ActiveArea.Name @if (page != ActiveArea.Name) { <span aria-hidden="true">/</span><strong>@(page)</strong> }</span><span class="user">@DateTime.Now.ToString("dd MMM yyyy")@if (UserName.Length > 0) { <text> · Signed in as @UserName</text> }</span></header>
         @if (ActiveArea.Name != "Overview")
         {
             <nav class="section-navigation" aria-label="@($"{ActiveArea.Name} screens")">
@@ -36,7 +36,7 @@
             </nav>
         }
         <div class="content">
-            <div class="heading"><div><p class="eyebrow">SIERRA BUSINESS WORKSPACE</p><h1>@(page)</h1><p class="subheading">@Description</p></div><button class="primary" @onclick='() => Navigate("New sale")'>+ New sale</button></div>
+            <div class="heading"><div><h1>@(page)</h1><p class="subheading">@Description</p></div>@if (page == "Overview" && Actor.Permissions.Contains("sales.create")) { <button class="primary" disabled="@busy" @onclick='() => Navigate("New sale")'>+ New sale</button> }</div>
             @if (!string.IsNullOrEmpty(error)) { <div class="notice error" role="alert">@error</div> }
             @if (!string.IsNullOrEmpty(success)) { <div class="notice success" role="status">@success</div> }
             @if (data is null) { <p role="status">Loading your branch workspace…</p> }
@@ -131,7 +131,7 @@
             {
                 <div class="notice">@data.PendingSync operations await central synchronization. The transport and central conflict queue are not implemented in this build. Do not treat local commits as centrally backed up.</div><section class="panel"><h2>Audit trail</h2><div class="table-wrap"><table><thead><tr><th>UTC time</th><th>Actor</th><th>Action</th><th>Result ID</th></tr></thead><tbody>@foreach (var a in data.Audit) { <tr><td>@a.Time.ToString("g")</td><td>@a.Actor</td><td>@a.Action</td><td class="code">@a.Reference</td></tr> }</tbody></table></div></section>
             }
-            <footer>SIERRA BUSINESS OS <span>Development build · Local branch workspace</span></footer>
+            <footer>SIERRA BUSINESS OS @if (Version.Length > 0) { <span>Version @Version</span> }</footer>
         </div>
     </main>
 </div>
@@ -141,6 +141,8 @@
     [Parameter] public EventCallback OnOpenCapture { get; set; }
     [Parameter] public EventCallback OnOpenCompanies { get; set; }
     [Parameter] public string CompanyName { get; set; } = "";
+    [Parameter] public string UserName { get; set; } = "";
+    [Parameter] public string Version { get; set; } = "";
     private RecordsSafetyWorkspace? safetyWorkspace;
     private ImportWorkspace? importWorkspace;
     private PurchasingWorkspace? purchasingWorkspace;

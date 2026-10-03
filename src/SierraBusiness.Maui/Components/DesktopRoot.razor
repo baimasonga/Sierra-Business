@@ -15,7 +15,7 @@
 else if (actor is not null)
 {
     @if (captureOpen) { <CaptureWorkspace OnBack="() => captureOpen = false" /> }
-    else { <Workspace Actor="actor" OnSignOut="SignOut" OnBackup="CreateBackup" OnOpenCapture="() => captureOpen = true" OnOpenCompanies="() => companiesOpen = true" CompanyName="Company.Name" /> }
+    else { <Workspace Actor="actor" OnSignOut="SignOut" OnBackup="CreateBackup" OnOpenCapture="() => captureOpen = true" OnOpenCompanies="() => companiesOpen = true" CompanyName="@Company.Name" UserName="@signedInAs" Version="@Microsoft.Maui.ApplicationModel.AppInfo.Current.VersionString" /> }
 }
 else
 {
@@ -50,6 +50,7 @@ else
 
 @code {
     private Actor? actor;
+    private string signedInAs = "";
     private bool captureOpen;
     private bool companiesOpen;
     private string companyName = "";
@@ -90,11 +91,12 @@ else
         {
             if (firstRun) { await Accounts.CreateOwner(email, password, confirm); firstRun = false; }
             actor = await Accounts.SignIn(email, password);
+            signedInAs = email.Trim();
         }
         catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
         catch (Exception) { error = "Could not open the account. Your saved records have not been removed. Try signing in again."; }
         finally { password = confirm = ""; busy = false; }
     }
-    private void SignOut() { Accounts.SignOut(); actor = null; password = confirm = error = ""; }
+    private void SignOut() { Accounts.SignOut(); actor = null; signedInAs = password = confirm = error = ""; }
     private async Task<string> CreateBackup() => await Backups.Create(actor ?? throw new UnauthorizedAccessException("Sign in again."));
 }
