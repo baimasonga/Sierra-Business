@@ -1,0 +1,18 @@
+<div class="form-grid">
+    <label>Document type<select @bind="Model.Type">@foreach (var t in Enum.GetValues<LibraryDocumentType>()) { <option value="@t">@DocumentHints.Name(t)</option> }</select></label>
+    <label>Title<input maxlength="160" @bind="Model.Title" placeholder="For example: RFQ for laboratory equipment" /></label>
+    <label>Reference / number<input maxlength="120" @bind="Model.Reference" placeholder="Tender, invoice or cheque number" /></label>
+    <label>Customer / supplier / institution<input maxlength="160" list="document-parties" @bind="Model.Party" /><datalist id="document-parties">@foreach (var p in Parties) { <option value="@p" /> }</datalist></label>
+    <label>Document date<input type="date" @bind="Model.DocumentDate" /></label>
+    <label>Amount<input type="number" min="0" step="0.01" @bind="Model.Amount" /></label>
+    <label>Currency<input maxlength="3" @bind="Model.Currency" placeholder="SLE" /></label>
+    <label>Deadline / expiry date<input type="date" @bind="Model.DueDate" /><span class="hint">Tender closing date, cheque validity, certificate expiry…</span></label>
+    <label>Tags<input maxlength="200" @bind="Model.Tags" placeholder="Comma-separated, e.g. hospital, 2026 bids" /></label>
+    <label>Notes<input maxlength="200" @bind="Model.Notes" /></label>
+</div>
+@if (CanConfidential) { <label class="check"><input type="checkbox" @bind="Model.Confidential" /> Confidential (only accounting staff and administrators can see it)</label> }
+@code {
+    [Parameter, EditorRequired] public DocumentDetailsModel Model { get; set; } = default!;
+    [Parameter] public IReadOnlyList<string> Parties { get; set; } = [];
+    [Parameter] public bool CanConfidential { get; set; }
+}

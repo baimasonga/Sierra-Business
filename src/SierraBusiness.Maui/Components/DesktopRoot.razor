@@ -14,8 +14,7 @@
 }
 else if (actor is not null)
 {
-    @if (captureOpen) { <CaptureWorkspace OnBack="() => captureOpen = false" /> }
-    else { <Workspace Actor="actor" OnSignOut="SignOut" OnBackup="CreateBackup" OnOpenCapture="() => captureOpen = true" OnOpenCompanies="() => companiesOpen = true" CompanyName="@Company.Name" UserName="@signedInAs" Version="@Microsoft.Maui.ApplicationModel.AppInfo.Current.VersionString" /> }
+    <Workspace Actor="actor" OnSignOut="SignOut" OnBackup="CreateBackup" OnOpenCompanies="() => companiesOpen = true" CompanyName="@Company.Name" UserName="@signedInAs" Version="@Microsoft.Maui.ApplicationModel.AppInfo.Current.VersionString" />
 }
 else
 {
@@ -51,7 +50,6 @@ else
 @code {
     private Actor? actor;
     private string signedInAs = "";
-    private bool captureOpen;
     private bool companiesOpen;
     private string companyName = "";
     private void CreateCompany()

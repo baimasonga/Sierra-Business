@@ -2,6 +2,8 @@
 
 A Microsoft .NET implementation based on [the supplied engineering specification](docs/engineering-specification.md). This repository contains an initial working vertical slice, not the full production system described in that specification.
 
+**Document library 0.15.0:** capture and keep tenders, cheques, invoices, contracts, signed delivery notes and certificates (file, scanner or phone camera), with on-device text reading, fingerprints, versions, links to transactions/customers/cheques/equipment/installations, confidentiality, voiding and a deadlines list. Includes the plan for SQL Server Express and Azure SQL. See [document library notes](docs/document-library-0.15.0.md).
+
 **Equipment & after-sales 0.14.0:** serial equipment lookup with full history, unit specifications, accessory/consumable compatibility, installation scheduling with commissioning checklists and certificates, and customer warranties that start at sale or installation (void on return, renewed on resale). See [equipment notes](docs/equipment-installation-warranty-0.14.0.md).
 
 **Supplier invoices 0.13.0:** receipts can wait for the supplier's invoice (goods received not invoiced), invoice matching with price and exchange differences, foreign-currency purchase orders, and credit sales only to registered customers. See [supplier invoice notes](docs/supplier-invoices-0.13.0.md).
@@ -42,7 +44,7 @@ A Microsoft .NET implementation based on [the supplied engineering specification
 
 ### Windows desktop package
 
-The **Windows installer is ready** at `artifacts\windows\0.14.0\SierraBusiness-Setup-x64.exe`. Double-click it to install, open Sierra Business from the Start menu, and create your owner account on first use. Existing users should back up and close the app before updating. The package includes the application runtimes, offline WebView2 prerequisite and English OCR dependencies. It is an unsigned development preview; full clean-machine installation and UI acceptance testing are still outstanding. See [Windows package instructions and status](docs/windows-package.md).
+The **Windows installer is ready** at `artifacts\windows\0.15.0\SierraBusiness-Setup-x64.exe`. Double-click it to install, open Sierra Business from the Start menu, and create your owner account on first use. Existing users should back up and close the app before updating. The package includes the application runtimes, offline WebView2 prerequisite and English OCR dependencies. It is an unsigned development preview; full clean-machine installation and UI acceptance testing are still outstanding. See [Windows package instructions and status](docs/windows-package.md).
 
 Desktop owners can create integrity-checked backups from the workspace sidebar, including captured originals and review revisions. Backup restoration and permission checks pass in the primary .NET 10 suite (126 tests total). A Windows CI workflow is also prepared to build the native app and installer once this project is hosted in a GitHub repository; it has not yet been run.
 

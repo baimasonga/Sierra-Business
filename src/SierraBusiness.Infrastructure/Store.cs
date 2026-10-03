@@ -126,6 +126,12 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
     public DbSet<InstallationCompletion> InstallationCompletions => Set<InstallationCompletion>();
     public DbSet<InstallationCancellation> InstallationCancellations => Set<InstallationCancellation>();
     public DbSet<Warranty> Warranties => Set<Warranty>();
+    public DbSet<StoredDocument> StoredDocuments => Set<StoredDocument>();
+    public DbSet<StoredDocumentRevision> StoredDocumentRevisions => Set<StoredDocumentRevision>();
+    public DbSet<StoredFile> StoredFiles => Set<StoredFile>();
+    public DbSet<FileBlob> FileBlobs => Set<FileBlob>();
+    public DbSet<StoredDocumentLink> StoredDocumentLinks => Set<StoredDocumentLink>();
+    public DbSet<StoredDocumentLinkRemoval> StoredDocumentLinkRemovals => Set<StoredDocumentLinkRemoval>();
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
@@ -239,6 +245,18 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
         builder.Entity<Warranty>().HasIndex(x => new { x.SaleId, x.ProductId, x.Serial }).IsUnique();
         builder.Entity<Warranty>().HasIndex(x => x.Serial);
         builder.Entity<Warranty>().HasOne<BusinessDocument>().WithMany().HasForeignKey(x => x.SaleId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<StoredDocument>().HasIndex(x => x.Number).IsUnique();
+        builder.Entity<StoredDocument>().HasIndex(x => x.Branch);
+        builder.Entity<StoredDocumentRevision>().HasIndex(x => new { x.DocumentId, x.Version }).IsUnique();
+        builder.Entity<StoredDocumentRevision>().HasOne<StoredDocument>().WithMany().HasForeignKey(x => x.DocumentId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<StoredFile>().HasIndex(x => new { x.DocumentId, x.Version }).IsUnique();
+        builder.Entity<StoredFile>().HasIndex(x => x.Sha256);
+        builder.Entity<StoredFile>().HasOne<StoredDocument>().WithMany().HasForeignKey(x => x.DocumentId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<FileBlob>().HasIndex(x => x.Sha256).IsUnique();
+        builder.Entity<StoredDocumentLink>().HasIndex(x => new { x.Target, x.Key });
+        builder.Entity<StoredDocumentLink>().HasOne<StoredDocument>().WithMany().HasForeignKey(x => x.DocumentId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<StoredDocumentLinkRemoval>().HasIndex(x => x.LinkId).IsUnique();
+        builder.Entity<StoredDocumentLinkRemoval>().HasOne<StoredDocumentLink>().WithMany().HasForeignKey(x => x.LinkId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<Imports.ImportBatch>().HasIndex(x => new { x.Branch, x.Key, x.Status });
         builder.Entity<Imports.ImportRow>().HasOne<Imports.ImportBatch>().WithMany().HasForeignKey(x => x.BatchId).OnDelete(DeleteBehavior.Cascade);
         builder.Entity<Imports.ImportRow>().HasIndex(x => new { x.BatchId, x.RowNumber }).IsUnique();

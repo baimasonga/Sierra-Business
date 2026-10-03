@@ -62,6 +62,7 @@
             <p>Engineer signature: ____________________ &nbsp; Customer signature: ____________________</p>
         </div>
         <PrintButton Target="installation-print" />
+        <AttachedDocuments Actor="Actor" Target="DocumentLinkTarget.Installation" Key="@selected.Id.ToString()" DefaultType="LibraryDocumentType.DeliveryNote" DefaultTitle="@($"Signed certificate {selected.Customer}")" Heading="Signed sheets, photos and evidence" />
 
         @if (CanWrite && selected.Status.StartsWith("Scheduled", StringComparison.Ordinal))
         {

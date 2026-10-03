@@ -44,6 +44,8 @@ builder.Services.AddScoped<IIntegrityService, IntegrityService>();
 builder.Services.AddScoped<IImportService, SierraBusiness.Infrastructure.Imports.ImportService>();
 builder.Services.AddScoped<IPurchasingService, PurchasingService>();
 builder.Services.AddScoped<IEquipmentService, EquipmentService>();
+builder.Services.AddSingleton<IFileStore, DatabaseFileStore>();
+builder.Services.AddScoped<IDocumentLibrary, DocumentLibrary>();
 builder.Services.AddProblemDetails();
 builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database");
 var app = builder.Build();

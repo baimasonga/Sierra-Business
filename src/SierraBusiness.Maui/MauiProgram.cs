@@ -22,6 +22,9 @@ public static class MauiProgram
         builder.Services.AddSingleton<IOfflineDocumentReader, WindowsDocumentReader>();
         builder.Services.AddSingleton(_ => new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(90) });
         builder.Services.AddTransient<OnlineCaptureAssistant>();
+        builder.Services.AddTransient<SierraBusiness.Application.IDocumentTextReader, OfflineTextReader>();
+        builder.Services.AddTransient<SierraBusiness.Application.IDocumentAssistant, OnlineDocumentAssistant>();
+        builder.Services.AddTransient<SierraBusiness.Application.IDocumentScanner, WiaDocumentScanner>();
         builder.Services.AddSingleton<MainPage>();
         return builder.Build();
     }

@@ -72,6 +72,7 @@
         </section>
     }
 
+    <AttachedDocuments Actor="Actor" Target="DocumentLinkTarget.SerialUnit" Key="@($"{unit.ProductId}|{unit.Serial}")" DefaultType="LibraryDocumentType.Certificate" DefaultTitle="@($"{unit.Sku} {unit.Serial}")" Heading="Documents for this unit" />
     <section class="panel">
         <h2>Compatible accessories, consumables and spare parts</h2>
         @if (unit.Compatible.Count == 0) { <p class="empty">No compatible items are linked. Link them under Equipment setup.</p> }

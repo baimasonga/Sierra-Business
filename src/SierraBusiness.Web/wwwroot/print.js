@@ -20,13 +20,24 @@ window.sierraPrint = (id) => {
 };
 
 // Downloads a generated workbook (templates, error reports) in the browser host.
-window.sierraDownload = (name, base64) => {
+window.sierraDownload = (name, base64, type) => {
     const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
     const link = document.createElement('a');
-    link.href = URL.createObjectURL(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    link.href = URL.createObjectURL(new Blob([bytes], { type: type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
     link.download = name;
     document.body.appendChild(link);
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+};
+
+// Shows a stored original (PDF, image or text) inside the page without saving it to disk.
+window.sierraPreview = (id, base64, type) => {
+    const frame = document.getElementById(id);
+    if (!frame) return;
+    if (frame.dataset.url) URL.revokeObjectURL(frame.dataset.url);
+    const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: type === 'text/csv' ? 'text/plain' : type }));
+    frame.dataset.url = url;
+    frame.src = url;
 };

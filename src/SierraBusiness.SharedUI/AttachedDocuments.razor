@@ -1,0 +1,79 @@
+@inject IServiceProvider Services
+@inject Microsoft.JSInterop.IJSRuntime JS
+@if (Library is not null)
+{
+    <section class="panel attached-documents">
+        <div class="panel-title"><h2>@Heading</h2>@if (!loaded) { <button class="secondary" disabled="@busy" @onclick="Load">Show documents</button> } else { <span>@items.Count FILED</span> }</div>
+        @if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+        @if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+        @if (loaded)
+        {
+            @if (items.Count == 0) { <p class="empty">No documents are attached yet.</p> }
+            else
+            {
+                <div class="table-wrap"><table><thead><tr><th>Document</th><th>Type</th><th>Date</th><th>File</th><th></th></tr></thead><tbody>
+                @foreach (var d in items) { <tr><td>@d.Details.Title<br /><span class="hint">@d.Number</span></td><td>@DocumentHints.Name(d.Details.Type)</td><td>@d.Details.DocumentDate?.ToString("dd MMM yyyy")</td><td>@d.LatestFileName</td><td><button class="text-button" disabled="@busy" @onclick="() => Download(d)">Download</button></td></tr> }
+                </tbody></table></div>
+                <p class="hint">Open the Document library to see versions, history and other links.</p>
+            }
+            @if (CanWrite)
+            {
+                <div class="form-grid">
+                    <label>Attach a file<InputFile OnChange="Picked" accept="@Accept" disabled="@busy" /></label>
+                    <label>Type<select @bind="type">@foreach (var t in Enum.GetValues<LibraryDocumentType>()) { <option value="@t">@DocumentHints.Name(t)</option> }</select></label>
+                    <label>Title<input maxlength="160" @bind="title" /></label>
+                </div>
+                <button class="primary" disabled="@(busy || file is null || title.Trim().Length == 0)" @onclick="Attach">Attach document</button>
+            }
+        }
+    </section>
+}
+
+@code {
+    [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
+    [Parameter, EditorRequired] public DocumentLinkTarget Target { get; set; }
+    [Parameter, EditorRequired] public string Key { get; set; } = "";
+    [Parameter] public LibraryDocumentType DefaultType { get; set; } = LibraryDocumentType.Other;
+    [Parameter] public string DefaultTitle { get; set; } = "";
+    [Parameter] public string Heading { get; set; } = "Attached documents";
+    /// <summary>When true, documents load only after "Show documents" (for lists with many records).</summary>
+    [Parameter] public bool Lazy { get; set; }
+    private IDocumentLibrary? Library => Services.GetService(typeof(IDocumentLibrary)) as IDocumentLibrary;
+    private static string Accept => string.Join(",", DocumentHints.Extensions);
+    private IReadOnlyList<LibraryItemView> items = [];
+    private (string Name, byte[] Content)? file;
+    private LibraryDocumentType type;
+    private string title = "", error = "", message = "", loadedKey = "";
+    private bool busy, loaded;
+    private bool CanWrite => new[] { "sales.create", "inventory.receive", "accounting.write", "catalogue.write", "users.manage" }.Any(Actor.Permissions.Contains);
+    public bool HasDraft => file is not null;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (loadedKey == $"{Target}:{Key}") return;
+        loadedKey = $"{Target}:{Key}"; loaded = false; items = []; file = null; type = DefaultType; title = DefaultTitle; error = message = "";
+        if (!Lazy) await Load();
+    }
+    private async Task Run(Func<Task> action)
+    {
+        if (busy || Library is null) return; busy = true; error = message = "";
+        try { await action(); }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
+        catch (Exception) { error = "The document could not be processed. Check the file and try again."; }
+        finally { busy = false; }
+    }
+    private Task Load() => Run(async () => { items = await Library!.Search(new(Target: Target, Key: Key)); loaded = true; });
+    private Task Picked(InputFileChangeEventArgs e) => Run(async () =>
+    {
+        if (e.File.Size > 20 * 1024 * 1024) throw new BusinessException("Each file can be up to 20 MB.");
+        using var buffer = new MemoryStream(); await e.File.OpenReadStream(20 * 1024 * 1024).CopyToAsync(buffer);
+        file = (e.File.Name, buffer.ToArray());
+        if (title.Trim().Length == 0) title = Path.GetFileNameWithoutExtension(e.File.Name);
+    });
+    private Task Attach() => Run(async () =>
+    {
+        await Library!.Add(new(Guid.NewGuid(), new(type, title), new(file!.Value.Name, file.Value.Content), [new(Target, Key)]));
+        file = null; title = DefaultTitle; items = await Library.Search(new(Target: Target, Key: Key)); message = "Document attached and stored in the library.";
+    });
+    private Task Download(LibraryItemView d) => Run(async () => message = await DocumentFiles.Save(Services, JS, await Library!.Download(d.LatestFileId)));
+}

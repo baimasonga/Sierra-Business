@@ -1,0 +1,264 @@
+@inject IDocumentLibrary Library
+@inject IServiceProvider Services
+@inject Microsoft.JSInterop.IJSRuntime JS
+@implements IDisposable
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+
+@if (deadlines.Count > 0)
+{
+    <section class="panel">
+        <div class="panel-title"><h2>Deadlines and expiry dates</h2><span>NEXT 60 DAYS</span></div>
+        <div class="table-wrap"><table><thead><tr><th>Due</th><th class="numeric">Days</th><th>Document</th><th>Type</th><th>Party</th><th></th></tr></thead><tbody>
+        @foreach (var d in deadlines) { <tr class="@(d.DaysLeft < 0 ? "overdue" : d.DaysLeft <= 7 ? "due-soon" : "")"><td>@d.DueDate.ToString("dd MMM yyyy")</td><td class="numeric">@(d.DaysLeft < 0 ? $"{-d.DaysLeft} overdue" : d.DaysLeft.ToString())</td><td>@d.Title</td><td>@DocumentHints.Name(d.Type)</td><td>@d.Party</td><td><button class="text-button" disabled="@busy" @onclick="() => Open(d.Id)">Open</button></td></tr> }
+        </tbody></table></div>
+    </section>
+}
+
+@if (CanWrite)
+{
+    <section class="panel">
+        <h2>Add a document</h2>
+        <p class="hint">Tenders, cheques, supplier invoices, receipts, contracts, signed delivery notes, certificates and letters. PDF, photos (JPG, PNG, TIFF…), Word, Excel, text or CSV, up to 20 MB. The original is kept unchanged with a fingerprint so later changes can be detected.</p>
+        <div class="capture-buttons">
+            <label class="file-button">Choose file<InputFile OnChange="Picked" accept="@Accept" disabled="@busy" /></label>
+            @if (Scanner is not null) { <button class="secondary" disabled="@busy" @onclick="Scan">Scan a page</button> }
+            else { <label class="file-button secondary">Take a photo<InputFile OnChange="Picked" accept="image/*" capture="environment" disabled="@busy" /></label> }
+        </div>
+        @if (progress.Length > 0) { <p role="status" aria-live="polite">@progress</p> }
+        @if (file is not null)
+        {
+            <p>Selected: <strong>@file.Value.Name</strong> · @Size(file.Value.Content.LongLength)@(text.Length > 0 ? $" · {pages} page(s) of text read" : "")</p>
+            @if (duplicate is not null) { <div class="notice error">This exact file is already stored as @duplicate.Number (@duplicate.Details.Title). <button class="text-button" @onclick="() => Open(duplicate.Id)">Open it</button></div> }
+            @if (hinted) { <div class="notice">Some details were suggested from the document text. Check each one against the original before saving.</div> }
+            <EditDetails Model="draft" Parties="parties" CanConfidential="SeesConfidential" />
+            <h3>Link to (optional)</h3>
+            <div class="form-grid">
+                <label>Record type<select @bind="linkTarget" @bind:after="ClearOptions">@foreach (var t in Enum.GetValues<DocumentLinkTarget>()) { <option value="@t">@TargetName(t)</option> }</select></label>
+                <label>Find<input @bind="linkSearch" placeholder="Number, name, cheque no., serial…" /></label>
+                <label>Matches<select @bind="linkKey"><option value="">Select</option>@foreach (var o in options) { <option value="@o.Key">@o.Label</option> }</select></label>
+            </div>
+            <button class="text-button" disabled="@busy" @onclick="FindTargets">Find records</button>
+            <button class="text-button" disabled="@(busy || linkKey.Length == 0)" @onclick="AddPendingLink">+ Add link</button>
+            @if (pendingLinks.Count > 0) { <ul>@foreach (var l in pendingLinks) { <li>@TargetName(l.Target): @l.Label <button class="text-button" @onclick="() => pendingLinks.Remove(l)">Remove</button></li> }</ul> }
+            @if (Assistant is not null && text.Length > 0)
+            {
+                <details><summary>Optional online AI suggestions</summary>
+                    <p class="hint">Sends only the extracted text (not the file) to OpenAI. Requires internet access and your API key; the key is not saved. Check all suggestions.</p>
+                    <div class="form-grid"><label>OpenAI API key<input type="password" autocomplete="off" @bind="apiKey" /></label><label>Model<input maxlength="100" @bind="model" /></label></div>
+                    <label class="check"><input type="checkbox" @bind="consent" /> I choose to send the extracted text for this request.</label>
+                    <button class="secondary" disabled="@(busy || !consent || apiKey.Length == 0)" @onclick="Assist">Suggest details</button>
+                </details>
+            }
+            <div class="capture-buttons"><button class="primary" disabled="@(busy || duplicate is not null)" @onclick="Save">Save document</button><button class="secondary" disabled="@busy" @onclick="Reset">Cancel</button></div>
+        }
+    </section>
+}
+
+<section class="panel">
+    <div class="panel-title"><h2>Library</h2><span>@results.Count SHOWN</span></div>
+    <form class="search-row" @onsubmit="Search" @onsubmit:preventDefault>
+        <label>Search title, reference, party, tags or text inside documents<input @bind="query" maxlength="100" /></label>
+        <label>Type<select @bind="filterType"><option value="">All types</option>@foreach (var t in Enum.GetValues<LibraryDocumentType>()) { <option value="@t">@DocumentHints.Name(t)</option> }</select></label>
+        <label class="check"><input type="checkbox" @bind="includeVoided" /> Include voided</label>
+        <button class="primary" disabled="@busy">Search</button>
+    </form>
+    @if (results.Count == 0) { <p class="empty">No documents found.</p> }
+    else
+    {
+        <div class="table-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>Title / reference</th><th>Party</th><th>Due</th><th class="numeric">Files</th><th class="numeric">Links</th><th></th></tr></thead><tbody>
+        @foreach (var d in results) { <tr class="@(selected?.Item.Id == d.Id ? "selected" : "")"><td>@(d.Details.DocumentDate?.ToString("dd MMM yyyy") ?? d.Created.ToString("dd MMM yyyy"))</td><td>@DocumentHints.Name(d.Details.Type)@if (d.Details.Confidential) { <span class="pill">Confidential</span> }@if (d.Voided) { <span class="pill">Voided</span> }</td><td>@d.Details.Title<br /><span class="hint">@d.Details.Reference</span></td><td>@d.Details.Party</td><td>@d.Details.DueDate?.ToString("dd MMM yyyy")</td><td class="numeric">@d.Files</td><td class="numeric">@d.Links</td><td><button class="text-button" disabled="@busy" @onclick="() => Open(d.Id)">Open</button></td></tr> }
+        </tbody></table></div>
+    }
+</section>
+
+@if (selected is not null)
+{
+    var item = selected.Item; var d = item.Details;
+    <section class="panel">
+        <div class="panel-title"><h2>@d.Title</h2><span>@item.Number@(item.Voided ? " · VOIDED" : "")</span></div>
+        @if (item.Voided) { <div class="notice error">Voided: @selected.VoidReason</div> }
+        <dl class="facts">
+            <div><dt>Type</dt><dd>@DocumentHints.Name(d.Type)@(d.Confidential ? " · confidential" : "")</dd></div>
+            <div><dt>Reference</dt><dd>@(d.Reference.Length > 0 ? d.Reference : "—")</dd></div>
+            <div><dt>Party</dt><dd>@(d.Party.Length > 0 ? d.Party : "—")</dd></div>
+            <div><dt>Document date</dt><dd>@(d.DocumentDate?.ToString("dd MMM yyyy") ?? "—")</dd></div>
+            <div><dt>Amount</dt><dd>@(d.Amount is null ? "—" : $"{(d.Currency.Length > 0 ? d.Currency : "SLE")} {d.Amount:N2}")</dd></div>
+            <div><dt>Deadline / expiry</dt><dd>@(d.DueDate?.ToString("dd MMM yyyy") ?? "—")</dd></div>
+            <div><dt>Tags</dt><dd>@(d.Tags.Length > 0 ? d.Tags : "—")</dd></div>
+            <div><dt>Notes</dt><dd>@(d.Notes.Length > 0 ? d.Notes : "—")</dd></div>
+            <div><dt>Filed</dt><dd>@item.Created.ToLocalTime().ToString("dd MMM yyyy HH:mm") by @item.CreatedBy</dd></div>
+        </dl>
+        <div class="capture-buttons">
+            <button class="primary" disabled="@busy" @onclick="() => Download(item.LatestFileId)">Download original</button>
+            @if (DocumentFiles.CanPreview(item.LatestContentType)) { <button class="secondary" disabled="@busy" @onclick="() => Preview(item.LatestFileId)">Show here</button> }
+            @if (CanWrite && !item.Voided) { <button class="secondary" disabled="@busy" @onclick="StartEdit">Edit details</button> }
+        </div>
+        <iframe id="document-preview" class="document-preview @(previewing ? "" : "hidden")" title="Document preview"></iframe>
+        @if (editing is not null)
+        {
+            <h3>Edit details</h3>
+            <EditDetails Model="editing" Parties="parties" CanConfidential="SeesConfidential" />
+            <label>Reason for the change (optional)<input maxlength="160" @bind="editReason" /></label>
+            <button class="primary" disabled="@busy" @onclick="SaveEdit">Save changes</button> <button class="secondary" disabled="@busy" @onclick="() => editing = null">Cancel</button>
+        }
+    </section>
+
+    <section class="panel">
+        <h2>File versions</h2>
+        <div class="table-wrap"><table><thead><tr><th>Version</th><th>File</th><th class="numeric">Size</th><th>Added</th><th>Reason</th><th>Fingerprint</th><th></th></tr></thead><tbody>
+        @foreach (var f in selected.Files) { <tr><td>@f.Version</td><td>@f.FileName@(f.Pages > 0 ? $" · {f.Pages} page(s)" : "")</td><td class="numeric">@Size(f.Size)</td><td>@f.Created.ToLocalTime().ToString("dd MMM yyyy HH:mm") · @f.CreatedBy</td><td>@f.Reason</td><td class="code" title="SHA-256 @f.Sha256">@f.Sha256[..12]…</td><td><button class="text-button" disabled="@busy" @onclick="() => Download(f.Id)">Download</button> @if (DocumentFiles.CanPreview(f.ContentType)) { <button class="text-button" disabled="@busy" @onclick="() => Preview(f.Id)">Show</button> }</td></tr> }
+        </tbody></table></div>
+        @if (CanWrite && !item.Voided)
+        {
+            <h3>Add a new version</h3>
+            <p class="hint">For example a revised tender, an addendum or a clearer scan. Earlier versions stay available.</p>
+            <div class="form-grid"><label>File<InputFile OnChange="PickedVersion" accept="@Accept" disabled="@busy" /></label><label>Reason<input maxlength="160" @bind="versionReason" /></label></div>
+            <button class="secondary" disabled="@(busy || versionFile is null || versionReason.Trim().Length == 0)" @onclick="SaveVersion">Upload new version</button>
+        }
+    </section>
+
+    <section class="panel">
+        <h2>Linked records</h2>
+        @if (selected.Links.Count == 0) { <p class="empty">Not linked to any transaction, customer, cheque, unit or installation.</p> }
+        else
+        {
+            @if (CanWrite) { <label>Reason for removing a link<input maxlength="160" @bind="unlinkReason" /></label> }
+            <ul>@foreach (var l in selected.Links) { <li>@TargetName(l.Target): @l.Label @if (CanWrite && !item.Voided) { <button class="text-button" disabled="@(busy || unlinkReason.Trim().Length == 0)" @onclick="() => Unlink(l.Id)">Remove</button> }</li> }</ul>
+        }
+        @if (CanWrite && !item.Voided)
+        {
+            <div class="form-grid">
+                <label>Record type<select @bind="linkTarget" @bind:after="ClearOptions">@foreach (var t in Enum.GetValues<DocumentLinkTarget>()) { <option value="@t">@TargetName(t)</option> }</select></label>
+                <label>Find<input @bind="linkSearch" placeholder="Number, name, cheque no., serial…" /></label>
+                <label>Matches<select @bind="linkKey"><option value="">Select</option>@foreach (var o in options) { <option value="@o.Key">@o.Label</option> }</select></label>
+            </div>
+            <button class="text-button" disabled="@busy" @onclick="FindTargets">Find records</button>
+            <button class="secondary" disabled="@(busy || linkKey.Length == 0)" @onclick="LinkSelected">Link</button>
+        }
+    </section>
+
+    @if (selected.Text.Length > 0) { <section class="panel"><details><summary>Text read from the document</summary><pre>@selected.Text</pre></details></section> }
+
+    <section class="panel">
+        <h2>History</h2>
+        <div class="table-wrap"><table><thead><tr><th>Version</th><th>Change</th><th>When</th><th>By</th><th>Reason</th></tr></thead><tbody>
+        @foreach (var h in selected.History) { <tr><td>@h.Version</td><td>@h.Action</td><td>@h.Time.ToLocalTime().ToString("dd MMM yyyy HH:mm")</td><td>@h.Actor</td><td>@h.Reason</td></tr> }
+        </tbody></table></div>
+        @if (!item.Voided && Actor.Permissions.Contains("documents.reverse"))
+        {
+            <details><summary>Void this document</summary><p class="hint">Voiding hides the document from normal lists. Its files and history are kept for audit.</p><label>Reason<input maxlength="160" @bind="voidReason" /></label><button class="danger" disabled="@(busy || voidReason.Trim().Length == 0)" @onclick="VoidSelected">Void document</button></details>
+        }
+    </section>
+}
+
+@code {
+    [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
+    private sealed record PendingLink(DocumentLinkTarget Target, string Key, string Label);
+    private IDocumentScanner? Scanner => Services.GetService(typeof(IDocumentScanner)) as IDocumentScanner;
+    private IDocumentTextReader? Reader => Services.GetService(typeof(IDocumentTextReader)) as IDocumentTextReader;
+    private IDocumentAssistant? Assistant => Services.GetService(typeof(IDocumentAssistant)) as IDocumentAssistant;
+    private static string Accept => string.Join(",", DocumentHints.Extensions);
+    private IReadOnlyList<LibraryItemView> results = [];
+    private IReadOnlyList<DocumentDeadline> deadlines = [];
+    private IReadOnlyList<string> parties = [];
+    private IReadOnlyList<LinkTargetOption> options = [];
+    private readonly List<PendingLink> pendingLinks = [];
+    private LibraryDocumentView? selected;
+    private LibraryItemView? duplicate;
+    private DocumentDetailsModel draft = new();
+    private DocumentDetailsModel? editing;
+    private (string Name, byte[] Content)? file, versionFile;
+    private string text = "", query = "", filterType = "", progress = "", linkSearch = "", linkKey = "", editReason = "", versionReason = "", unlinkReason = "", voidReason = "", apiKey = "", model = "gpt-4.1-mini", error = "", message = "";
+    private int pages; private float confidence;
+    private DocumentLinkTarget linkTarget;
+    private bool busy, includeVoided, hinted, previewing, consent;
+    private CancellationTokenSource? cancellation;
+    private bool CanWrite => new[] { "sales.create", "inventory.receive", "accounting.write", "catalogue.write", "users.manage" }.Any(Actor.Permissions.Contains);
+    private bool SeesConfidential => Actor.Permissions.Contains("accounting.read") || Actor.Permissions.Contains("users.manage");
+    public bool HasDraft => file is not null || editing is not null || versionFile is not null;
+    private static string Size(long bytes) => bytes >= 1024 * 1024 ? $"{bytes / 1024d / 1024d:0.0} MB" : $"{Math.Max(1, bytes / 1024)} KB";
+    private static string TargetName(DocumentLinkTarget t) => t switch { DocumentLinkTarget.Transaction => "Transaction", DocumentLinkTarget.Party => "Customer / supplier", DocumentLinkTarget.Cheque => "Received cheque", DocumentLinkTarget.SerialUnit => "Equipment serial", _ => "Installation" };
+
+    protected override Task OnInitializedAsync() => Run(async () =>
+    {
+        await Reload();
+        if (Services.GetService(typeof(IPartyService)) is IPartyService partyService) parties = (await partyService.Read()).Select(x => x.Name).ToArray();
+    });
+    private async Task Reload()
+    {
+        results = await Library.Search(new(query, Enum.TryParse<LibraryDocumentType>(filterType, out var t) ? t : null, includeVoided));
+        deadlines = await Library.Deadlines();
+        if (selected is not null) selected = await Library.Get(selected.Item.Id);
+    }
+    private async Task Run(Func<Task> action)
+    {
+        if (busy) return; busy = true; error = message = ""; cancellation = new();
+        try { await action(); }
+        catch (OperationCanceledException) { message = "Cancelled."; }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
+        catch (Exception) { error = "The document could not be processed. Check the file (password-protected PDFs must be unlocked) and try again."; }
+        finally { busy = false; progress = ""; cancellation?.Dispose(); cancellation = null; }
+    }
+    private Task Search() => Run(Reload);
+    private Task Open(Guid id) => Run(async () => { selected = await Library.Get(id); editing = null; previewing = false; versionFile = null; versionReason = unlinkReason = voidReason = ""; ClearOptions(); });
+
+    private async Task<(string, byte[])> Read(InputFileChangeEventArgs e)
+    {
+        if (e.File.Size > 20 * 1024 * 1024) throw new BusinessException("Each file can be up to 20 MB. Reduce the scan resolution or split the document.");
+        using var buffer = new MemoryStream(); await e.File.OpenReadStream(20 * 1024 * 1024).CopyToAsync(buffer);
+        return (e.File.Name, buffer.ToArray());
+    }
+    private Task Picked(InputFileChangeEventArgs e) => Run(async () => await Accepted(await Read(e)));
+    private Task Scan() => Run(async () => { progress = "Choose a scanner in the Windows dialog…"; if (await Scanner!.Scan() is { } page) await Accepted(page); });
+    private async Task Accepted((string Name, byte[] Content) picked)
+    {
+        Reset(); file = picked;
+        duplicate = await Library.FindDuplicate(picked.Content);
+        draft = new() { Title = Path.GetFileNameWithoutExtension(picked.Name) };
+        var extension = Path.GetExtension(picked.Name).ToLowerInvariant();
+        if (extension is ".txt" or ".csv") text = System.Text.Encoding.UTF8.GetString(picked.Content);
+        else if (Reader is not null && DocumentHints.OcrExtensions.Contains(extension))
+        {
+            progress = "Reading text on this computer…";
+            var reporter = new Progress<string>(value => { progress = value; _ = InvokeAsync(StateHasChanged); });
+            try { var read = await Reader.Read(picked.Content, extension, reporter, cancellation!.Token); text = read.Text.Trim(); pages = read.Pages; confidence = read.Confidence; }
+            catch (Exception ex) when (ex is not OperationCanceledException) { text = ""; message = "No text could be read; the file will be stored as an image. Enter the details by hand."; }
+        }
+        if (text.Length > 0) Apply(DocumentHints.Parse(text));
+    }
+    private void Apply(DocumentHintsView h)
+    {
+        draft.Type = h.Type; hinted = true;
+        if (draft.Reference.Length == 0) draft.Reference = h.Reference.Length > 120 ? h.Reference[..120] : h.Reference;
+        if (draft.Party.Length == 0) draft.Party = h.Party.Length > 160 ? h.Party[..160] : h.Party;
+        if (draft.Currency.Length == 0 && h.Currency.Length == 3) draft.Currency = h.Currency.ToUpperInvariant() == "NLE" ? "SLE" : h.Currency.ToUpperInvariant();
+        var printed = string.Join(" ", new[] { h.Date.Length > 0 ? $"Printed date: {h.Date}." : "", h.Total.Length > 0 ? $"Printed total: {h.Total}." : "", h.Deadline.Length > 0 ? $"Printed deadline: {h.Deadline}." : "" }.Where(x => x.Length > 0));
+        if (draft.Notes.Length == 0) draft.Notes = printed.Length > 200 ? printed[..200] : printed;
+    }
+    private Task Assist() => Run(async () =>
+    {
+        var key = apiKey; apiKey = ""; consent = false; progress = "Waiting for online suggestions…";
+        Apply(await Assistant!.Suggest(text.Length > 60_000 ? text[..60_000] : text, key, model, cancellation!.Token));
+        message = "Suggestions added. Check every value against the original.";
+    });
+    private void Reset() { file = null; duplicate = null; text = ""; pages = 0; confidence = 0; hinted = false; pendingLinks.Clear(); draft = new(); ClearOptions(); }
+    private void ClearOptions() { options = []; linkKey = ""; }
+    private Task FindTargets() => Run(async () => { options = await Library.Targets(linkTarget, linkSearch); linkKey = options.Count == 1 ? options[0].Key : ""; if (options.Count == 0) message = "No matching records."; });
+    private void AddPendingLink() { var o = options.FirstOrDefault(x => x.Key == linkKey); if (o is not null && !pendingLinks.Any(x => x.Target == linkTarget && x.Key == o.Key)) pendingLinks.Add(new(linkTarget, o.Key, o.Label)); ClearOptions(); }
+    private Task Save() => Run(async () =>
+    {
+        var id = await Library.Add(new(Guid.NewGuid(), draft.ToDetails(), new(file!.Value.Name, file.Value.Content, text, pages, confidence), pendingLinks.Select(x => new DocumentLinkInput(x.Target, x.Key)).ToList()));
+        Reset(); await Reload(); selected = await Library.Get(id); message = "Document stored. The original and its fingerprint are kept with the company records and included in backups.";
+    });
+    private Task Download(Guid fileId) => Run(async () => message = await DocumentFiles.Save(Services, JS, await Library.Download(fileId)));
+    private Task Preview(Guid fileId) => Run(async () => { previewing = true; StateHasChanged(); await DocumentFiles.Preview(JS, "document-preview", await Library.Download(fileId)); });
+    private void StartEdit() { editing = DocumentDetailsModel.From(selected!.Item.Details); editReason = ""; }
+    private Task SaveEdit() => Run(async () => { await Library.Update(new(Guid.NewGuid(), selected!.Item.Id, selected.Item.Version, editing!.ToDetails(), editReason)); editing = null; await Reload(); message = "Details saved. The earlier details remain in the history."; });
+    private Task PickedVersion(InputFileChangeEventArgs e) => Run(async () => versionFile = await Read(e));
+    private Task SaveVersion() => Run(async () => { await Library.AddVersion(new(Guid.NewGuid(), selected!.Item.Id, new(versionFile!.Value.Name, versionFile.Value.Content), versionReason)); versionFile = null; versionReason = ""; await Reload(); message = "New version stored. Earlier versions are kept."; });
+    private Task LinkSelected() => Run(async () => { await Library.Link(new(Guid.NewGuid(), selected!.Item.Id, linkTarget, linkKey)); ClearOptions(); await Reload(); message = "Linked."; });
+    private Task Unlink(Guid linkId) => Run(async () => { await Library.Unlink(new(Guid.NewGuid(), linkId, unlinkReason)); unlinkReason = ""; await Reload(); message = "Link removed. The removal is kept in the audit history."; });
+    private Task VoidSelected() => Run(async () => { await Library.Void(new(Guid.NewGuid(), selected!.Item.Id, selected.Item.Version, voidReason)); voidReason = ""; includeVoided = true; await Reload(); message = "Document voided. Its files and history are kept."; });
+    public void Dispose() { cancellation?.Cancel(); apiKey = ""; }
+}
