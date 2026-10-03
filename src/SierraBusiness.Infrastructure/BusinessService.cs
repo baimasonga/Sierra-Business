@@ -160,7 +160,7 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
             if (sale && !delivery && input.Payment is null && partyMaster is not null)
             {
                 if (partyMaster.CreditHold) throw new BusinessException("This customer's account is on credit hold.");
-                var bills = await db.Documents.Where(x => x.Branch == actor.Branch && x.Party.ToUpper() == normalizedParty && (x.Kind == DocumentKind.Sale && x.Settlement == "Credit" || x.Kind == DocumentKind.ChequeBounce) && !db.Documents.Any(r => r.Reverses == x.Id)).ToListAsync(cancellationToken);
+                var bills = await db.Documents.Where(x => x.Branch == actor.Branch && x.Party.ToUpper() == normalizedParty && ((x.Kind == DocumentKind.Sale || x.Kind == DocumentKind.ServiceInvoice) && x.Settlement == "Credit" || x.Kind == DocumentKind.ChequeBounce) && !db.Documents.Any(r => r.Reverses == x.Id)).ToListAsync(cancellationToken);
                 var ids = bills.Select(x => x.Id).ToList();
                 var allocations = await db.BillAllocations.Where(x => ids.Contains(x.InvoiceId) && !db.Documents.Any(r => r.Reverses == x.VoucherId)).ToListAsync(cancellationToken);
                 var outstanding = bills.Sum(x => x.Total) - allocations.Sum(x => x.Amount);
@@ -196,6 +196,7 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
             Rules.Required(input.Reason, "Reversal reason");
             var original = await db.Documents.SingleOrDefaultAsync(x => x.Id == input.DocumentId && x.Branch == actor.Branch, cancellationToken) ?? throw new BusinessException("Document not found.");
             if (original.Kind == DocumentKind.Reversal || await db.Documents.AnyAsync(x => x.Reverses == original.Id, cancellationToken)) throw new BusinessException("This document cannot be reversed again.");
+            if (ServiceRules.StockKinds.Contains(original.Kind)) throw new BusinessException("Correct service parts from the service job: return unused parts to stock there. Parts already accounted for on a closed job stay with that job.");
             if (await db.ReturnAllocations.AnyAsync(x => x.OriginalDocumentId == original.Id && !db.Documents.Any(r => r.Reverses == x.ReturnDocumentId), cancellationToken)) throw new BusinessException("Reverse the linked return documents before reversing the original document.");
             if (await db.BillAllocations.AnyAsync(x => x.InvoiceId == original.Id && !db.Documents.Any(d => d.Reverses == x.VoucherId), cancellationToken)) throw new BusinessException("Reverse the allocated settlement vouchers before reversing this bill.");
             if (await db.DeliveryInvoices.AnyAsync(x => x.DeliveryId == original.Id && !db.Documents.Any(r => r.Reverses == x.InvoiceId), cancellationToken)) throw new BusinessException("Reverse the linked invoice before reversing this delivery.");

@@ -213,7 +213,7 @@
     private bool SeesConfidential => Actor.Permissions.Contains("accounting.read") || Actor.Permissions.Contains("users.manage");
     public bool HasDraft => file is not null || editing is not null || versionFile is not null;
     private static string Size(long bytes) => bytes >= 1024 * 1024 ? $"{bytes / 1024d / 1024d:0.0} MB" : $"{Math.Max(1, bytes / 1024)} KB";
-    private static string TargetName(DocumentLinkTarget t) => t switch { DocumentLinkTarget.Transaction => "Transaction", DocumentLinkTarget.Party => "Customer / supplier", DocumentLinkTarget.Cheque => "Received cheque", DocumentLinkTarget.SerialUnit => "Equipment serial", DocumentLinkTarget.Tender => "Tender", _ => "Installation" };
+    private static string TargetName(DocumentLinkTarget t) => t switch { DocumentLinkTarget.Transaction => "Transaction", DocumentLinkTarget.Party => "Customer / supplier", DocumentLinkTarget.Cheque => "Received cheque", DocumentLinkTarget.SerialUnit => "Equipment serial", DocumentLinkTarget.Tender => "Tender", DocumentLinkTarget.ServiceJob => "Service job", _ => "Installation" };
 
     protected override Task OnInitializedAsync() => Run(async () =>
     {

@@ -245,6 +245,7 @@ public sealed class EquipmentService(IDbContextFactory<BusinessDb> factory, IAct
         var today = Today;
         var warrantyViews = warranties.Select(w => new WarrantyView(w.Id, w.ProductId, product.Sku, w.Serial, w.Customer, w.Start, w.End, EquipmentRules.Status(w, states, today), w.InstallationId is null ? "Sale" : "Installation", w.Coverage)).ToArray();
         foreach (var w in warrantyViews) timeline.Add(new(w.Start, "Warranty", $"Customer warranty to {w.End:dd MMM yyyy}, started at {w.Source.ToLowerInvariant()} ({w.Status.ToLowerInvariant()})", "", null));
+        timeline.AddRange(await ServiceRules.History(db, actor.Branch, productId, key.Item2));
         timeline = timeline.OrderBy(x => x.Date).ToList();
 
         var active = warrantyViews.Where(x => x.Status == "Active").MaxBy(x => x.End);

@@ -80,3 +80,17 @@ tr.below-cost td{background:#fff4f1}tr.below-cost td:first-child{box-shadow:inse
 .price-schedule{border:1px solid var(--line);border-radius:8px;padding:28px 32px;margin-bottom:14px;background:#fff}.price-schedule h1{font-size:22px;margin:0 0 4px}.price-schedule h2{font-size:15px;margin:0 0 8px;color:#33463c}.price-schedule tfoot td{border-top:1px solid #dfe5dc}
 .outcome-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:28px;margin-bottom:12px}.outcome-grid h3{margin-top:0}.award-line{gap:8px;flex-wrap:wrap}.award-line input.num{width:110px;min-height:34px}
 @media(max-width:800px){.outcome-grid{grid-template-columns:1fr}.tender-row{flex-direction:column;align-items:flex-start}.tender-side{align-items:flex-start;flex-direction:row}.price-schedule{padding:18px}}
+/* ---------- service jobs and maintenance (0.17.0) ---------- */
+.service-metrics{margin-bottom:18px}.service-tabs{margin:0 0 18px}
+.service-filter{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:14px}.service-search{flex:1;min-width:220px}
+.service-row.p-Urgent{box-shadow:inset 4px 0 0 #c2402f}.service-row.p-High{box-shadow:inset 4px 0 0 #d98a1c}.service-row.p-Urgent.selected,.service-row.p-High.selected{box-shadow:inset 4px 0 0 #c2402f,0 0 0 3px #d9ebc6}
+.priority-chip{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:3px 8px;border-radius:4px;background:#eef1ec;color:#56685e}
+.priority-chip.p-Urgent{background:#fde3dd;color:#8a2a1d}.priority-chip.p-High{background:#fff1cf;color:#7a5300}.priority-chip.p-Low{background:#f3f5f2;color:#7b8a82}
+.s-Logged{background:#eef1ec;color:#4a5d53}.s-Assigned{background:#e3f1f6;color:#1d6278}.s-InProgress{background:#fff1cf;color:#7a5300}.s-Completed{background:#e6e9fb;color:#33429a}.s-Closed{background:#dff3e3;color:#1f6b37}
+.warranty-hint{padding:10px 14px;border-radius:8px;background:#f6f8f3;border-left:4px solid #b9c4bb;color:#3b4d44;margin:8px 0 12px}.warranty-hint.covered{background:#eef8e8;border-left-color:#4f8a3a;color:#1f5130}
+.service-problem{margin:4px 0 0;color:#33463c}
+.form-grid.compact{margin-top:10px}.form-action{display:flex;align-items:flex-end;gap:8px}
+label.wide{display:flex;flex-direction:column;gap:6px;margin:12px 0}
+.service-history{list-style:none;padding:0;margin:0 0 14px;display:grid;gap:10px}.service-history li{padding:8px 12px;border-left:3px solid #dbe4d8;background:#fafbf9;border-radius:0 6px 6px 0}
+.service-report table{width:100%}.service-report .checklist{columns:2;padding-left:18px}
+@media(max-width:800px){.service-report .checklist{columns:1}.service-filter{align-items:stretch;flex-direction:column}}

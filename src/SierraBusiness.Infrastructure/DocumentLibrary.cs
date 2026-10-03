@@ -144,6 +144,9 @@ public sealed class DocumentLibrary(IDbContextFactory<BusinessDb> factory, IActo
             case DocumentLinkTarget.Tender when Guid.TryParse(key, out var id):
                 var tender = await db.Tenders.SingleOrDefaultAsync(x => x.Id == id && x.Branch == actor.Branch) ?? throw new BusinessException("Tender not found.");
                 return (id.ToString(), $"Tender {tender.Reference} · {tender.Institution} · closes {tender.Closing:dd MMM yyyy}");
+            case DocumentLinkTarget.ServiceJob when Guid.TryParse(key, out var id):
+                var service = await db.ServiceJobs.SingleOrDefaultAsync(x => x.Id == id && x.Branch == actor.Branch) ?? throw new BusinessException("Service job not found.");
+                return (id.ToString(), $"Service job {Short(service.Number)} · {service.Customer} · {service.Equipment}");
             default: throw new BusinessException("Choose what to link the document to.");
         }
     }
@@ -278,6 +281,8 @@ public sealed class DocumentLibrary(IDbContextFactory<BusinessDb> factory, IActo
                 .Where(x => t.Length == 0 || (x.Number + " " + x.Customer + " " + x.Site).Contains(t, StringComparison.OrdinalIgnoreCase)).Select(x => new LinkTargetOption(x.Id.ToString(), $"Installation {Short(x.Number)} · {x.Customer} · {x.Site}")),
             DocumentLinkTarget.Tender => (await db.Tenders.AsNoTracking().Where(x => x.Branch == actor.Branch).OrderByDescending(x => x.Closing).ToListAsync())
                 .Where(x => t.Length == 0 || (x.Reference + " " + x.Institution + " " + x.Title).Contains(t, StringComparison.OrdinalIgnoreCase)).Select(x => new LinkTargetOption(x.Id.ToString(), $"Tender {x.Reference} · {x.Institution} · {x.Title}")),
+            DocumentLinkTarget.ServiceJob => (await db.ServiceJobs.AsNoTracking().Where(x => x.Branch == actor.Branch).OrderByDescending(x => x.ReportedOn).ToListAsync())
+                .Where(x => t.Length == 0 || (x.Number + " " + x.Customer + " " + x.Equipment + " " + x.Serial).Contains(t, StringComparison.OrdinalIgnoreCase)).Select(x => new LinkTargetOption(x.Id.ToString(), $"Service job {Short(x.Number)} · {x.Customer} · {x.Equipment}")),
             _ => []
         };
         return options.Take(30).ToArray();

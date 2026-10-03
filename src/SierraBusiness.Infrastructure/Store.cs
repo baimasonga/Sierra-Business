@@ -135,6 +135,10 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
     public DbSet<TenderBid> TenderBids => Set<TenderBid>();
     public DbSet<TenderEvent> TenderEvents => Set<TenderEvent>();
     public DbSet<TenderAward> TenderAwards => Set<TenderAward>();
+    public DbSet<ServiceJob> ServiceJobs => Set<ServiceJob>();
+    public DbSet<ServiceJobEvent> ServiceJobEvents => Set<ServiceJobEvent>();
+    public DbSet<MaintenancePlan> MaintenancePlans => Set<MaintenancePlan>();
+    public DbSet<MaintenancePlanEnd> MaintenancePlanEnds => Set<MaintenancePlanEnd>();
     public DbSet<StoredDocumentLink> StoredDocumentLinks => Set<StoredDocumentLink>();
     public DbSet<StoredDocumentLinkRemoval> StoredDocumentLinkRemovals => Set<StoredDocumentLinkRemoval>();
     protected override void OnModelCreating(ModelBuilder builder)
@@ -256,6 +260,16 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
         builder.Entity<TenderAward>().HasIndex(x => x.TenderId).IsUnique();
         builder.Entity<TenderAward>().HasOne<Tender>().WithMany().HasForeignKey(x => x.TenderId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<TenderAward>().HasOne<TradeOrder>().WithMany().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<ServiceJob>().HasIndex(x => x.Number).IsUnique();
+        builder.Entity<ServiceJob>().HasIndex(x => new { x.PlanId, x.PlanDue }).IsUnique();
+        builder.Entity<ServiceJob>().HasIndex(x => new { x.ProductId, x.Serial });
+        builder.Entity<ServiceJob>().HasOne<MaintenancePlan>().WithMany().HasForeignKey(x => x.PlanId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<ServiceJobEvent>().HasIndex(x => new { x.JobId, x.Sequence }).IsUnique();
+        builder.Entity<ServiceJobEvent>().HasIndex(x => x.DocumentId);
+        builder.Entity<ServiceJobEvent>().HasOne<ServiceJob>().WithMany().HasForeignKey(x => x.JobId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<MaintenancePlan>().HasIndex(x => x.Number).IsUnique();
+        builder.Entity<MaintenancePlanEnd>().HasIndex(x => x.PlanId).IsUnique();
+        builder.Entity<MaintenancePlanEnd>().HasOne<MaintenancePlan>().WithMany().HasForeignKey(x => x.PlanId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<Warranty>().HasIndex(x => new { x.SaleId, x.ProductId, x.Serial }).IsUnique();
         builder.Entity<Warranty>().HasIndex(x => x.Serial);
         builder.Entity<Warranty>().HasOne<BusinessDocument>().WithMany().HasForeignKey(x => x.SaleId).OnDelete(DeleteBehavior.Restrict);

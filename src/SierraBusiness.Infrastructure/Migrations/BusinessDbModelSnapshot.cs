@@ -1640,6 +1640,14 @@ namespace SierraBusiness.Infrastructure.Migrations
                         },
                         new
                         {
+                            Id = 1260,
+                            CashOrBank = false,
+                            Control = true,
+                            Group = 0,
+                            Name = "Service jobs in progress"
+                        },
+                        new
+                        {
                             Id = 2400,
                             CashOrBank = false,
                             Control = true,
@@ -1744,6 +1752,14 @@ namespace SierraBusiness.Infrastructure.Migrations
                         },
                         new
                         {
+                            Id = 4300,
+                            CashOrBank = false,
+                            Control = true,
+                            Group = 3,
+                            Name = "Service income"
+                        },
+                        new
+                        {
                             Id = 5000,
                             CashOrBank = false,
                             Control = true,
@@ -1773,6 +1789,14 @@ namespace SierraBusiness.Infrastructure.Migrations
                             Control = true,
                             Group = 4,
                             Name = "Exchange losses"
+                        },
+                        new
+                        {
+                            Id = 5400,
+                            CashOrBank = false,
+                            Control = true,
+                            Group = 4,
+                            Name = "Warranty and service costs"
                         });
                 });
 
@@ -1810,6 +1834,106 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.HasIndex("AccountCode");
 
                     b.ToTable("LedgerBudgets");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.MaintenancePlan", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Branch")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ChecklistJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("Created")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Customer")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Engineer")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateOnly>("FirstDue")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("IntervalMonths")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Notes")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Number")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Serial")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Site")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Number")
+                        .IsUnique();
+
+                    b.ToTable("MaintenancePlans");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.MaintenancePlanEnd", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Actor")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("PlanId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("Time")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PlanId")
+                        .IsUnique();
+
+                    b.ToTable("MaintenancePlanEnds");
                 });
 
             modelBuilder.Entity("SierraBusiness.Infrastructure.Movement", b =>
@@ -2349,6 +2473,147 @@ namespace SierraBusiness.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("SalesTaxRates");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.ServiceJob", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Branch")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ChecklistJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Contact")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("Created")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Customer")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Equipment")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Number")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateOnly?>("PlanDue")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("PlanId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Priority")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Problem")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("ProductId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateOnly>("ReportedOn")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Serial")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Site")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Number")
+                        .IsUnique();
+
+                    b.HasIndex("PlanId", "PlanDue")
+                        .IsUnique();
+
+                    b.HasIndex("ProductId", "Serial");
+
+                    b.ToTable("ServiceJobs");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.ServiceJobEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Actor")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DataJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("DocumentId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("JobId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Sequence")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("Time")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DocumentId");
+
+                    b.HasIndex("JobId", "Sequence")
+                        .IsUnique();
+
+                    b.ToTable("ServiceJobEvents");
                 });
 
             modelBuilder.Entity("SierraBusiness.Infrastructure.StockLocation", b =>
@@ -3496,6 +3761,15 @@ namespace SierraBusiness.Infrastructure.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("SierraBusiness.Infrastructure.MaintenancePlanEnd", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.MaintenancePlan", null)
+                        .WithMany()
+                        .HasForeignKey("PlanId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("SierraBusiness.Infrastructure.Movement", b =>
                 {
                     b.HasOne("SierraBusiness.Infrastructure.BusinessDocument", null)
@@ -3636,6 +3910,23 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.HasOne("SierraBusiness.Infrastructure.BusinessDocument", null)
                         .WithMany()
                         .HasForeignKey("ReturnDocumentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.ServiceJob", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.MaintenancePlan", null)
+                        .WithMany()
+                        .HasForeignKey("PlanId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.ServiceJobEvent", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.ServiceJob", null)
+                        .WithMany()
+                        .HasForeignKey("JobId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

@@ -50,6 +50,7 @@ public static class DesktopRegistration
         services.AddTransient<IPurchasingService, PurchasingService>();
         services.AddTransient<IEquipmentService, EquipmentService>();
         services.AddTransient<ITenderService, TenderService>();
+        services.AddTransient<IServiceDesk, ServiceDesk>();
         services.AddSingleton<IFileStore, DatabaseFileStore>();
         services.AddTransient<IDocumentLibrary, DocumentLibrary>();
         services.AddTransient<DocumentCaptureService>();

@@ -72,7 +72,7 @@ public sealed class InventoryManagement(IDbContextFactory<BusinessDb> factory, I
             var effective = serial.Where(x => documents[x.DocumentId].Kind != DocumentKind.Reversal && !documents.Values.Any(d => d.Reverses == x.DocumentId)).ToList();
             var latest = effective.OrderByDescending(x => ops.FirstOrDefault(o => o.ResultId == x.DocumentId)?.Time ?? DateTimeOffset.MinValue).FirstOrDefault();
             var kind = latest is null ? "" : documents[latest.DocumentId].Kind.ToString();
-            var status = quantity == 0 ? (kind is "Sale" or "Delivery" ? "Sold" : "Retired") : state?.InService == true ? "InService" : await CommerceRules.Reserved(db, actor.Branch, serial.Key.ProductId, location, serial.Key.Serial, null, null) > 0 ? "Reserved" : kind == "StockTransfer" ? "Transferred" : kind == "SalesReturn" ? "Returned" : "InStock";
+            var status = quantity == 0 ? (kind is "Sale" or "Delivery" ? "Sold" : kind == "ServiceIssue" ? "Used in service" : "Retired") : state?.InService == true ? "InService" : await CommerceRules.Reserved(db, actor.Branch, serial.Key.ProductId, location, serial.Key.Serial, null, null) > 0 ? "Reserved" : kind == "StockTransfer" ? "Transferred" : kind == "SalesReturn" ? "Returned" : "InStock";
             result.Add(new(serial.Key.ProductId, serial.Key.Serial!, location, status, serial.Sum(x => x.Value), state?.Version ?? 0));
         }
         return result.OrderBy(x => x.Serial).ToArray();

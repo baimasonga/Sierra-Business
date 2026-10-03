@@ -3,7 +3,7 @@ namespace SierraBusiness.Application;
 
 /// <summary>Document library (0.15.0): originals of tenders, cheques, invoices, contracts and other business papers, with versions, links and history.</summary>
 public enum LibraryDocumentType { TenderDocument, Cheque, SupplierInvoice, Receipt, Contract, DeliveryNote, Proforma, Certificate, Correspondence, Other }
-public enum DocumentLinkTarget { Transaction, Party, Cheque, SerialUnit, Installation, Tender }
+public enum DocumentLinkTarget { Transaction, Party, Cheque, SerialUnit, Installation, Tender, ServiceJob }
 
 public sealed record DocumentDetails(LibraryDocumentType Type, string Title, string Reference = "", string Party = "", DateOnly? DocumentDate = null, decimal? Amount = null, string Currency = "",
     DateOnly? DueDate = null, string Tags = "", string Notes = "", bool Confidential = false);

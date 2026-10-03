@@ -71,7 +71,7 @@ public sealed class CommerceService(IDbContextFactory<BusinessDb> factory, IActo
         if (input.RefundAccount is not null && !await db.LedgerAccounts.AnyAsync(x => x.Id == destination && x.CashOrBank)) throw new BusinessException("Refund destination must be cash or bank.");
         if (input.InvoiceId is not null)
         {
-            var invoice = await db.Documents.SingleOrDefaultAsync(x => x.Id == input.InvoiceId && x.Branch == actor.Branch && (x.Kind == DocumentKind.Sale && x.Settlement == "Credit" || x.Kind == DocumentKind.ChequeBounce) && x.Party.ToUpper() == original.Party.ToUpper() && !db.Documents.Any(d => d.Reverses == x.Id)) ?? throw new BusinessException("Select an outstanding credit invoice for this customer.");
+            var invoice = await db.Documents.SingleOrDefaultAsync(x => x.Id == input.InvoiceId && x.Branch == actor.Branch && ((x.Kind == DocumentKind.Sale || x.Kind == DocumentKind.ServiceInvoice) && x.Settlement == "Credit" || x.Kind == DocumentKind.ChequeBounce) && x.Party.ToUpper() == original.Party.ToUpper() && !db.Documents.Any(d => d.Reverses == x.Id)) ?? throw new BusinessException("Select an outstanding credit invoice for this customer.");
             var settled = (await db.BillAllocations.Where(x => x.InvoiceId == invoice.Id && !db.Documents.Any(d => d.Reverses == x.VoucherId)).ToListAsync()).Sum(x => x.Amount);
             var returns = (await db.ReturnAllocations.Where(x => x.OriginalDocumentId == invoice.Id && !db.Documents.Any(d => d.Reverses == x.ReturnDocumentId)).ToListAsync()).Sum(x => x.BillCredit);
             if (input.Amount > invoice.Total - settled - returns) throw new BusinessException("Credit exceeds the invoice's outstanding balance.");

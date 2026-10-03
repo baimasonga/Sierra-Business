@@ -1,0 +1,534 @@
+@inject IServiceDesk Desk
+@inject Microsoft.JSInterop.IJSRuntime JS
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+
+@if (data is not null)
+{
+    <div class="metrics service-metrics">
+        <section><small>OPEN JOBS</small><strong>@data.Jobs.Count(x => Open(x.Status))</strong><span>@data.Jobs.Count(x => Open(x.Status) && x.Priority == ServicePriority.Urgent) urgent</span></section>
+        <section><small>AWAITING BILLING</small><strong>@data.Jobs.Count(x => x.Status == ServiceStatus.Completed)</strong><span>Work done, not yet closed</span></section>
+        <section><small>UNDER WARRANTY</small><strong>@data.Jobs.Count(x => Open(x.Status) && x.Coverage?.Billing == ServiceBilling.Warranty)</strong><span>Open warranty claims</span></section>
+        <section><small>MAINTENANCE DUE (30 DAYS)</small><strong>@data.Plans.Count(x => x.NextDue is DateOnly d && d <= Today.AddDays(30))</strong><span>@data.Plans.Count(x => x.Active) active plan@(data.Plans.Count(x => x.Active) == 1 ? "" : "s")</span></section>
+    </div>
+
+    <div class="view-toggle service-tabs" role="tablist">
+        <button type="button" role="tab" class="@(tab == "jobs" ? "active" : "")" aria-selected="@(tab == "jobs")" @onclick='() => tab = "jobs"'>Service jobs</button>
+        <button type="button" role="tab" class="@(tab == "plans" ? "active" : "")" aria-selected="@(tab == "plans")" @onclick='() => tab = "plans"'>Maintenance plans</button>
+    </div>
+
+    @if (tab == "jobs")
+    {
+        <section class="panel">
+            <div class="panel-title"><h2>Service jobs</h2><button class="secondary" disabled="@busy" @onclick="Refresh">Refresh</button></div>
+            <div class="service-filter">
+                <div class="view-toggle">
+                    @foreach (var f in Filters) { <button type="button" class="@(filter == f ? "active" : "")" @onclick="() => filter = f">@f (@Filtered(f, "").Count())</button> }
+                </div>
+                <input class="service-search" type="search" placeholder="Search customer, equipment, serial or job number" @bind="search" @bind:event="oninput" aria-label="Search service jobs" />
+            </div>
+            @{ var list = Filtered(filter, search).ToList(); }
+            @if (list.Count == 0) { <p class="empty">@(data.Jobs.Count == 0 ? "No service jobs yet. Log the first one below." : "No jobs match.")</p> }
+            else
+            {
+                <div class="tender-list">
+                @foreach (var row in list)
+                {
+                    <button type="button" class="tender-row service-row @(selectedId == row.Id ? "selected" : "") p-@row.Priority" disabled="@busy" @onclick="() => Select(row.Id)">
+                        <span class="tender-main">
+                            <span class="tender-ref">@Short(row.Number) · reported @row.ReportedOn.ToString("dd MMM yyyy")@(row.Source == "Preventive" ? " · preventive" : "")</span>
+                            <span class="tender-title">@row.Equipment@(row.Serial.Length > 0 ? $" · {row.Serial}" : "")</span>
+                            <span class="tender-inst">@row.Customer@(row.Site.Length > 0 ? $" · {row.Site}" : "") — @Trim(row.Problem, 90)</span>
+                        </span>
+                        <span class="tender-side">
+                            <span class="status-badge s-@row.Status">@StatusName(row.Status)</span>
+                            <span class="priority-chip p-@row.Priority">@row.Priority</span>
+                            @if (row.Coverage is not null) { <span class="tender-amount">@BillingName(row.Coverage.Billing)</span> }
+                        </span>
+                    </button>
+                }
+                </div>
+            }
+        </section>
+
+        @if (CanWrite)
+        {
+            <section class="panel">
+                <details open="@(data.Jobs.Count == 0)"><summary><strong>Log a service job</strong></summary>
+                    <p class="hint">Choose a unit you supplied to fill in the customer and check its warranty, or describe equipment bought elsewhere.</p>
+                    <div class="form-grid">
+                        <label>Unit supplied by us<select @bind="unitKey" @bind:after="ChooseUnit"><option value="">Other equipment (describe below)</option>@foreach (var u in data.Units) { <option value="@Key(u.ProductId, u.Serial)">@u.Customer · @u.Sku · @u.Serial@(u.WarrantyActive ? " (warranty)" : "")</option> }</select></label>
+                        <label>Customer<input maxlength="160" @bind="customer" /></label>
+                        @if (Unit is null)
+                        {
+                            <label>Equipment<input maxlength="160" @bind="equipment" placeholder="Make and model" /></label>
+                            <label>Serial number<input maxlength="100" @bind="serial" /></label>
+                        }
+                        <label>Site<input maxlength="160" @bind="site" placeholder="Department, building, town" /></label>
+                        <label>Contact<input maxlength="120" @bind="contact" placeholder="Name and phone" /></label>
+                        <label>Priority<select @bind="priority">@foreach (var p in Enum.GetValues<ServicePriority>()) { <option value="@p">@p</option> }</select></label>
+                        <label>Reported on<input type="date" @bind="reportedOn" /></label>
+                        <label>Engineer<input maxlength="100" @bind="engineer" placeholder="Assign now (optional)" /></label>
+                    </div>
+                    @if (Unit is not null) { <p class="warranty-hint @(Unit.WarrantyActive ? "covered" : "")">@Unit.Coverage</p> }
+                    <label class="wide">Problem reported<textarea maxlength="500" rows="3" @bind="problem" placeholder="What the customer reports, error codes, when it started"></textarea></label>
+                    <button class="primary" disabled="@busy" @onclick="Log">Log service job</button>
+                </details>
+            </section>
+        }
+
+        @if (Selected is { } j)
+        {
+            <section class="panel">
+                <div class="panel-title"><h2>@j.Equipment@(j.Serial.Length > 0 ? $" · {j.Serial}" : "")</h2><span class="status-badge s-@j.Status">@StatusName(j.Status)</span></div>
+                <dl class="facts">
+                    <div><dt>Job</dt><dd class="code">@Short(j.Number)</dd></div>
+                    <div><dt>Customer</dt><dd>@j.Customer@if (j.Contact.Length > 0) { <br /><span class="hint">@j.Contact</span> }</dd></div>
+                    <div><dt>Site</dt><dd>@(j.Site.Length > 0 ? j.Site : "—")</dd></div>
+                    <div><dt>Reported</dt><dd>@j.ReportedOn.ToString("dd MMM yyyy") · <span class="priority-chip p-@j.Priority">@j.Priority</span></dd></div>
+                    <div><dt>Engineer</dt><dd>@(j.Engineer.Length > 0 ? j.Engineer : "Not assigned")</dd></div>
+                    <div><dt>Source</dt><dd>@(j.PlanNumber.Length > 0 ? $"Maintenance plan {Short(j.PlanNumber)}, visit due {j.PlanDue:dd MMM yyyy}" : j.Source)</dd></div>
+                </dl>
+                <p class="service-problem"><strong>Problem:</strong> @j.Problem</p>
+                <ol class="tender-steps">
+                    @foreach (var step in Steps) { <li class="@StepState(j, step)">@StatusName(step)</li> }
+                </ol>
+            </section>
+
+            <section class="panel">
+                <h2>Warranty and billing</h2>
+                <p class="warranty-hint @(j.WarrantyActive ? "covered" : "")">@j.WarrantyHint</p>
+                @if (j.SupplierWarrantyEnd is DateOnly se) { <p class="hint">Supplier warranty @(se >= j.ReportedOn ? "runs" : "ran") until @se.ToString("dd MMM yyyy").</p> }
+                @if (j.Coverage is { } decision)
+                {
+                    <p><strong>@BillingName(decision.Billing)</strong>@CoverageScope(decision)@(decision.Exception ? " — exception approved" : "")@(decision.Reason.Length > 0 ? $": {decision.Reason}" : "") <span class="hint">(decided by @decision.DecidedBy)</span></p>
+                }
+                else { <p class="hint">Who pays has not been decided yet. Decide before closing the job.</p> }
+                @if (CanWrite && j.Status is not (ServiceStatus.Closed or ServiceStatus.Cancelled))
+                {
+                    <details><summary>@(j.Coverage is null ? "Decide who pays" : "Change the decision")</summary>
+                        <div class="form-grid">
+                            <label>Billing<select @bind="billing">@foreach (var b in Enum.GetValues<ServiceBilling>()) { <option value="@b">@BillingName(b)</option> }</select></label>
+                            @if (billing == ServiceBilling.Warranty)
+                            {
+                                <label class="check"><input type="checkbox" @bind="coversParts" /> Warranty covers parts</label>
+                                <label class="check"><input type="checkbox" @bind="coversLabour" /> Warranty covers labour</label>
+                            }
+                            <label>Reason<input maxlength="160" @bind="coverageReason" placeholder="@(billing is ServiceBilling.Goodwill ? "Required" : "Required for an exception")" /></label>
+                        </div>
+                        <p class="hint">Warranty needs a valid customer warranty on the reported date, and contract cover an active maintenance plan; otherwise a manager with pricing authority can approve an exception. Goodwill (free of charge) always needs pricing authority.</p>
+                        <button class="primary" disabled="@busy" @onclick="DecideCoverage">Record decision</button>
+                    </details>
+                }
+            </section>
+
+            <section class="panel">
+                <h2>Work</h2>
+                @if (j.Diagnosis.Length > 0) { <p><strong>Diagnosis:</strong> @j.Diagnosis</p> }
+                @if (CanWrite && Working(j.Status))
+                {
+                    <div class="form-grid">
+                        <label>Assign engineer<input maxlength="100" @bind="assignTo" placeholder="@(j.Engineer.Length > 0 ? j.Engineer : "Engineer name")" /></label>
+                        <div class="form-action"><button class="secondary" disabled="@busy" @onclick="Assign">@(j.Engineer.Length > 0 ? "Reassign" : "Assign")</button></div>
+                    </div>
+                    <label class="wide">Diagnosis<textarea maxlength="500" rows="2" @bind="diagnosis" placeholder="Fault found and cause"></textarea></label>
+                    <button class="secondary" disabled="@busy" @onclick="Diagnose">Save diagnosis</button>
+                }
+
+                <h3>Labour</h3>
+                @if (j.Labour.Count == 0) { <p class="empty">No labour recorded.</p> }
+                else
+                {
+                    <div class="table-wrap"><table><thead><tr><th>Date</th><th>Engineer</th><th>Work</th><th class="numeric">Hours</th><th class="numeric">Rate</th><th class="numeric">Charge</th></tr></thead><tbody>
+                    @foreach (var l in j.Labour) { <tr><td>@l.Date.ToString("dd MMM")</td><td>@l.Engineer</td><td>@l.Description</td><td class="numeric">@l.Hours.ToString("0.##")</td><td class="numeric">@l.Rate.ToString("N2")</td><td class="numeric">@(l.Chargeable ? (l.Hours * l.Rate).ToString("N2") : "Covered")</td></tr> }
+                    </tbody></table></div>
+                }
+                @if (CanWrite && Working(j.Status))
+                {
+                    <div class="form-grid compact">
+                        <label>Date<input type="date" @bind="labourDate" /></label>
+                        <label>Engineer<input maxlength="100" @bind="labourEngineer" placeholder="@j.Engineer" /></label>
+                        <label>Hours<input aria-label="Labour hours" type="number" min="0.25" max="24" step="0.25" @bind="hours" /></label>
+                        <label>Rate per hour (NLe)<input aria-label="Labour rate" type="number" min="0" step="0.01" @bind="rate" /></label>
+                        <label>Work done<input maxlength="160" @bind="labourText" /></label>
+                    </div>
+                    <button class="secondary" disabled="@busy" @onclick="AddLabour">Add labour</button>
+                }
+
+                <h3>Parts used</h3>
+                @if (j.Parts.Count == 0) { <p class="empty">No parts issued.</p> }
+                else
+                {
+                    <div class="table-wrap"><table><thead><tr><th>Part</th><th>From</th><th class="numeric">Issued</th><th class="numeric">Returned</th><th class="numeric">Price</th>@if (j.CostsVisible) { <th class="numeric">Cost</th> }<th class="numeric">Charge</th></tr></thead><tbody>
+                    @foreach (var p in j.Parts)
+                    {
+                        <tr><td>@p.Sku · @p.Name@if (p.Serial is not null) { <br /><span class="code">@p.Serial</span> }@if (p.Batch is not null) { <br /><span class="hint">Batch @p.Batch</span> }</td><td>@p.Location<br /><span class="hint">@p.Date.ToString("dd MMM")</span></td>
+                            <td class="numeric">@p.Quantity.ToString("0.####") @p.Unit</td><td class="numeric">@(p.Returned == 0 ? "—" : p.Returned.ToString("0.####"))</td><td class="numeric">@p.UnitPrice.ToString("N2")</td>
+                            @if (j.CostsVisible) { <td class="numeric">@p.Cost?.ToString("N2")</td> }
+                            <td class="numeric">@(p.Chargeable ? ((p.Quantity - p.Returned) * p.UnitPrice).ToString("N2") : j.Coverage is null ? "—" : "Covered")</td></tr>
+                    }
+                    </tbody></table></div>
+                }
+                @if (CanWrite && Working(j.Status))
+                {
+                    <div class="form-grid compact">
+                        <label>Part<select aria-label="Part to issue" @bind="partId" @bind:after="ChoosePart"><option value="@Guid.Empty">Select a part in stock</option>@foreach (var p in data.Parts) { <option value="@p.ProductId">@p.Sku · @p.Name (@p.OnHand.ToString("0.##") @p.Unit)</option> }</select></label>
+                        <label>Quantity<input aria-label="Part quantity" type="number" min="0.0001" step="any" @bind="partQuantity" /></label>
+                        <label>From warehouse<select @bind="partLocation">@foreach (var l in data.Locations) { <option value="@l">@l</option> }</select></label>
+                        @if (Part?.Tracking == TrackingMode.Serial) { <label>Part serial<input maxlength="100" @bind="partSerial" /></label> }
+                        @if (Part?.Tracking is TrackingMode.Batch or TrackingMode.BatchExpiry) { <label>Batch<input maxlength="100" @bind="partBatch" /></label> }
+                        @if (Part?.Tracking == TrackingMode.BatchExpiry) { <label>Expiry<input type="date" @bind="partExpiry" /></label> }
+                        <label>Charge price per unit<input aria-label="Part charge price" type="number" min="0" step="0.01" @bind="partPrice" /></label>
+                    </div>
+                    <p class="hint">Issuing takes the part out of stock at its average cost, once. Unused parts go back with "Return to stock"; closing the job never moves stock again.</p>
+                    <button class="secondary" disabled="@(busy || partId == Guid.Empty)" @onclick="IssuePart">Issue part from stock</button>
+                }
+                @if (CanWrite && (Working(j.Status) || j.Status == ServiceStatus.Completed) && j.Parts.Any(p => p.Quantity > p.Returned))
+                {
+                    <details><summary>Return unused parts to stock</summary>
+                        <div class="form-grid compact">
+                            <label>Part<select @bind="returnIssue"><option value="@Guid.Empty">Select</option>@foreach (var p in j.Parts.Where(p => p.Quantity > p.Returned)) { <option value="@p.IssueDocumentId">@p.Sku · @((p.Quantity - p.Returned).ToString("0.####")) with the job</option> }</select></label>
+                            <label>Quantity<input type="number" min="0.0001" step="any" @bind="returnQuantity" /></label>
+                            <label>Reason<input maxlength="160" @bind="returnReason" placeholder="Not needed, wrong part…" /></label>
+                        </div>
+                        <button class="secondary" disabled="@(busy || returnIssue == Guid.Empty)" @onclick="ReturnPart">Return to stock</button>
+                    </details>
+                }
+
+                <div class="bid-summary">
+                    <span>Parts charge <strong>NLe @j.PartsCharge.ToString("N2")</strong></span>
+                    <span>Labour charge <strong>NLe @j.LabourCharge.ToString("N2")</strong></span>
+                    <span>Tax (@((data.TaxRate * 100).ToString("0.##"))%) <strong>NLe @Tax(j).ToString("N2")</strong></span>
+                    <span>To bill <strong>NLe @((j.PartsCharge + j.LabourCharge + Tax(j)).ToString("N2"))</strong></span>
+                    @if (j.PartsCost is decimal cost) { <span>Parts cost <strong>NLe @cost.ToString("N2")</strong></span> }
+                </div>
+                @if (j.Coverage is null && (j.Parts.Count > 0 || j.Labour.Count > 0)) { <p class="hint">Charges appear once you decide who pays.</p> }
+            </section>
+
+            @if (CanWrite && j.Status is ServiceStatus.Assigned or ServiceStatus.InProgress)
+            {
+                <section class="panel">
+                    <h2>Complete the work</h2>
+                    @if (j.Checklist.Count > 0)
+                    {
+                        <p class="hint">Tick each check as it is done. All checks are needed to complete.</p>
+                        @foreach (var c in j.Checklist) { <label class="check"><input type="checkbox" checked="@done.Contains(c)" @onchange="e => Tick(c, (bool)(e.Value ?? false))" /> @c</label> }
+                    }
+                    <div class="form-grid">
+                        <label>Completed on<input type="date" @bind="completed" /></label>
+                        <label>Accepted by (customer representative)<input maxlength="120" @bind="acceptedBy" /></label>
+                    </div>
+                    <label class="wide">Work done / resolution<textarea maxlength="500" rows="2" @bind="resolution"></textarea></label>
+                    <button class="primary" disabled="@busy" @onclick="Complete">Record completion and acceptance</button>
+                </section>
+            }
+
+            @if (j.Status == ServiceStatus.Completed)
+            {
+                <section class="panel">
+                    <h2>Close the job</h2>
+                    <p>Completed on @j.CompletedOn?.ToString("dd MMM yyyy"), accepted by <strong>@j.AcceptedBy</strong>. @j.Resolution</p>
+                    @if (CanClose)
+                    {
+                        @if (j.Coverage is null) { <p class="notice error">Decide who pays first (Warranty and billing above).</p> }
+                        else if (j.PartsCharge + j.LabourCharge > 0)
+                        {
+                            <div class="form-grid">
+                                <label>Invoice date<input type="date" @bind="closeDate" /></label>
+                                <label>Payment<select @bind="settlement"><option value="Cash">Cash</option><option value="Cheque">Cheque</option><option value="BankTransfer">Bank transfer</option><option value="Credit">On account (credit)</option></select></label>
+                                @if (settlement is "Cheque" or "BankTransfer")
+                                {
+                                    <label>@(settlement == "Cheque" ? "Cheque number" : "Transfer reference")<input maxlength="100" @bind="paymentReference" /></label>
+                                    <label>Bank<input maxlength="100" @bind="bank" /></label>
+                                    <label>Payment date<input type="date" @bind="paymentDate" /></label>
+                                }
+                                @if (settlement == "Credit") { <label>Due date<input type="date" @bind="dueDate" /></label> }
+                            </div>
+                            <button class="primary" disabled="@busy" @onclick="Close">Close and invoice NLe @((j.PartsCharge + j.LabourCharge + Tax(j)).ToString("N2"))</button>
+                        }
+                        else
+                        {
+                            <div class="form-grid"><label>Closing date<input type="date" @bind="closeDate" /></label></div>
+                            <p class="hint">Nothing is chargeable. @(j.Parts.Any() ? "The cost of parts used is recorded as warranty and service cost." : "")</p>
+                            <button class="primary" disabled="@busy" @onclick="Close">Close job (no charge)</button>
+                        }
+                    }
+                    @if (CanWrite && j.CloseNumber.Length == 0 && !j.Events.Any(e => e.Kind == "Closed"))
+                    {
+                        <details><summary>Reopen the work</summary><label>Reason<input maxlength="160" @bind="reopenReason" /></label><button class="secondary" disabled="@busy" @onclick="Reopen">Reopen job</button></details>
+                    }
+                </section>
+            }
+
+            <section class="panel">
+                <div id="service-print" class="price-schedule service-report">
+                    <h1>@(CompanyName.Length == 0 ? "Sierra Business" : CompanyName)</h1>
+                    <h2>@(j.CloseNumber.Length > 0 && j.Invoiced > 0 ? "Service report and invoice" : j.Source == "Preventive" ? "Preventive maintenance report" : "Service report")</h2>
+                    <p class="code">Job @j.Number@(j.CloseNumber.Length > 0 ? $" · {(j.Invoiced > 0 ? "Invoice" : "Closing")} {j.CloseNumber}" : "")</p>
+                    <p>Customer: @j.Customer@(j.Site.Length > 0 ? $" · {j.Site}" : "")<br />Equipment: @j.Equipment@(j.Serial.Length > 0 ? $" · serial {j.Serial}" : "")<br />Reported: @j.ReportedOn.ToString("dd MMM yyyy") · Engineer: @(j.Engineer.Length > 0 ? j.Engineer : "—")</p>
+                    <p><strong>Problem reported:</strong> @j.Problem</p>
+                    @if (j.Diagnosis.Length > 0) { <p><strong>Diagnosis:</strong> @j.Diagnosis</p> }
+                    @if (j.Resolution.Length > 0) { <p><strong>Work done:</strong> @j.Resolution</p> }
+                    @if (j.Checklist.Count > 0) { <ul class="checklist">@foreach (var c in j.Checklist) { <li>@(j.ChecklistDone.Contains(c, StringComparer.OrdinalIgnoreCase) ? "☑" : "☐") @c</li> }</ul> }
+                    @if (j.Parts.Count > 0 || j.Labour.Count > 0)
+                    {
+                        <table><thead><tr><th>Item</th><th class="numeric">Qty / hours</th><th class="numeric">Unit price</th><th class="numeric">Amount</th></tr></thead><tbody>
+                        @foreach (var p in j.Parts.Where(p => p.Quantity > p.Returned)) { <tr><td>@p.Sku · @p.Name@(p.Serial is null ? "" : $" ({p.Serial})")</td><td class="numeric">@((p.Quantity - p.Returned).ToString("0.####"))</td><td class="numeric">@p.UnitPrice.ToString("N2")</td><td class="numeric">@(p.Chargeable ? ((p.Quantity - p.Returned) * p.UnitPrice).ToString("N2") : "No charge")</td></tr> }
+                        @foreach (var l in j.Labour) { <tr><td>Labour @l.Date.ToString("dd MMM"), @l.Engineer@(l.Description.Length > 0 ? $": {l.Description}" : "")</td><td class="numeric">@l.Hours.ToString("0.##") h</td><td class="numeric">@l.Rate.ToString("N2")</td><td class="numeric">@(l.Chargeable ? (l.Hours * l.Rate).ToString("N2") : "No charge")</td></tr> }
+                        </tbody><tfoot>
+                            <tr><td colspan="3">Subtotal</td><td class="numeric">@((j.PartsCharge + j.LabourCharge).ToString("N2"))</td></tr>
+                            <tr><td colspan="3">Tax</td><td class="numeric">@Tax(j).ToString("N2")</td></tr>
+                            <tr><td colspan="3"><strong>Total NLe</strong></td><td class="numeric"><strong>@((j.PartsCharge + j.LabourCharge + Tax(j)).ToString("N2"))</strong></td></tr>
+                        </tfoot></table>
+                    }
+                    @if (j.Coverage is { } cov) { <p>Billing: @BillingName(cov.Billing)@CoverageScope(cov)@(cov.Billing == ServiceBilling.Warranty && j.WarrantyHint.Length > 0 ? $". {j.WarrantyHint}" : ".")</p> }
+                    @if (j.Settlement.Length > 0) { <p>Settlement: @SettlementName(j.Settlement)</p> }
+                    @if (j.AcceptedBy.Length > 0) { <p>Work accepted by: <strong>@j.AcceptedBy</strong> on @j.CompletedOn?.ToString("dd MMM yyyy")</p> }
+                    <p>Engineer signature: ____________________ &nbsp; Customer signature: ____________________</p>
+                </div>
+                <PrintButton Target="service-print" />
+                <AttachedDocuments Actor="Actor" Target="DocumentLinkTarget.ServiceJob" Key="@j.Id.ToString()" DefaultType="LibraryDocumentType.Other" DefaultTitle="@($"Service report {j.Customer}")" Heading="Signed reports, photos and evidence" />
+            </section>
+
+            <section class="panel">
+                <h2>Supplier claim</h2>
+                @if (j.SupplierClaim.Length > 0) { <p>@j.SupplierClaim</p> } else { <p class="hint">No claim lodged with the supplier.</p> }
+                @if (CanWrite && j.Status != ServiceStatus.Cancelled && j.ProductId is not null && j.Serial.Length > 0)
+                {
+                    @if (j.SupplierClaim.EndsWith("awaiting supplier", StringComparison.Ordinal))
+                    {
+                        <div class="form-grid compact">
+                            <label>Outcome<select @bind="claimOutcome"><option>Accepted</option><option>Repaired by supplier</option><option>Replaced by supplier</option><option>Credited by supplier</option><option>Rejected</option></select></label>
+                            <label>Note<input maxlength="200" @bind="claimNote" /></label>
+                        </div>
+                        <button class="secondary" disabled="@busy" @onclick="ClaimOutcome">Record outcome</button>
+                    }
+                    else
+                    {
+                        <details><summary>Lodge a claim with the supplier</summary>
+                            <div class="form-grid compact">
+                                <label>Supplier<input maxlength="160" @bind="claimSupplier" /></label>
+                                <label>Claim / RMA reference<input maxlength="100" @bind="claimReference" /></label>
+                                <label>Note<input maxlength="200" @bind="claimNote" /></label>
+                            </div>
+                            <button class="secondary" disabled="@busy" @onclick="Claim">Record supplier claim</button>
+                        </details>
+                    }
+                }
+            </section>
+
+            <section class="panel">
+                <h2>History</h2>
+                <ol class="history service-history">
+                    @foreach (var e in j.Events.Reverse()) { <li><span class="hint">@e.Time.ToLocalTime().ToString("dd MMM yyyy HH:mm") · @e.Actor</span><br />@e.Text</li> }
+                </ol>
+                @if (CanWrite)
+                {
+                    <div class="form-grid compact"><label>Add a note<input maxlength="500" @bind="note" /></label><div class="form-action"><button class="secondary" disabled="@busy" @onclick="Note">Add note</button></div></div>
+                    @if (Working(j.Status) || j.Status == ServiceStatus.Completed && !j.Events.Any(e => e.Kind == "Closed"))
+                    {
+                        <details><summary>Cancel this job</summary><label>Reason<input maxlength="160" @bind="cancelReason" /></label><button class="danger" disabled="@busy" @onclick="Cancel">Cancel job</button></details>
+                    }
+                }
+            </section>
+        }
+    }
+    else
+    {
+        <section class="panel">
+            <div class="panel-title"><h2>Maintenance plans</h2><button class="secondary" disabled="@busy" @onclick="Refresh">Refresh</button></div>
+            @if (CanWrite)
+            {
+                <div class="form-grid compact">
+                    <label>Create visits due up to<input type="date" @bind="through" /></label>
+                    <div class="form-action"><button class="primary" disabled="@busy" @onclick="Generate">Generate due visits</button></div>
+                </div>
+                <p class="hint">Each due visit becomes a planned service job with the plan's checklist and engineer, billed to the maintenance contract. Running it again never duplicates a visit.</p>
+            }
+            @if (data.Plans.Count == 0) { <p class="empty">No maintenance plans yet.</p> }
+            else
+            {
+                <div class="table-wrap"><table><thead><tr><th>Customer / unit</th><th>Every</th><th>Next visit</th><th>Visits</th><th>Last done</th><th>Engineer</th><th>Status</th><th></th></tr></thead><tbody>
+                @foreach (var p in data.Plans)
+                {
+                    <tr><td>@p.Customer<br /><span class="hint">@p.Sku · @p.Serial@(p.Site.Length > 0 ? $" · {p.Site}" : "")</span></td><td>@p.IntervalMonths month@(p.IntervalMonths == 1 ? "" : "s")</td>
+                        <td>@if (p.NextDue is DateOnly d) { <span class="due-chip @(d < Today ? "overdue" : d <= Today.AddDays(30) ? "soon" : "")">@d.ToString("dd MMM yyyy")</span> } else { <span>—</span> }</td>
+                        <td>@p.Visits</td><td>@(p.LastVisit?.ToString("dd MMM yyyy") ?? "—")</td><td>@(p.Engineer.Length > 0 ? p.Engineer : "—")</td>
+                        <td><span class="status-badge @(p.Active ? "s-Closed" : "s-Cancelled")">@(p.Active ? "Active" : "Ended")</span>@if (!p.Active) { <br /><span class="hint">@p.EndReason</span> }</td>
+                        <td>@if (CanPlan && p.Active) { <button class="text-button" disabled="@busy" @onclick="() => endPlan = p.Id">End</button> }</td></tr>
+                    @if (endPlan == p.Id)
+                    {
+                        <tr><td colspan="8"><div class="form-grid compact"><label>Reason for ending<input maxlength="160" @bind="endReason" /></label><div class="form-action"><button class="danger" disabled="@busy" @onclick="EndPlan">End plan</button> <button class="text-button" @onclick="() => endPlan = null">Keep</button></div></div></td></tr>
+                    }
+                }
+                </tbody></table></div>
+            }
+        </section>
+        @if (CanPlan)
+        {
+            <section class="panel">
+                <details open="@(data.Plans.Count == 0)"><summary><strong>Start a maintenance plan</strong></summary>
+                    @if (data.Units.Count == 0) { <p class="empty">Plans are for serial units supplied to customers. None are with customers yet.</p> }
+                    else
+                    {
+                        <div class="form-grid">
+                            <label>Unit<select @bind="planUnit"><option value="">Select a unit</option>@foreach (var u in data.Units) { <option value="@Key(u.ProductId, u.Serial)">@u.Customer · @u.Sku · @u.Serial</option> }</select></label>
+                            <label>Site<input maxlength="160" @bind="planSite" /></label>
+                            <label>Visit every (months)<input type="number" min="1" max="60" @bind="interval" /></label>
+                            <label>First visit<input type="date" @bind="firstDue" /></label>
+                            <label>Engineer<input maxlength="100" @bind="planEngineer" /></label>
+                            <label>Notes<input maxlength="200" @bind="planNotes" placeholder="Kit to bring, access" /></label>
+                        </div>
+                        <label class="wide">Visit checklist (one check per line)<textarea rows="4" @bind="planChecklist" placeholder="Clean and inspect&#10;Calibrate&#10;Electrical safety test"></textarea></label>
+                        <button class="primary" disabled="@busy" @onclick="CreatePlan">Start plan</button>
+                    }
+                </details>
+            </section>
+        }
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
+    [Parameter] public string CompanyName { get; set; } = "";
+    private static readonly string[] Filters = ["Open", "Awaiting billing", "Closed", "All"];
+    private static readonly ServiceStatus[] Steps = [ServiceStatus.Logged, ServiceStatus.Assigned, ServiceStatus.InProgress, ServiceStatus.Completed, ServiceStatus.Closed];
+    private static DateOnly Today => DateOnly.FromDateTime(DateTime.UtcNow);
+    private ServiceDeskView? data;
+    private Guid? selectedId, endPlan;
+    private string tab = "jobs", filter = "Open", search = "", error = "", message = "";
+    private bool busy;
+    // log form
+    private string unitKey = "", customer = "", equipment = "", serial = "", site = "", contact = "", engineer = "", problem = "";
+    private ServicePriority priority = ServicePriority.Normal;
+    private DateOnly reportedOn = Today;
+    // job actions
+    private ServiceBilling billing = ServiceBilling.Chargeable;
+    private bool coversParts = true, coversLabour = true;
+    private string coverageReason = "", assignTo = "", diagnosis = "", labourEngineer = "", labourText = "", partSerial = "", partBatch = "", partLocation = "MAIN", returnReason = "";
+    private string acceptedBy = "", resolution = "", settlement = "Cash", paymentReference = "", bank = "", reopenReason = "", cancelReason = "", note = "";
+    private string claimSupplier = "", claimReference = "", claimNote = "", claimOutcome = "Accepted";
+    private decimal hours = 1, rate, partQuantity = 1, partPrice, returnQuantity = 1;
+    private DateOnly labourDate = Today, completed = Today, closeDate = Today, paymentDate = Today;
+    private DateOnly? partExpiry, dueDate;
+    private Guid partId, returnIssue;
+    private readonly HashSet<string> done = new(StringComparer.OrdinalIgnoreCase);
+    private Guid logOperation = Guid.NewGuid(), issueOperation = Guid.NewGuid(), closeOperation = Guid.NewGuid(), completeOperation = Guid.NewGuid();
+    // plans
+    private string planUnit = "", planSite = "", planEngineer = "", planNotes = "", planChecklist = "", endReason = "";
+    private int interval = 6;
+    private DateOnly firstDue = Today.AddMonths(1), through = Today.AddDays(30);
+
+    private bool CanWrite => Actor.Permissions.Contains("sales.create") || Actor.Permissions.Contains("inventory.receive");
+    private bool CanClose => Actor.Permissions.Contains("sales.create");
+    private bool CanPlan => Actor.Permissions.Contains("sales.create");
+    public bool HasDraft => problem.Length > 0 || resolution.Length > 0 || acceptedBy.Length > 0 || diagnosis.Length > 0 || planChecklist.Length > 0 || done.Count > 0;
+    private ServiceJobView? Selected => data?.Jobs.FirstOrDefault(x => x.Id == selectedId);
+    private ServiceableUnit? Unit => data?.Units.FirstOrDefault(x => Key(x.ProductId, x.Serial) == unitKey);
+    private ServicePartOption? Part => data?.Parts.FirstOrDefault(x => x.ProductId == partId);
+    private static string Key(Guid product, string serial) => $"{product}|{serial}";
+    private static bool Open(ServiceStatus s) => s is not (ServiceStatus.Closed or ServiceStatus.Cancelled);
+    private static bool Working(ServiceStatus s) => s is ServiceStatus.Logged or ServiceStatus.Assigned or ServiceStatus.InProgress;
+    /// <summary>"FREETOWN-COUNTER01-SVC-3f9a…c21b" shows as "SVC-C21B…" style: the kind plus the last eight characters.</summary>
+    private static string Short(string number) { var parts = number.Split('-'); return parts.Length >= 3 && parts[^1].Length > 8 ? $"{parts[^2]}-{parts[^1][^8..].ToUpperInvariant()}" : number; }
+    private static string Trim(string text, int max) => text.Length <= max ? text : text[..max] + "…";
+    private static string StatusName(ServiceStatus s) => s switch { ServiceStatus.InProgress => "In progress", _ => s.ToString() };
+    private static string BillingName(ServiceBilling b) => b switch { ServiceBilling.Warranty => "Warranty claim", ServiceBilling.Contract => "Maintenance contract", ServiceBilling.Goodwill => "Goodwill (no charge)", _ => "Chargeable" };
+    private static string CoverageScope(ServiceCoverageView c) => c.Billing != ServiceBilling.Warranty ? "" : c.CoversParts && c.CoversLabour ? " (parts and labour)" : c.CoversParts ? " (parts only; labour charged)" : " (labour only; parts charged)";
+    private static string SettlementName(string s) => s switch { "Credit" => "On account", "BankTransfer" => "Bank transfer", _ => s };
+    private decimal Tax(ServiceJobView j) => Math.Round((j.PartsCharge + j.LabourCharge) * (data?.TaxRate ?? 0), 2, MidpointRounding.AwayFromZero);
+    private IEnumerable<ServiceJobView> Filtered(string f, string text)
+    {
+        var jobs = (data?.Jobs ?? []).Where(x => f switch { "Open" => Working(x.Status), "Awaiting billing" => x.Status == ServiceStatus.Completed, "Closed" => !Open(x.Status), _ => true });
+        text = text.Trim();
+        return text.Length == 0 ? jobs : jobs.Where(x => (x.Number + " " + x.Customer + " " + x.Equipment + " " + x.Serial + " " + x.Site + " " + x.Problem).Contains(text, StringComparison.OrdinalIgnoreCase));
+    }
+    private static string StepState(ServiceJobView j, ServiceStatus step)
+    {
+        if (j.Status == ServiceStatus.Cancelled) return step == ServiceStatus.Closed ? "ended" : j.Events.Any(e => e.Status == step) ? "done" : "";
+        if (step == j.Status) return j.Status == ServiceStatus.Closed ? "done" : "current";
+        return (int)step < (int)j.Status ? "done" : "";
+    }
+
+    protected override Task OnInitializedAsync() => Run(Load);
+    private async Task Load() { data = await Desk.Read(); }
+    private Task Refresh() => Run(Load);
+    private async Task Run(Func<Task> action)
+    {
+        if (busy) return; busy = true; error = message = "";
+        try { await action(); }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
+        catch (Exception) { error = "The operation could not complete. Refresh and check the job before retrying."; }
+        finally { busy = false; }
+    }
+    private void Select(Guid id)
+    {
+        selectedId = id; var j = Selected!;
+        done.Clear(); acceptedBy = resolution = diagnosis = assignTo = coverageReason = reopenReason = cancelReason = note = returnReason = labourText = "";
+        billing = j.Coverage?.Billing ?? (j.WarrantyActive ? ServiceBilling.Warranty : ServiceBilling.Chargeable); coversParts = j.Coverage?.CoversParts ?? true; coversLabour = j.Coverage?.CoversLabour ?? true;
+        labourEngineer = j.Engineer; labourDate = completed = closeDate = paymentDate = Today; dueDate = null; settlement = "Cash"; paymentReference = bank = "";
+        partId = returnIssue = Guid.Empty; partQuantity = returnQuantity = 1; partPrice = 0;
+        completeOperation = Guid.NewGuid(); closeOperation = Guid.NewGuid(); issueOperation = Guid.NewGuid();
+    }
+    private void ChooseUnit() { if (Unit is { } u) customer = u.Customer; }
+    private void ChoosePart() { partPrice = Part?.Price ?? 0; partSerial = partBatch = ""; partExpiry = null; issueOperation = Guid.NewGuid(); }
+    private void Tick(string check, bool on) { if (on) done.Add(check); else done.Remove(check); }
+    private async Task After(string text) { await Load(); message = text; }
+
+    private Task Log() => Run(async () =>
+    {
+        var u = Unit;
+        var id = await Desk.Log(new(logOperation, customer, site, contact, u?.ProductId, u?.Serial ?? serial, u is null ? equipment : "", problem, priority, reportedOn, engineer));
+        logOperation = Guid.NewGuid(); unitKey = customer = equipment = serial = site = contact = engineer = problem = ""; priority = ServicePriority.Normal; reportedOn = Today;
+        await Load(); filter = "Open"; Select(id); message = "Service job logged.";
+    });
+    private Task Assign() => Run(async () => { await Desk.Assign(new(Guid.NewGuid(), selectedId!.Value, assignTo)); assignTo = ""; await After("Engineer assigned."); labourEngineer = Selected!.Engineer; });
+    private Task Diagnose() => Run(async () => { await Desk.Diagnose(new(Guid.NewGuid(), selectedId!.Value, diagnosis)); diagnosis = ""; await After("Diagnosis saved."); });
+    private Task Note() => Run(async () => { await Desk.Note(new(Guid.NewGuid(), selectedId!.Value, note)); note = ""; await After("Note added."); });
+    private Task AddLabour() => Run(async () => { await Desk.AddLabour(new(Guid.NewGuid(), selectedId!.Value, labourDate, labourEngineer, hours, rate, labourText)); labourText = ""; await After("Labour recorded."); });
+    private Task IssuePart() => Run(async () =>
+    {
+        await Desk.IssuePart(new(issueOperation, selectedId!.Value, Today, partId, partQuantity, partLocation, partSerial.Length > 0 ? partSerial : null, partBatch.Length > 0 ? partBatch : null, partExpiry, partPrice));
+        issueOperation = Guid.NewGuid(); partId = Guid.Empty; partQuantity = 1; partPrice = 0; partSerial = partBatch = ""; partExpiry = null;
+        await After("Part issued from stock to this job.");
+    });
+    private Task ReturnPart() => Run(async () => { await Desk.ReturnPart(new(Guid.NewGuid(), selectedId!.Value, returnIssue, returnQuantity, returnReason)); returnIssue = Guid.Empty; returnQuantity = 1; returnReason = ""; await After("Part returned to stock."); });
+    private Task DecideCoverage() => Run(async () => { await Desk.DecideCoverage(new(Guid.NewGuid(), selectedId!.Value, billing, coversParts, coversLabour, coverageReason)); coverageReason = ""; await After("Billing decision recorded."); });
+    private Task Complete() => Run(async () =>
+    {
+        await Desk.Complete(new(completeOperation, selectedId!.Value, completed, resolution, acceptedBy, done.ToList()));
+        completeOperation = Guid.NewGuid(); resolution = acceptedBy = ""; done.Clear();
+        await After("Work completed and accepted. Close the job to bill it.");
+    });
+    private Task Reopen() => Run(async () => { await Desk.Reopen(new(Guid.NewGuid(), selectedId!.Value, reopenReason)); reopenReason = ""; await After("Job reopened."); });
+    private Task Close() => Run(async () =>
+    {
+        var j = Selected!; var charge = j.PartsCharge + j.LabourCharge > 0;
+        PaymentMethod? payment = !charge || settlement == "Credit" ? null : Enum.Parse<PaymentMethod>(settlement);
+        await Desk.Close(new(closeOperation, j.Id, closeDate, payment, payment is PaymentMethod.Cheque or PaymentMethod.BankTransfer ? paymentReference : null, payment is PaymentMethod.Cheque or PaymentMethod.BankTransfer ? bank : null, payment is PaymentMethod.Cheque or PaymentMethod.BankTransfer ? paymentDate : null, charge && payment is null ? dueDate : null));
+        closeOperation = Guid.NewGuid();
+        await After(charge ? "Job closed and invoiced. Print the service report and invoice for the customer." : "Job closed at no charge.");
+    });
+    private async Task Cancel()
+    {
+        if (!await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", "Cancel this service job?")) return;
+        await Run(async () => { await Desk.Cancel(new(Guid.NewGuid(), selectedId!.Value, cancelReason)); cancelReason = ""; await After("Service job cancelled."); });
+    }
+    private Task Claim() => Run(async () => { await Desk.SupplierClaim(new(Guid.NewGuid(), selectedId!.Value, claimSupplier, claimReference, claimNote)); claimSupplier = claimReference = claimNote = ""; await After("Supplier claim recorded."); });
+    private Task ClaimOutcome() => Run(async () => { await Desk.SupplierClaimOutcome(new(Guid.NewGuid(), selectedId!.Value, claimOutcome, claimNote)); claimNote = ""; await After("Supplier claim outcome recorded."); });
+    private Task Generate() => Run(async () =>
+    {
+        var before = data?.Jobs.Count ?? 0;
+        await Desk.GenerateDue(new(Guid.NewGuid(), through));
+        await Load(); var added = data!.Jobs.Count - before;
+        message = added == 0 ? "No new visits are due in that period." : $"{added} planned visit{(added == 1 ? "" : "s")} added to the service jobs.";
+    });
+    private Task CreatePlan() => Run(async () =>
+    {
+        var u = data!.Units.FirstOrDefault(x => Key(x.ProductId, x.Serial) == planUnit) ?? throw new BusinessException("Choose the unit to maintain.");
+        await Desk.CreatePlan(new(Guid.NewGuid(), u.ProductId, u.Serial, planSite, interval, firstDue, planChecklist.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList(), planEngineer, planNotes));
+        planUnit = planSite = planEngineer = planNotes = planChecklist = ""; interval = 6; firstDue = Today.AddMonths(1);
+        await After("Maintenance plan started. Generate due visits to create the planned jobs.");
+    });
+    private Task EndPlan() => Run(async () => { await Desk.EndPlan(new(Guid.NewGuid(), endPlan!.Value, endReason)); endPlan = null; endReason = ""; await After("Maintenance plan ended."); });
+}

@@ -16,6 +16,7 @@ public sealed class LedgerAccount
         new() { Id=1300, Name="Supplier refunds and credits", Group=LedgerGroup.Asset, Control=true },
         new() { Id=1100, Name="Trade receivables", Group=LedgerGroup.Asset, Control=true },
         new() { Id=1250, Name="Delivered goods awaiting invoice", Group=LedgerGroup.Asset, Control=true },
+        new() { Id=1260, Name="Service jobs in progress", Group=LedgerGroup.Asset, Control=true },
         new() { Id=2400, Name="Customer credits", Group=LedgerGroup.Liability, Control=true },
         new() { Id=1200, Name="Inventory", Group=LedgerGroup.Asset, Control=true },
         new() { Id=2000, Name="Trade payables", Group=LedgerGroup.Liability, Control=true },
@@ -29,10 +30,12 @@ public sealed class LedgerAccount
         new() { Id=4000, Name="Sales", Group=LedgerGroup.Income, Control=true },
         new() { Id=4100, Name="Other income", Group=LedgerGroup.Income },
         new() { Id=4200, Name="Exchange gains", Group=LedgerGroup.Income, Control=true },
+        new() { Id=4300, Name="Service income", Group=LedgerGroup.Income, Control=true },
         new() { Id=5000, Name="Cost of sales", Group=LedgerGroup.Expense, Control=true },
         new() { Id=5100, Name="Operating expenses", Group=LedgerGroup.Expense },
         new() { Id=5200, Name="Wages and salaries", Group=LedgerGroup.Expense },
-        new() { Id=5300, Name="Exchange losses", Group=LedgerGroup.Expense, Control=true } ];
+        new() { Id=5300, Name="Exchange losses", Group=LedgerGroup.Expense, Control=true },
+        new() { Id=5400, Name="Warranty and service costs", Group=LedgerGroup.Expense, Control=true } ];
 }
 public sealed class BillAllocation
 {
