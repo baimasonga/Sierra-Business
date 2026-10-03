@@ -1,0 +1,76 @@
+using Bunit;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using SierraBusiness.Application;
+using SierraBusiness.Domain;
+using SierraBusiness.Infrastructure;
+using SierraBusiness.SharedUI;
+using Xunit;
+namespace SierraBusiness.IntegrationTests;
+
+/// <summary>Drives the dashboard and reports: drill from a figure to its documents, and live refresh when someone posts.</summary>
+public sealed class ReportScreenTests : IAsyncLifetime
+{
+    private readonly string path = Path.Combine(Path.GetTempPath(), $"sierra-report-ui-{Guid.NewGuid():N}.db");
+    private readonly BunitContext context = new();
+    private Factory factory = null!; private BusinessService business = null!;
+    private readonly Session session = new();
+    private readonly DateOnly today = DateOnly.FromDateTime(DateTime.Now);
+    private Guid widget;
+    public async Task InitializeAsync()
+    {
+        factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite($"Data Source={path};Pooling=False").Options);
+        await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db);
+        var options = Options.Create(new TradingOptions());
+        business = new(factory, options);
+        context.Services.AddSingleton<IReportService>(new ReportService(factory, session, options));
+        context.Services.AddSingleton<IChangeFeed>(new ChangeFeed());
+        widget = await business.AddProduct(session.Actor, new(Guid.NewGuid(), "WID-1", "Widget", "General", "piece", 250, TrackingMode.Quantity, MinimumPrice: 1));
+        await business.Post(session.Actor, new(Guid.NewGuid(), DocumentKind.Receipt, "MedEquip Ltd", today, [new(widget, 10, 100)], null));
+        await business.Post(session.Actor, new(Guid.NewGuid(), DocumentKind.Sale, "Connaught Hospital", today, [new(widget, 2, 300)], PaymentMethod.Cash));
+    }
+    public Task DisposeAsync() { context.Dispose(); Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); File.Delete(path); return Task.CompletedTask; }
+
+    [Fact] public async Task DashboardDrillsToDocumentsAndRefreshesWhenSomeonePosts()
+    {
+        Guid? opened = null;
+        var screen = context.Render<ReportsWorkspace>(p => p.Add(x => x.Actor, session.Actor).Add(x => x.OpenDocument, (Guid id) => { opened = id; }));
+        screen.WaitForAssertion(() => Assert.Contains("NLe 600.00", screen.Find(".kpi").TextContent));
+        Assert.Contains("Reconciled", screen.Find(".checks").TextContent);
+        Assert.DoesNotContain("Difference", screen.Find(".checks").TextContent);
+
+        await business.Post(session.Actor, new(Guid.NewGuid(), DocumentKind.Sale, "Kissy Clinic", today, [new(widget, 1, 400)], PaymentMethod.Cash));
+        screen.WaitForAssertion(() => Assert.Contains("NLe 1,000.00", screen.Find(".kpi").TextContent), TimeSpan.FromSeconds(10)); // live refresh after a posting
+
+        screen.Find(".kpi").Click(); // net sales → sales by day
+        screen.WaitForAssertion(() => Assert.Contains("Sales by day", screen.Markup));
+        Assert.Contains("✓ Reconciled", screen.Find(".check-line").TextContent);
+        screen.FindAll(".view-toggle button").First(b => b.TextContent == "Customer").Click();
+        screen.WaitForAssertion(() => Assert.Contains("Kissy Clinic", screen.Find(".report-table").TextContent));
+        screen.FindAll(".report-table tbody tr").First(r => r.TextContent.Contains("Kissy Clinic")).Click(); // customer → day book filtered
+        screen.WaitForAssertion(() => Assert.Single(screen.FindAll(".report-table tbody tr")));
+        Assert.Contains("Dashboard", screen.Find(".report-trail").TextContent);
+        screen.Find(".report-table tbody tr").Click();
+        Assert.NotNull(opened);
+        screen.FindAll(".report-trail button")[0].Click(); // back to the dashboard
+        screen.WaitForAssertion(() => Assert.NotEmpty(screen.FindAll(".kpi")));
+    }
+
+    [Fact] public void StockValuationDrillsToMovementsAndViewersSeeNoMoney()
+    {
+        session.Actor = session.Actor with { Permissions = new HashSet<string> { "business.read" } };
+        var screen = context.Render<ReportsWorkspace>(p => p.Add(x => x.Actor, session.Actor).Add(x => x.StartView, "Reports"));
+        screen.WaitForAssertion(() => Assert.Contains("Sales by day", screen.Markup));
+        Assert.DoesNotContain("Receivables ageing", screen.Markup);
+        Assert.DoesNotContain("Gross profit", screen.Markup);
+        screen.FindAll(".report-tabs button").First(b => b.TextContent == "Stock valuation").Click();
+        screen.WaitForAssertion(() => Assert.Contains("WID-1 · Widget", screen.Markup));
+        screen.Find(".report-table tbody tr").Click();
+        screen.WaitForAssertion(() => Assert.Contains("movements", screen.Markup));
+        Assert.Equal(2, screen.FindAll(".report-table tbody tr").Count);
+    }
+
+    private sealed class Session : IActorSession { public Actor Actor = new("owner", "FREETOWN", BusinessPermissions.All.ToHashSet()); public Task<Actor> CurrentActor() => Task.FromResult(Actor); }
+    private sealed class Factory(DbContextOptions<BusinessDb> options) : IDbContextFactory<BusinessDb> { public BusinessDb CreateDbContext() => new(options); }
+}

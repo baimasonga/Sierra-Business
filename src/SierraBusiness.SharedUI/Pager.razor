@@ -1,0 +1,11 @@
+<nav class="pager" aria-label="Pages">
+    <button type="button" class="secondary" disabled="@(Page <= 1)" @onclick="() => OnPage.InvokeAsync(Page - 1)">‹ Previous</button>
+    <span>Page @Page of @Pages · @Total row@(Total == 1 ? "" : "s")</span>
+    <button type="button" class="secondary" disabled="@(Page >= Pages)" @onclick="() => OnPage.InvokeAsync(Page + 1)">Next ›</button>
+</nav>
+@code {
+    [Parameter] public int Page { get; set; } = 1;
+    [Parameter] public int Pages { get; set; } = 1;
+    [Parameter] public int Total { get; set; }
+    [Parameter] public EventCallback<int> OnPage { get; set; }
+}

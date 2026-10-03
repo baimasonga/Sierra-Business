@@ -1,0 +1,351 @@
+@implements IDisposable
+@inject IReportService Reports
+@inject IChangeFeed Feed
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+
+<section class="panel report-bar">
+    <div class="report-period">
+        <label>From<input type="date" @bind="from" @bind:after="Reload" /></label>
+        <label>To / as at<input type="date" @bind="to" @bind:after="Reload" /></label>
+        <div class="view-toggle preset">
+            <button type="button" @onclick='() => Preset("today")'>Today</button>
+            <button type="button" @onclick='() => Preset("month")'>This month</button>
+            <button type="button" @onclick='() => Preset("30")'>30 days</button>
+            <button type="button" @onclick='() => Preset("year")'>This year</button>
+        </div>
+        <button class="secondary" disabled="@busy" @onclick="Reload">Refresh</button>
+        <span class="live @(live ? "on" : "")" title="Figures refresh by themselves when anyone posts; they are also re-read every two minutes.">@(live ? "● Live" : "○") · updated @updated.ToLocalTime().ToString("HH:mm:ss")</span>
+    </div>
+    @if (StartView != "Dashboard" || trail.Count > 0)
+    {
+        <div class="view-toggle report-tabs" role="tablist">
+            @foreach (var r in ReportList) { <button type="button" role="tab" class="@(Root == r ? "active" : "")" aria-selected="@(Root == r)" @onclick="() => Open(r)">@r</button> }
+        </div>
+    }
+    @if (trail.Count > 0)
+    {
+        <nav class="report-trail" aria-label="Drill-down path">
+            @for (var i = 0; i < trail.Count; i++) { var at = i; <button type="button" class="text-button" @onclick="() => Back(at)">@trail[at].Title</button><span>›</span> }
+            <strong>@Title</strong>
+        </nav>
+    }
+</section>
+
+@if (view == "Dashboard" && dashboard is { } d)
+{
+    <div class="kpi-grid">
+        <button type="button" class="kpi" @onclick="() => DrillSales(SalesGrouping.Day)"><small>Net sales</small><strong>@Money(d.NetSales)</strong><span>@d.SalesDocuments invoice@(d.SalesDocuments == 1 ? "" : "s") · excl. tax</span></button>
+        @if (d.Financial)
+        {
+            <button type="button" class="kpi" @onclick="() => DrillSales(SalesGrouping.Customer)"><small>Gross profit</small><strong>@Money(d.GrossProfit!.Value)</strong><span>@(d.Margin is decimal m ? $"{m:0.0}% margin" : "No sales") · cost @Money(d.CostOfSales!.Value)</span></button>
+            <button type="button" class="kpi" @onclick="() => DrillLedger(1000)"><small>Cash and bank</small><strong>@Money(d.Cash!.Value + d.Bank!.Value)</strong><span>Cash @Money(d.Cash.Value) · bank @Money(d.Bank.Value)@(d.Cheques != 0 ? $" · cheques {Money(d.Cheques!.Value)}" : "")</span></button>
+            <button type="button" class="kpi @(d.OverdueReceivables > 0 ? "warn" : "")" @onclick="() => Open(ReceivablesReport)"><small>Receivables</small><strong>@Money(d.Receivables!.Value)</strong><span>@(d.OverdueReceivables > 0 ? $"⚠ {Money(d.OverdueReceivables!.Value)} overdue" : "Nothing overdue")</span></button>
+            <button type="button" class="kpi @(d.OverduePayables > 0 ? "warn" : "")" @onclick="() => Open(PayablesReport)"><small>Payables</small><strong>@Money(d.Payables!.Value)</strong><span>@(d.OverduePayables > 0 ? $"⚠ {Money(d.OverduePayables!.Value)} overdue" : "Nothing overdue")</span></button>
+        }
+        <button type="button" class="kpi @(d.LowStock > 0 ? "warn" : "")" @onclick="() => Open(StockReport)"><small>Stock value</small><strong>@Money(d.StockValue)</strong><span>@(d.LowStock > 0 ? $"⚠ {d.LowStock} item{(d.LowStock == 1 ? "" : "s")} at or below reorder level" : "No items below reorder level")</span></button>
+    </div>
+
+    <div class="dash-grid">
+        <section class="panel">
+            <div class="panel-title"><h2>Net sales by @(d.MonthlyTrend ? "month" : "day")</h2><span class="hint">Select a bar for its transactions</span></div>
+            @{ var max = Math.Max(1m, d.Trend.Max(x => Math.Abs(x.NetSales))); var hasNegative = d.Trend.Any(x => x.NetSales < 0); var width = Math.Max(1, d.Trend.Count); var step = Math.Max(1, (int)Math.Ceiling(width / 8.0)); }
+            <svg class="trend" viewBox="0 0 @(width * 20) 150" preserveAspectRatio="none" role="img" aria-label="Net sales trend">
+                <line x1="0" x2="@(width * 20)" y1="@(hasNegative ? 75 : 130)" y2="@(hasNegative ? 75 : 130)" class="baseline" />
+                @for (var i = 0; i < d.Trend.Count; i++)
+                {
+                    var p = d.Trend[i]; var scale = hasNegative ? 70m : 125m; var h = (double)(Math.Abs(p.NetSales) / max * scale); var baseY = hasNegative ? 75.0 : 130.0;
+                    var y = p.NetSales >= 0 ? baseY - h : baseY; var point = p;
+                    <g class="bar-hit" @onclick="() => DrillTrend(point)">
+                        <rect x="@(i * 20)" y="0" width="20" height="150" class="hit"><title>@p.Label: net sales @Money(p.NetSales)@(p.GrossProfit is decimal g ? $", gross profit {Money(g)}" : "")</title></rect>
+                        @if (p.NetSales != 0) { <rect x="@(i * 20 + 3)" y="@y.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)" width="14" height="@Math.Max(1, h).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)" rx="3" class="@(p.NetSales < 0 ? "bar negative" : "bar")" /> }
+                    </g>
+                }
+            </svg>
+            <div class="trend-axis">@for (var i = 0; i < d.Trend.Count; i += step) { <span style="left:@((i + 0.5) * 100.0 / width)%">@d.Trend[i].Label</span> }</div>
+            <p class="hint">Highest: @Money(d.Trend.Max(x => x.NetSales)) · period total @Money(d.NetSales)</p>
+        </section>
+
+        <section class="panel">
+            <h2>Operations</h2>
+            <div class="ops">
+                <button type="button" @onclick='() => Navigate.InvokeAsync("Service jobs")'><strong>@d.OpenServiceJobs</strong><span>open service jobs</span>@if (d.AwaitingBilling > 0) { <em>@d.AwaitingBilling awaiting billing</em> }</button>
+                <button type="button" @onclick='() => Navigate.InvokeAsync("Tenders")'><strong>@d.OpenTenders</strong><span>open tenders</span><em>@(d.TendersClosingSoon > 0 ? $"⚠ {d.TendersClosingSoon} closing within 7 days" : d.TenderPipeline > 0 ? $"{Money(d.TenderPipeline!.Value)} bid" : "None closing soon")</em></button>
+                <button type="button" @onclick='() => Navigate.InvokeAsync("Equipment lookup")'><strong>@d.WarrantiesExpiring</strong><span>warranties ending in 30 days</span></button>
+                <button type="button" @onclick='() => Navigate.InvokeAsync("Warehouse controls")'><strong>@d.LowStock</strong><span>items to reorder</span></button>
+            </div>
+        </section>
+    </div>
+
+    <div class="dash-grid">
+        <section class="panel">
+            <h2>Top customers</h2>
+            @if (d.TopCustomers.Count == 0) { <p class="empty">No sales in this period.</p> }
+            @{ var topC = d.TopCustomers.Count == 0 ? 1 : d.TopCustomers.Max(x => x.Amount); }
+            @foreach (var c in d.TopCustomers) { var item = c; <button type="button" class="rank" @onclick="() => DrillParty(item.Key)"><span class="rank-name">@c.Name</span><span class="rank-bar"><i style="width:@((double)(c.Amount / topC) * 100)%"></i></span><span class="rank-value">@Money(c.Amount)</span></button> }
+        </section>
+        <section class="panel">
+            <h2>Top products</h2>
+            @if (d.TopProducts.Count == 0) { <p class="empty">No invoiced products in this period.</p> }
+            @{ var topP = d.TopProducts.Count == 0 ? 1 : d.TopProducts.Max(x => x.Amount); }
+            @foreach (var p in d.TopProducts) { var item = p; <button type="button" class="rank" @onclick="() => DrillProduct(Guid.Parse(item.Key), item.Name)"><span class="rank-name">@p.Name<small>@p.Quantity.ToString("0.##") sold</small></span><span class="rank-bar"><i style="width:@((double)(p.Amount / topP) * 100)%"></i></span><span class="rank-value">@Money(p.Amount)</span></button> }
+        </section>
+    </div>
+
+    @if (d.Financial)
+    {
+        <section class="panel">
+            <h2>Checks</h2>
+            <ul class="checks">@foreach (var c in d.Checks) { <li class="@(c.Ok ? "ok" : "bad")"><span aria-hidden="true">@(c.Ok ? "✓" : "⚠")</span> <strong>@(c.Ok ? "Reconciled" : "Difference")</strong> · @c.Name: @Money(c.Report) against @c.SourceName @Money(c.Source)@(c.Ok ? "" : $" — difference {Money(c.Difference)}")</li> }</ul>
+            @if (d.Branches.Count > 1)
+            {
+                <h3>Branches</h3>
+                <div class="table-wrap"><table><thead><tr><th>Branch</th><th class="numeric">Net sales</th><th class="numeric">Gross profit</th><th class="numeric">Cash and bank</th><th class="numeric">Receivables</th></tr></thead><tbody>
+                @foreach (var b in d.Branches) { <tr><td>@b.Branch</td><td class="numeric">@Money(b.NetSales)</td><td class="numeric">@Money(b.GrossProfit ?? 0)</td><td class="numeric">@Money(b.CashAndBank ?? 0)</td><td class="numeric">@Money(b.Receivables ?? 0)</td></tr> }
+                </tbody></table></div>
+            }
+            else { <p class="hint">Branch comparison appears when more than one branch's records are in this database.</p> }
+        </section>
+    }
+}
+else if (view == SalesReport && sales is { } s)
+{
+    <section class="panel">
+        <div class="panel-title"><h2>Sales by @s.By.ToString().ToLowerInvariant() · @s.From.ToString("dd MMM yyyy") – @s.To.ToString("dd MMM yyyy")</h2>
+            <div class="view-toggle">@foreach (var g in Enum.GetValues<SalesGrouping>()) { var grouping = g; <button type="button" class="@(s.By == g ? "active" : "")" @onclick="() => LoadSales(grouping)">@g</button> }</div></div>
+        @if (s.Rows.Count == 0) { <p class="empty">No sales in this period.</p> }
+        else
+        {
+            var costs = s.Cost is not null;
+            <div class="table-wrap"><table class="report-table"><thead><tr><th>@s.By</th><th class="numeric">Documents</th>@if (s.By == SalesGrouping.Product) { <th class="numeric">Quantity</th> }<th class="numeric">Net sales</th>@if (costs) { <th class="numeric">Cost</th><th class="numeric">Gross profit</th><th class="numeric">Margin</th> }</tr></thead><tbody>
+            @foreach (var r in s.Rows)
+            {
+                var row = r;
+                <tr class="drill" @onclick="() => DrillSalesRow(row)"><td>@r.Label</td><td class="numeric">@r.Documents</td>@if (s.By == SalesGrouping.Product) { <td class="numeric">@r.Quantity.ToString("0.##")</td> }<td class="numeric">@Money(r.NetSales)</td>
+                    @if (costs) { <td class="numeric">@Money(r.Cost ?? 0)</td><td class="numeric">@Money(r.GrossProfit ?? 0)</td><td class="numeric">@(r.NetSales == 0 ? "—" : $"{(r.GrossProfit ?? 0) / r.NetSales * 100:0.0}%")</td> }</tr>
+            }
+            </tbody><tfoot>
+                @if (s.By == SalesGrouping.Product) { <tr><td colspan="3">Returns, reversals, service and other ledger adjustments</td><td class="numeric">@Money(s.Adjustments)</td>@if (costs) { <td colspan="3"></td> }</tr> }
+                <tr><td colspan="@(s.By == SalesGrouping.Product ? 3 : 2)"><strong>Total (ledger)</strong></td><td class="numeric"><strong>@Money(s.Total)</strong></td>@if (costs) { <td class="numeric">@Money(s.Cost!.Value)</td><td class="numeric">@Money(s.GrossProfit!.Value)</td><td class="numeric">@(s.Total == 0 ? "—" : $"{s.GrossProfit!.Value / s.Total * 100:0.0}%")</td> }</tr>
+            </tfoot></table></div>
+            @if (s.By == SalesGrouping.Product && costs) { <p class="hint">Product cost is the stock that left on each invoice. Ledger cost also includes returns, stock adjustments and service parts.</p> }
+        }
+        @if (s.Check is { } check) { <p class="check-line @(check.Ok ? "ok" : "bad")">@(check.Ok ? "✓ Reconciled" : "⚠ Difference") · @check.Name: @Money(check.Report) against @Money(check.Source)</p> }
+    </section>
+}
+else if (view == RegisterReport && register is { } reg)
+{
+    <section class="panel">
+        <div class="panel-title"><h2>@(reg.AccountCode is int code ? $"Ledger {code} · {reg.AccountName}" : "Day book") · @from.ToString("dd MMM yyyy") – @to.ToString("dd MMM yyyy")</h2></div>
+        <div class="form-grid compact">
+            @if (Financial)
+            {
+                <label>Ledger account<select @bind="accountCode" @bind:after="ReloadRegister"><option value="0">All documents</option>@foreach (var a in accounts) { <option value="@a.Code">@a.Code · @a.Name</option> }</select></label>
+            }
+            <label>Document type<select @bind="kindFilter" @bind:after="ReloadRegister"><option value="">All types</option>@foreach (var k in Enum.GetValues<DocumentKind>()) { <option value="@k">@KindName(k)</option> }</select></label>
+            <label>Customer / supplier<input @bind="partyFilter" @bind:after="ReloadRegister" placeholder="Exact name" /></label>
+            <label>Search<input @bind="searchFilter" @bind:after="ReloadRegister" placeholder="Number or name" /></label>
+        </div>
+        @if (reg.AccountCode is not null)
+        {
+            <div class="bid-summary"><span>Opening <strong>@Signed(reg.Opening)</strong></span><span>Debits <strong>@Money(reg.Debit)</strong></span><span>Credits <strong>@Money(reg.Credit)</strong></span><span>Closing <strong>@Signed(reg.Closing)</strong></span></div>
+        }
+        @if (reg.Rows.Total == 0) { <p class="empty">No documents match.</p> }
+        else
+        {
+            <div class="table-wrap"><table class="report-table"><thead><tr><th>Date</th><th>Number</th><th>Type</th><th>Party</th>@if (reg.AccountCode is not null) { <th class="numeric">Debit</th><th class="numeric">Credit</th> } else { <th class="numeric">Total</th><th>Settlement</th> }</tr></thead><tbody>
+            @foreach (var r in reg.Rows.Items)
+            {
+                var row = r;
+                <tr class="drill @(r.Reversed ? "reversed" : "")" @onclick="() => OpenDocument.InvokeAsync(row.DocumentId)"><td>@r.Date.ToString("dd MMM yyyy")</td><td class="code">@Short(r.Number)@if (r.Reversed) { <span class="tag">reversed</span> }</td><td>@KindName(r.Kind)</td><td>@r.Party</td>
+                    @if (reg.AccountCode is not null) { <td class="numeric">@(r.Debit == 0 ? "" : Money(r.Debit))</td><td class="numeric">@(r.Credit == 0 ? "" : Money(r.Credit))</td> } else { <td class="numeric">@Money(r.Total)</td><td>@r.Settlement</td> }</tr>
+            }
+            </tbody></table></div>
+            <Pager Page="reg.Rows.Page" Pages="reg.Rows.Pages" Total="reg.Rows.Total" OnPage="RegisterPage" />
+        }
+    </section>
+}
+else if (view == StockReport && stock is { } st)
+{
+    <section class="panel">
+        <div class="panel-title"><h2>Stock valuation · as at @st.AsAt.ToString("dd MMM yyyy")</h2><span>Weighted average cost</span></div>
+        @if (st.Rows.Count == 0) { <p class="empty">No stock on this date.</p> }
+        else
+        {
+            <div class="table-wrap"><table class="report-table"><thead><tr><th>Product</th><th>Category</th><th>Warehouses</th><th class="numeric">Quantity</th><th class="numeric">Average cost</th><th class="numeric">Value</th></tr></thead><tbody>
+            @foreach (var r in st.Rows)
+            {
+                var row = r;
+                <tr class="drill" @onclick="() => DrillStock(row)"><td>@r.Sku · @r.Name</td><td>@r.Category</td><td>@string.Join(", ", r.Locations.Select(l => $"{l.Location} {l.Quantity:0.##}"))</td><td class="numeric">@r.Quantity.ToString("0.####") @r.Unit</td><td class="numeric">@r.AverageCost.ToString("N2")</td><td class="numeric">@Money(r.Value)</td></tr>
+            }
+            </tbody><tfoot><tr><td colspan="5"><strong>Total</strong></td><td class="numeric"><strong>@Money(st.Total)</strong></td></tr></tfoot></table></div>
+        }
+        @if (st.Check is { } check) { <p class="check-line @(check.Ok ? "ok" : "bad")">@(check.Ok ? "✓ Reconciled" : "⚠ Difference") · @check.Name: @Money(check.Report) against @Money(check.Source)@(check.Ok ? "" : $" — difference {Money(check.Difference)}")</p> }
+    </section>
+}
+else if (view == MovementsReport && movements is { } mv)
+{
+    <section class="panel">
+        <div class="panel-title"><h2>@mv.Sku · @mv.Name · movements</h2><span>@from.ToString("dd MMM yyyy") – @to.ToString("dd MMM yyyy")</span></div>
+        <div class="bid-summary"><span>Opening <strong>@mv.Opening.ToString("0.####")</strong> (@Money(mv.OpeningValue))</span><span>In <strong>@mv.In.ToString("0.####")</strong></span><span>Out <strong>@mv.Out.ToString("0.####")</strong></span><span>Closing <strong>@mv.Closing.ToString("0.####") @mv.Unit</strong> (@Money(mv.ClosingValue))</span></div>
+        @if (mv.Rows.Total == 0) { <p class="empty">No movements in this period.</p> }
+        else
+        {
+            <div class="table-wrap"><table class="report-table"><thead><tr><th>Date</th><th>Document</th><th>Type</th><th>Party</th><th>Warehouse</th><th>Serial / batch</th><th class="numeric">In</th><th class="numeric">Out</th><th class="numeric">Value</th><th class="numeric">Balance</th></tr></thead><tbody>
+            @foreach (var r in mv.Rows.Items)
+            {
+                var row = r;
+                <tr class="drill" @onclick="() => OpenDocument.InvokeAsync(row.DocumentId)"><td>@r.Date.ToString("dd MMM yyyy")</td><td class="code">@Short(r.Number)</td><td>@KindName(r.Kind)</td><td>@r.Party</td><td>@r.Location</td><td>@(r.Serial ?? r.Batch ?? "")</td>
+                    <td class="numeric">@(r.QuantityIn == 0 ? "" : r.QuantityIn.ToString("0.####"))</td><td class="numeric">@(r.QuantityOut == 0 ? "" : r.QuantityOut.ToString("0.####"))</td><td class="numeric">@Money(r.Value)</td><td class="numeric">@r.Balance.ToString("0.####")</td></tr>
+            }
+            </tbody></table></div>
+            <Pager Page="mv.Rows.Page" Pages="mv.Rows.Pages" Total="mv.Rows.Total" OnPage="MovementPage" />
+        }
+    </section>
+}
+else if ((view == ReceivablesReport || view == PayablesReport) && ageing is { } ag)
+{
+    <section class="panel">
+        <div class="panel-title"><h2>@(ag.Receivable ? "Receivables" : "Payables") ageing · as at @ag.AsAt.ToString("dd MMM yyyy")</h2><span>Days past due date</span></div>
+        @if (ag.Rows.Count == 0) { <p class="empty">Nothing outstanding.</p> }
+        else
+        {
+            <div class="table-wrap"><table class="report-table ageing"><thead><tr><th>@(ag.Receivable ? "Customer" : "Supplier")</th><th class="numeric">Not yet due</th><th class="numeric">1–30</th><th class="numeric">31–60</th><th class="numeric">61–90</th><th class="numeric">Over 90</th><th class="numeric">Total</th></tr></thead><tbody>
+            @foreach (var r in ag.Rows)
+            {
+                var row = r;
+                <tr class="drill" @onclick="() => ToggleParty(row.Party)"><td>@(expanded.Contains(r.Party) ? "▾" : "▸") @r.Party</td><td class="numeric">@Cell(r.Current)</td><td class="numeric">@Cell(r.Days30)</td><td class="numeric @(r.Days60 > 0 ? "late" : "")">@Cell(r.Days60)</td><td class="numeric @(r.Days90 > 0 ? "late" : "")">@Cell(r.Days90)</td><td class="numeric @(r.Over90 > 0 ? "late" : "")">@Cell(r.Over90)</td><td class="numeric"><strong>@Money(r.Total)</strong></td></tr>
+                @if (expanded.Contains(r.Party))
+                {
+                    @foreach (var b in r.Bills) { var bill = b; <tr class="drill sub" @onclick="() => OpenDocument.InvokeAsync(bill.DocumentId)"><td class="code">↳ @Short(b.Number) · @b.Date.ToString("dd MMM yyyy") · due @b.Due.ToString("dd MMM yyyy")</td><td colspan="5" class="numeric">@(b.OverdueDays > 0 ? $"{b.OverdueDays} days overdue" : "not yet due")</td><td class="numeric">@Money(b.Outstanding)</td></tr> }
+                }
+            }
+            </tbody><tfoot><tr><td><strong>Total</strong></td><td class="numeric">@Money(ag.Current)</td><td class="numeric">@Money(ag.Days30)</td><td class="numeric">@Money(ag.Days60)</td><td class="numeric">@Money(ag.Days90)</td><td class="numeric">@Money(ag.Over90)</td><td class="numeric"><strong>@Money(ag.Total)</strong></td></tr></tfoot></table></div>
+        }
+        <p class="check-line @(ag.Check.Ok ? "ok" : "info")">@(ag.Check.Ok ? "✓ Reconciled" : "ⓘ Difference") · @ag.Check.Name: @Money(ag.Check.Report) against @ag.Check.SourceName @Money(ag.Check.Source)@(ag.Check.Ok ? "" : $" — {Money(ag.Check.Difference)} is unallocated payments, credits or opening balances not matched to bills")</p>
+    </section>
+}
+else if (busy) { <section class="panel"><p class="empty">Loading…</p></section> }
+
+@code {
+    [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
+    [Parameter] public string StartView { get; set; } = "Dashboard";
+    [Parameter] public EventCallback<Guid> OpenDocument { get; set; }
+    [Parameter] public EventCallback<string> Navigate { get; set; }
+    private const string SalesReport = "Sales analysis", RegisterReport = "Day book & ledgers", StockReport = "Stock valuation", MovementsReport = "Stock movements", ReceivablesReport = "Receivables ageing", PayablesReport = "Payables ageing";
+    private sealed record Crumb(string Title, string View, SalesGrouping By, int? Account, string Party, string Kind, string Search, Guid Product, string ProductName, DateOnly From, DateOnly To);
+    private static DateOnly Today => DateOnly.FromDateTime(DateTime.Now);
+    private DateOnly from = new(Today.Year, Today.Month, 1), to = Today;
+    private string view = "Dashboard", error = "", partyFilter = "", searchFilter = "", kindFilter = "", productName = "";
+    private int accountCode, registerPage = 1, movementPage = 1;
+    private SalesGrouping salesBy = SalesGrouping.Day;
+    private Guid productId;
+    private bool busy, live;
+    private DateTimeOffset updated = DateTimeOffset.Now;
+    private DashboardView? dashboard; private SalesAnalysis? sales; private RegisterReport? register; private StockValuation? stock; private MovementReport? movements; private AgeingReport? ageing;
+    private IReadOnlyList<LedgerDefinition> accounts = [];
+    private readonly List<Crumb> trail = [];
+    private readonly HashSet<string> expanded = new(StringComparer.OrdinalIgnoreCase);
+    private readonly CancellationTokenSource stopping = new(); private int pending; private Timer? poll;
+    private bool Financial => Actor.Permissions.Contains("accounting.read");
+    private string[] ReportList => Financial ? ["Dashboard", SalesReport, RegisterReport, StockReport, ReceivablesReport, PayablesReport] : ["Dashboard", SalesReport, RegisterReport, StockReport];
+    private string Root => trail.Count > 0 ? trail[0].View : view;
+    private string Title => view switch
+    {
+        SalesReport => $"Sales by {salesBy.ToString().ToLowerInvariant()}",
+        RegisterReport => accountCode != 0 ? $"Ledger {accountCode}" : partyFilter.Length > 0 ? partyFilter : from == to ? from.ToString("dd MMM yyyy") : "Day book",
+        MovementsReport => productName,
+        _ => view
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        view = StartView == "Reports" ? SalesReport : "Dashboard";
+        if (StartView == "Reports") from = Today.AddDays(-29);
+        Feed.Changed += OnChanged; live = true;
+        poll = new Timer(_ => _ = InvokeAsync(async () => { if (!busy) { await Load(); StateHasChanged(); } }), null, TimeSpan.FromMinutes(2), TimeSpan.FromMinutes(2));
+        if (Financial) { try { accounts = await Reports.Accounts(); } catch (UnauthorizedAccessException) { } }
+        await Load();
+    }
+    public void Dispose() { Feed.Changed -= OnChanged; stopping.Cancel(); poll?.Dispose(); }
+    /// <summary>Throttled, not debounced: busy branches post constantly, so a refresh runs at most 1.2 s after the first change rather than waiting for quiet.</summary>
+    private void OnChanged()
+    {
+        if (Interlocked.Exchange(ref pending, 1) == 1) return;
+        _ = Task.Delay(1200, stopping.Token).ContinueWith(t =>
+        {
+            Interlocked.Exchange(ref pending, 0);
+            if (!t.IsCanceled) _ = InvokeAsync(async () => { if (!busy) { await Load(); StateHasChanged(); } });
+        }, TaskScheduler.Default);
+    }
+    private async Task Load()
+    {
+        busy = true; error = "";
+        try
+        {
+            switch (view)
+            {
+                case "Dashboard": dashboard = await Reports.Dashboard(from, to); break;
+                case SalesReport: sales = await Reports.Sales(from, to, salesBy); break;
+                case RegisterReport: register = await Reports.Register(new(from, to, accountCode == 0 ? null : accountCode, partyFilter, kindFilter.Length == 0 ? null : Enum.Parse<DocumentKind>(kindFilter), searchFilter, registerPage, 50)); break;
+                case StockReport: stock = await Reports.Stock(to); break;
+                case MovementsReport: movements = await Reports.Movements(new(productId, from, to, "", movementPage, 50)); break;
+                case ReceivablesReport: ageing = await Reports.Ageing(to, true); break;
+                case PayablesReport: ageing = await Reports.Ageing(to, false); break;
+            }
+            updated = DateTimeOffset.Now;
+        }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
+        catch (Exception) { error = "The report could not be produced. Refresh to try again."; }
+        finally { busy = false; }
+    }
+    private Task Reload() => Load();
+    private Task Preset(string which)
+    {
+        to = Today;
+        from = which switch { "today" => Today, "month" => new(Today.Year, Today.Month, 1), "30" => Today.AddDays(-29), _ => new(Today.Year, 1, 1) };
+        return Load();
+    }
+    private Crumb Snapshot() => new(Title, view, salesBy, accountCode == 0 ? null : accountCode, partyFilter, kindFilter, searchFilter, productId, productName, from, to);
+    private Task Go(string target, Action set)
+    {
+        trail.Add(Snapshot()); set(); view = target; registerPage = movementPage = 1; expanded.Clear();
+        return Load();
+    }
+    private Task Back(int index)
+    {
+        var c = trail[index]; trail.RemoveRange(index, trail.Count - index);
+        view = c.View; salesBy = c.By; accountCode = c.Account ?? 0; partyFilter = c.Party; kindFilter = c.Kind; searchFilter = c.Search; productId = c.Product; productName = c.ProductName; from = c.From; to = c.To; registerPage = movementPage = 1;
+        return Load();
+    }
+    private Task Open(string report)
+    {
+        trail.Clear(); view = report; accountCode = 0; partyFilter = kindFilter = searchFilter = ""; registerPage = movementPage = 1; expanded.Clear();
+        if (StartView == "Dashboard" && report != "Dashboard") trail.Add(new("Dashboard", "Dashboard", salesBy, null, "", "", "", Guid.Empty, "", from, to));
+        return Load();
+    }
+    private Task DrillSales(SalesGrouping by) => Go(SalesReport, () => salesBy = by);
+    private Task DrillLedger(int account) => Go(RegisterReport, () => { accountCode = account; partyFilter = kindFilter = searchFilter = ""; });
+    private Task DrillParty(string party) => Go(RegisterReport, () => { accountCode = 0; partyFilter = party; kindFilter = searchFilter = ""; });
+    private Task DrillStock(StockValueRow row) => DrillProduct(row.ProductId, $"{row.Sku} · {row.Name}");
+    private Task DrillProduct(Guid product, string name) => Go(MovementsReport, () => { productId = product; productName = name; });
+    private Task DrillTrend(TrendPoint p) => dashboard!.MonthlyTrend
+        ? Go(SalesReport, () => { salesBy = SalesGrouping.Day; from = p.Date; to = new[] { p.Date.AddMonths(1).AddDays(-1), Today }.Min(); })
+        : Go(RegisterReport, () => { accountCode = 0; partyFilter = searchFilter = ""; kindFilter = ""; from = to = p.Date; });
+    private Task DrillSalesRow(SalesRow r) => sales!.By switch
+    {
+        SalesGrouping.Day => Go(RegisterReport, () => { accountCode = 0; partyFilter = searchFilter = kindFilter = ""; from = to = DateOnly.Parse(r.Key); }),
+        SalesGrouping.Month => Go(SalesReport, () => { salesBy = SalesGrouping.Day; var m = DateOnly.Parse(r.Key + "-01"); from = new[] { m, from }.Max(); to = new[] { m.AddMonths(1).AddDays(-1), to }.Min(); }),
+        SalesGrouping.Customer => DrillParty(r.Key),
+        _ => DrillProduct(Guid.Parse(r.Key), r.Label)
+    };
+    private Task LoadSales(SalesGrouping by) { salesBy = by; return Load(); }
+    private Task ReloadRegister() { registerPage = 1; return Load(); }
+    private Task RegisterPage(int page) { registerPage = page; return Load(); }
+    private Task MovementPage(int page) { movementPage = page; return Load(); }
+    private void ToggleParty(string party) { if (!expanded.Remove(party)) expanded.Add(party); }
+    private static string Money(decimal value) => $"NLe {value:N2}";
+    private static string Signed(decimal value) => value < 0 ? $"NLe {-value:N2} Cr" : $"NLe {value:N2} Dr";
+    private static string Cell(decimal value) => value == 0 ? "—" : value.ToString("N2");
+    private static string Short(string number) { var parts = number.Split('-'); return parts.Length >= 3 && parts[^1].Length > 8 ? $"{parts[^2]}-{parts[^1][^8..].ToUpperInvariant()}" : number; }
+    private static string KindName(DocumentKind k) => System.Text.RegularExpressions.Regex.Replace(k.ToString(), "(?<=[a-z])([A-Z])", " $1");
+}

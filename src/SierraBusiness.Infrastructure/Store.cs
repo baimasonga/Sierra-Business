@@ -326,13 +326,17 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
     {
         GuardHistory(); BankingRules.CaptureTillEntries(this).GetAwaiter().GetResult();
         var history = NewHistory(); if (history.Count > 0) HistoryProtection.AddCommitSeal(this, history);
-        return base.SaveChanges(acceptAllChangesOnSuccess);
+        var saved = base.SaveChanges(acceptAllChangesOnSuccess);
+        if (history.Count > 0) ChangeNotifier.Raise();
+        return saved;
     }
     public override async Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
     {
         GuardHistory(); await BankingRules.CaptureTillEntries(this, cancellationToken).ConfigureAwait(false);
         var history = NewHistory(); if (history.Count > 0) await HistoryProtection.AddCommitSealAsync(this, history, cancellationToken).ConfigureAwait(false);
-        return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken).ConfigureAwait(false);
+        var saved = await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken).ConfigureAwait(false);
+        if (history.Count > 0) ChangeNotifier.Raise(); // listeners debounce, so a transaction committing just after this is picked up
+        return saved;
     }
 }
 public sealed class TradingOptions

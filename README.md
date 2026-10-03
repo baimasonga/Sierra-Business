@@ -2,6 +2,8 @@
 
 A Microsoft .NET implementation based on [the supplied engineering specification](docs/engineering-specification.md). This repository contains an initial working vertical slice, not the full production system described in that specification.
 
+**Dashboard & reports 0.18.0:** owner dashboard (sales, gross profit, cash and bank, receivables and payables with overdue amounts, stock value, operations) refreshing live as anyone posts; drill-down from every figure to its documents; sales analysis, day book and ledgers, stock valuation and movements, receivables and payables ageing — each reconciled to the ledger or stock movements and paged for large data. See [report notes](docs/dashboard-reports-0.18.0.md).
+
 **Service & maintenance 0.17.0:** service jobs from fault report to invoice — engineer assignment, diagnosis, labour, parts issued from stock once, explicit warranty/contract/goodwill decisions, customer acceptance, chargeable invoices (cash, cheque, transfer or on account) and supplier warranty claims; preventive maintenance plans that generate planned visits. See [service notes](docs/service-maintenance-0.17.0.md).
 
 **Tenders & document previews 0.16.0:** tender register with bid costing, versions, price approval, locked submissions, won-to-sales-order conversion and lost/cancelled closure; document library card gallery with first-page pictures and in-place previews of PDF, Word, Excel, PowerPoint, TIFF scans and photos. See [tender notes](docs/tenders-document-previews-0.16.0.md).
@@ -48,7 +50,7 @@ A Microsoft .NET implementation based on [the supplied engineering specification
 
 ### Windows desktop package
 
-The **Windows installer is ready** at `artifacts\windows\0.17.0\SierraBusiness-Setup-x64.exe`. Double-click it to install, open Sierra Business from the Start menu, and create your owner account on first use. Existing users should back up and close the app before updating. The package includes the application runtimes, offline WebView2 prerequisite and English OCR dependencies. It is an unsigned development preview; full clean-machine installation and UI acceptance testing are still outstanding. See [Windows package instructions and status](docs/windows-package.md).
+The **Windows installer is ready** at `artifacts\windows\0.18.0\SierraBusiness-Setup-x64.exe`. Double-click it to install, open Sierra Business from the Start menu, and create your owner account on first use. Existing users should back up and close the app before updating. The package includes the application runtimes, offline WebView2 prerequisite and English OCR dependencies. It is an unsigned development preview; full clean-machine installation and UI acceptance testing are still outstanding. See [Windows package instructions and status](docs/windows-package.md).
 
 Desktop owners can create integrity-checked backups from the workspace sidebar, including captured originals and review revisions. Backup restoration and permission checks pass in the primary .NET 10 suite (126 tests total). A Windows CI workflow is also prepared to build the native app and installer once this project is hosted in a GitHub repository; it has not yet been run.
 
