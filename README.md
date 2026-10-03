@@ -2,6 +2,8 @@
 
 A Microsoft .NET implementation based on [the supplied engineering specification](docs/engineering-specification.md). This repository contains an initial working vertical slice, not the full production system described in that specification.
 
+**Records safety 0.10.2:** tamper-proof posted history (database guards plus a verifiable seal chain), automatic backups with an off-machine copy folder, a guarded restore screen, and separate approval of stock counts. See [records-safety notes](docs/records-safety-0.10.2.md).
+
 **Navigation redesign 0.10.0:** compact business areas, contextual screen menus, fixed company and account controls, and a responsive mobile menu. See [navigation guide](docs/navigation-0.10.0.md).
 
 **Serial counts 0.9.0:** physical counts now support individual serials, with present/absent checks, valuation, history uniqueness and reservation protection. See [serial-count instructions](docs/serial-counts-0.9.0.md).
@@ -26,13 +28,13 @@ A Microsoft .NET implementation based on [the supplied engineering specification
 
 **Feature audit:** [all 28 skills](docs/feature-audit.md) and [139 acceptance criteria](docs/feature-acceptance-checklist.md) have been reviewed. The full specification is not implemented. The original audit is retained as a baseline; later releases fix its eight defects and add workflows. See the implementation progress and current validation for the latest status.
 
-**Validation:** all 126 SQLite integration tests pass on .NET 10, and the Windows OCR smoke runner verifies real PDF and image recognition. EF Core confirms no pending model changes. Native MAUI publish and Inno Setup compilation succeed. Physical scanner, live paid AI, clean-machine installation and full UI acceptance remain unverified. See [verification](docs/verification.md).
+**Validation:** all 157 SQLite integration and screen tests pass on .NET 10, and the Windows OCR smoke runner verifies real PDF and image recognition. EF Core confirms no pending model changes. Native MAUI publish and Inno Setup compilation succeed. Physical scanner, live paid AI, clean-machine installation and full UI acceptance remain unverified. See [verification](docs/verification.md).
 
 ## Run locally
 
 ### Windows desktop package
 
-The **Windows installer is ready** at `artifacts\windows\0.10.0\SierraBusiness-Setup-x64.exe`. Double-click it to install, open Sierra Business from the Start menu, and create your owner account on first use. Existing users should back up and close the app before updating. The package includes the application runtimes, offline WebView2 prerequisite and English OCR dependencies. It is an unsigned development preview; full clean-machine installation and UI acceptance testing are still outstanding. See [Windows package instructions and status](docs/windows-package.md).
+The **Windows installer is ready** at `artifacts\windows\0.10.2\SierraBusiness-Setup-x64.exe`. Double-click it to install, open Sierra Business from the Start menu, and create your owner account on first use. Existing users should back up and close the app before updating. The package includes the application runtimes, offline WebView2 prerequisite and English OCR dependencies. It is an unsigned development preview; full clean-machine installation and UI acceptance testing are still outstanding. See [Windows package instructions and status](docs/windows-package.md).
 
 Desktop owners can create integrity-checked backups from the workspace sidebar, including captured originals and review revisions. Backup restoration and permission checks pass in the primary .NET 10 suite (126 tests total). A Windows CI workflow is also prepared to build the native app and installer once this project is hosted in a GitHub repository; it has not yet been run.
 

@@ -173,6 +173,12 @@ public sealed class InventoryManagement(IDbContextFactory<BusinessDb> factory, I
         var count = await Latest<CountSessionView>(db, actor.Branch, "count", input.SessionId.ToString()) ?? throw new BusinessException("Count session not found.");
         if (count.Status != "Pending approval") throw new BusinessException("This count session was already decided.");
         var documents = new List<Guid>();
+        if (input.Approve && count.PreparedBy == actor.Id)
+        {
+            // Separation of duties: when another active person can approve, the preparer may not approve their own count.
+            if (await OtherApprover(db, actor)) throw new BusinessException("Another authorised person must approve a count you prepared.");
+            reason += " (self-approved: no other approver is set up)";
+        }
         if (input.Approve)
         {
             if (DateOnly.FromDateTime(DateTime.UtcNow) <= await PeriodControls.ClosedThrough(db, actor.Branch, options.Value.ClosedThrough)) throw new BusinessException("Current accounting period is closed.");
@@ -191,6 +197,15 @@ public sealed class InventoryManagement(IDbContextFactory<BusinessDb> factory, I
         }
         await Append(db, actor.Branch, "count", count.Id.ToString(), 1, count with { Status = input.Approve ? "Approved" : "Rejected", Documents = documents, DecisionReason = reason }); return count.Id;
     });
+    private static async Task<bool> OtherApprover(BusinessDb db, Actor actor)
+    {
+        var branchUsers = await db.UserClaims.Where(x => x.ClaimType == "branch" && x.ClaimValue == actor.Branch && x.UserId != actor.Id).Select(x => x.UserId).ToListAsync();
+        if (branchUsers.Count == 0) return false;
+        var claims = await db.UserClaims.Where(x => branchUsers.Contains(x.UserId) && x.ClaimType == "permission").ToListAsync();
+        var now = DateTimeOffset.UtcNow;
+        var active = (await db.Users.Where(x => branchUsers.Contains(x.Id)).ToListAsync()).Where(x => x.LockoutEnd is null || x.LockoutEnd <= now).Select(x => x.Id);
+        return active.Any(id => claims.Any(c => c.UserId == id && c.ClaimValue == "documents.reverse") && claims.Any(c => c.UserId == id && c.ClaimValue == "inventory.receive"));
+    }
     internal static async Task<IReadOnlyList<ManagedBarcode>> ReadBarcodes(BusinessDb db)
     {
         var rows = await db.InventoryRevisions.AsNoTracking().Where(x => x.Branch == "*" && x.Kind == "barcode").ToListAsync();

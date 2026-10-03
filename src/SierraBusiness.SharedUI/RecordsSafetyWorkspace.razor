@@ -1,0 +1,120 @@
+@inject IServiceProvider Services
+@inject Microsoft.JSInterop.IJSRuntime JS
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+
+@if (integrity is not null && Actor.Permissions.Contains("audit.read"))
+{
+    <section class="panel">
+        <div class="panel-title"><h2>Record integrity</h2>@if (report is not null) { <span class="pill">@(report.Ok ? "Verified" : "Needs investigation")</span> }</div>
+        <p>Posted sales, purchases, payments, stock movements and journals are sealed in a chain when they are saved. Checking the chain shows whether anything was changed, deleted or added outside Sierra Business, for example with a database tool.</p>
+        <button class="secondary" disabled="@busy" @onclick="Verify">@(busy && verifying ? "Checking every record…" : "Check records now")</button>
+        @if (report is not null)
+        {
+            <p>@(report.Ok ? $"All {report.Rows:N0} posted records match their seals." : "Problems were found. Do not correct them by editing the database; keep a copy of the file and investigate who had access.") Checked @report.CheckedAt.ToString("dd MMM yyyy HH:mm") UTC · @report.Seals.ToString("N0") seals · database guards @(report.DatabaseGuards ? "active" : "missing")</p>
+            <p class="hint">Chain fingerprint: <span class="code">@report.Head</span>. Write it in your daily cash book or till report; if the history were rewritten later, this fingerprint would no longer match.</p>
+            @if (report.Problems.Count > 0) { <ul>@foreach (var problem in report.Problems) { <li>@problem</li> }</ul> }
+            @foreach (var note in report.Notes) { <p class="hint">@note</p> }
+        }
+    </section>
+}
+
+@if (backups is not null && Actor.Permissions.Contains("backups.create"))
+{
+    <section class="panel">
+        <div class="panel-title"><h2>Automatic backups</h2><span class="pill">@(settings?.Automatic == true ? "On" : "Off")</span></div>
+        <p class="hint">@automaticStatus</p>
+        <label class="check"><input type="checkbox" @bind="automatic" /> Back up automatically while Sierra Business is open</label>
+        <div class="form-grid">
+            <label>Every (hours)<input type="number" min="1" max="168" @bind="intervalHours" /></label>
+            <label>Automatic backups to keep<input type="number" min="1" max="365" @bind="keep" /></label>
+            <label>Copy folder (another drive)<input @bind="copyFolder" maxlength="400" placeholder="E:\SierraBackups" /></label>
+        </div>
+        <p class="hint">Use a USB drive, a second disk or a synced cloud folder (for example a OneDrive folder) so a copy survives if this computer is lost or fails. Each copy is checked against the original. Only automatic backups are removed when the limit is reached.</p>
+        <button class="primary" disabled="@busy" @onclick="SaveSettings">Save backup settings</button>
+        <button class="secondary" disabled="@busy" @onclick="BackUpNow">Back up now</button>
+    </section>
+
+    <section class="panel">
+        <h2>Available backups</h2>
+        @if (files.Count == 0) { <p class="empty">No backups yet. Choose Back up now.</p> }
+        else
+        {
+            <div class="table-wrap"><table><thead><tr><th>Made (UTC)</th><th>Type</th><th>Where</th><th class="numeric">Size</th><th>Fingerprint</th><th></th></tr></thead><tbody>
+            @foreach (var file in files)
+            {
+                <tr><td>@file.Created.ToString("dd MMM yyyy HH:mm")</td><td>@KindLabel(file.Kind)</td><td>@file.Location</td><td class="numeric">@((file.Size / 1024d / 1024d).ToString("N1")) MB</td><td class="code">@file.SealHead</td>
+                <td>@if (CanRestore) { <button class="text-button" disabled="@busy" @onclick="() => Choose(file)">Restore…</button> }</td></tr>
+            }
+            </tbody></table></div>
+        }
+    </section>
+
+    @if (chosen is not null)
+    {
+        <section class="panel">
+            <h2>Restore the backup made @chosen.Created.ToString("dd MMM yyyy HH:mm") UTC</h2>
+            <p>Every record and user account will be replaced by the contents of this backup. Anything recorded after it was made will no longer appear. A safety backup of the current records is made first, so this can be undone by restoring that safety backup.</p>
+            <p>Everyone will be signed out when the restore finishes.</p>
+            <label>Type RESTORE to confirm<input @bind="confirmation" @bind:event="oninput" autocomplete="off" /></label>
+            <button class="danger" disabled="@(busy || confirmation.Trim() != "RESTORE")" @onclick="Restore">@(busy ? "Restoring…" : "Restore this backup")</button>
+            <button class="text-button" disabled="@busy" @onclick="CancelRestore">Cancel</button>
+        </section>
+    }
+}
+else if (backups is null)
+{
+    <div class="notice">Backups are made by the Windows desktop application on the computer that holds the records.</div>
+}
+
+@code {
+    [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
+    [Parameter] public EventCallback OnRestored { get; set; }
+    private IBackupManager? backups;
+    private IIntegrityService? integrity;
+    private IntegrityReport? report;
+    private BackupSettingsView? settings;
+    private List<BackupFileView> files = [];
+    private BackupFileView? chosen;
+    private bool busy, verifying, automatic = true;
+    private int intervalHours = 24, keep = 14;
+    private string copyFolder = "", confirmation = "", error = "", message = "", automaticStatus = "";
+    private bool CanRestore => Actor.Permissions.Contains("users.manage");
+    public bool HasDraft => chosen is not null && confirmation.Length > 0;
+    private static string KindLabel(string kind) => kind switch { "auto" => "Automatic", "manual" => "Manual", "before-upgrade" => "Before upgrade", "before-restore" => "Before restore", _ => kind };
+
+    protected override async Task OnInitializedAsync()
+    {
+        backups = (IBackupManager?)Services.GetService(typeof(IBackupManager));
+        integrity = (IIntegrityService?)Services.GetService(typeof(IIntegrityService));
+        if (backups is not null && Actor.Permissions.Contains("backups.create")) await Run(Load);
+    }
+    private async Task Load()
+    {
+        settings = await backups!.Settings(); automatic = settings.Automatic; intervalHours = settings.IntervalHours; keep = settings.KeepAutomatic; copyFolder = settings.CopyFolder;
+        files = (await backups.List()).ToList(); automaticStatus = await backups.AutomaticStatus();
+    }
+    private async Task Run(Func<Task> action)
+    {
+        if (busy) return; busy = true; error = message = "";
+        try { await action(); }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
+        catch (Exception) { error = "The operation could not complete. Check disk space and that the copy drive is connected, then try again."; }
+        finally { busy = verifying = false; }
+    }
+    private Task Verify() => Run(async () => { verifying = true; report = await integrity!.Verify(); });
+    private Task SaveSettings() => Run(async () => { await backups!.SaveSettings(new(automatic, intervalHours, keep, copyFolder)); await Load(); message = "Backup settings saved."; });
+    private Task BackUpNow() => Run(async () => { var result = await backups!.Create(); await Load(); message = "Backup saved and verified. " + result.CopyStatus; });
+    private void CancelRestore() { chosen = null; confirmation = ""; }
+    private void Choose(BackupFileView file) { chosen = file; confirmation = ""; error = message = ""; }
+    private async Task Restore()
+    {
+        if (chosen is null || !await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", "Replace all current records with this backup? A safety backup is made first.")) return;
+        RestoreResult? result = null;
+        await Run(async () => result = await backups!.Restore(chosen.Id, confirmation));
+        if (result is null) return;
+        var check = result.Integrity.Ok ? "All records passed the integrity check." : "The integrity check reported problems; open Backups & integrity after signing in.";
+        await Microsoft.JSInterop.JSRuntimeExtensions.InvokeVoidAsync(JS, "alert", $"Restore complete from {result.RestoredFrom}. {check} Your previous records were saved as {System.IO.Path.GetFileName(result.SafetyBackup)}. Please sign in again.");
+        await OnRestored.InvokeAsync();
+    }
+}

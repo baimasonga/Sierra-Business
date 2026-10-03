@@ -40,6 +40,7 @@ builder.Services.AddScoped<IPartyService, PartyService>();
 builder.Services.AddScoped<IReturnService, ReturnService>();
 builder.Services.AddScoped<IUserAdministration, UserAdministration>();
 builder.Services.AddScoped<IPeriodService, PeriodService>();
+builder.Services.AddScoped<IIntegrityService, IntegrityService>();
 builder.Services.AddProblemDetails();
 builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database");
 var app = builder.Build();
@@ -66,7 +67,7 @@ if (args.Contains("--migrate"))
 {
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<BusinessDb>();
-    await db.Database.MigrateAsync();
+    await HistoryProtection.MigrateAsync(db); // Lifts database guards only for the upgrade, then reinstates and re-seals.
     return;
 }
 if (args.Contains("--create-owner"))

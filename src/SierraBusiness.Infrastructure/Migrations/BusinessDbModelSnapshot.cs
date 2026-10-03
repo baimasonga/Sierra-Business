@@ -862,6 +862,38 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.ToTable("HeldSaleEnds");
                 });
 
+            modelBuilder.Entity("SierraBusiness.Infrastructure.IntegritySeal", b =>
+                {
+                    b.Property<long>("Sequence")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Hash")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PreviousHash")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Rows")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("Time")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Sequence");
+
+                    b.ToTable("IntegritySeals");
+                });
+
             modelBuilder.Entity("SierraBusiness.Infrastructure.InventoryRevision", b =>
                 {
                     b.Property<Guid>("Id")

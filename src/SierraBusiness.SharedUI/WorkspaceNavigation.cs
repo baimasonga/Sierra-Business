@@ -10,7 +10,7 @@ public static class WorkspaceNavigation
         new("Finance", "=", ["Accounting", "Banking", "Tills", "Trial balance", "Periods & tax"]),
         new("People", "♙", ["Payroll"]),
         new("Documents", "▤", ["Documents"]),
-        new("Administration", "⚙", ["Users & permissions", "Audit & sync"])
+        new("Administration", "⚙", ["Users & permissions", "Backups & integrity", "Audit & sync"])
     ];
     public static NavigationArea AreaFor(string page) => Areas.FirstOrDefault(x => x.Pages.Contains(page)) ?? Areas[0];
     public static IReadOnlyList<NavigationArea> Visible(IEnumerable<string> pages)

@@ -108,6 +108,7 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
     public DbSet<TillShift> TillShifts => Set<TillShift>();
     public DbSet<TillClose> TillCloses => Set<TillClose>();
     public DbSet<TillEntry> TillEntries => Set<TillEntry>();
+    public DbSet<IntegritySeal> IntegritySeals => Set<IntegritySeal>();
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
@@ -187,6 +188,8 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
         builder.Entity<BankMatch>().HasIndex(x => x.JournalLineId);
         builder.Entity<BankMatchCancellation>().HasIndex(x => x.MatchId).IsUnique();
         builder.Entity<BankMatchCancellation>().HasOne<BankMatch>().WithMany().HasForeignKey(x => x.MatchId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<IntegritySeal>().HasKey(x => x.Sequence);
+        builder.Entity<IntegritySeal>().Property(x => x.Sequence).ValueGeneratedNever();
         builder.Entity<LedgerBudget>().HasOne<LedgerAccount>().WithMany().HasForeignKey(x => x.AccountCode).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<CapturedDocument>().HasIndex(x => new { x.Branch, x.Sha256 }).IsUnique();
         builder.Entity<CaptureRevision>().HasIndex(x => new { x.CaptureId, x.Version }).IsUnique();
@@ -203,7 +206,7 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
         foreach (var property in entity.GetProperties())
         {
             if (property.ClrType == typeof(decimal)) { property.SetPrecision(19); property.SetScale(4); }
-            if (property.ClrType == typeof(string) && property.GetMaxLength() is null && property.Name is not "Detail" and not "Payload") property.SetMaxLength(200);
+            if (property.ClrType == typeof(string) && property.GetMaxLength() is null && property.Name is not "Detail" and not "Payload" and not "Rows") property.SetMaxLength(200);
         }
     }
     private void GuardHistory()
@@ -214,10 +217,23 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
         if (ChangeTracker.Entries().Any(x => (x.State is EntityState.Deleted or EntityState.Modified) && (x.Entity is TradeOrder or TradeOrderLine or OrderFulfillment or OrderClosure or StockLocation))) throw new BusinessException("Master and order history is immutable. Create a replacement.");
         if (ChangeTracker.Entries().Any(x => (x.State is EntityState.Deleted or EntityState.Modified) && (x.Entity is InventoryRevision or ProductBarcode or HeldSale or HeldSaleEnd or BankStatement or BankStatementRow or BankStatementVoid or ReceivedCheque or ChequeEvent or SupplierCredit or SupplierCreditUse or TillShift or TillClose or TillEntry or PricePolicy or StockReservation or ReservationRelease or DeliveryInvoice or CustomerCredit or CustomerCreditUse or BusinessDocument or Movement or JournalLine or Operation or CapturedDocument or CaptureRevision or LedgerAccount or BillAllocation or BankMatch or BankMatchCancellation or LedgerBudget)))
             throw new BusinessException("Posted history is immutable. Create a reversal.");
+        if (ChangeTracker.Entries().Any(x => (x.State is EntityState.Modified or EntityState.Deleted) && (x.Entity is IntegritySeal || HistoryProtection.ProtectedTypes.Contains(x.Entity.GetType())))) throw new BusinessException("Posted history is immutable. Create a reversal.");
     }
-    public override int SaveChanges(bool acceptAllChangesOnSuccess) { GuardHistory(); BankingRules.CaptureTillEntries(this).GetAwaiter().GetResult(); return base.SaveChanges(acceptAllChangesOnSuccess); }
+    private List<Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry> NewHistory() =>
+        ChangeTracker.Entries().Where(x => x.State == EntityState.Added && HistoryProtection.ProtectedTypes.Contains(x.Entity.GetType())).ToList();
+    // Every save that adds posted history also appends a seal to the tamper-evidence chain, atomically in the same save.
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        GuardHistory(); BankingRules.CaptureTillEntries(this).GetAwaiter().GetResult();
+        var history = NewHistory(); if (history.Count > 0) HistoryProtection.AddCommitSeal(this, history);
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
     public override async Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
-    { GuardHistory(); await BankingRules.CaptureTillEntries(this, cancellationToken).ConfigureAwait(false); return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken).ConfigureAwait(false); }
+    {
+        GuardHistory(); await BankingRules.CaptureTillEntries(this, cancellationToken).ConfigureAwait(false);
+        var history = NewHistory(); if (history.Count > 0) await HistoryProtection.AddCommitSealAsync(this, history, cancellationToken).ConfigureAwait(false);
+        return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken).ConfigureAwait(false);
+    }
 }
 public sealed class TradingOptions
 {

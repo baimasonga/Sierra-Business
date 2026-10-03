@@ -43,6 +43,8 @@ public static class DesktopRegistration
         services.AddTransient<IUserAdministration, UserAdministration>();
         services.AddTransient<IPeriodService, PeriodService>();
         services.AddTransient<DesktopBackupService>();
+        services.AddTransient<IBackupManager, DesktopBackupManager>();
+        services.AddTransient<IIntegrityService, IntegrityService>();
         services.AddTransient<DocumentCaptureService>();
         services.AddTransient<IDocumentStorage, SqliteDocumentStorage>();
         services.AddTransient<BusinessService>();
