@@ -55,8 +55,9 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
     {
         if (input.Kind is not DocumentKind.Sale and not DocumentKind.Receipt and not DocumentKind.Delivery) throw new BusinessException("Use the reversal workflow to correct a posted document.");
         Scope(actor, input.Kind != DocumentKind.Receipt ? "sales.create" : "inventory.receive");
-        return Execute(actor, input.OperationId, $"{input.Kind}.post", input, async db =>
+        return Controls.Guard(factory, actor, () => Execute(actor, input.OperationId, $"{input.Kind}.post", input, async db =>
         {
+            var policy = await Controls.Current(db, actor.Branch); var triggers = new List<ApprovalTrigger>();
             if (input.HeldSaleId is not null) { if (input.Kind != DocumentKind.Sale || input.OrderId is not null || input.DeliveryId is not null) throw new BusinessException("Held drafts apply only to counter sales."); await PosService.Active(db, actor, input.HeldSaleId.Value); }
             if (input.BusinessDate <= await PeriodControls.ClosedThrough(db, actor.Branch, settings.ClosedThrough) || input.BusinessDate > DateOnly.FromDateTime(DateTime.UtcNow)) throw new BusinessException("Business date must be in an open period and cannot be in the future.");
             if (input.Lines is null || input.Lines.Count is < 1 or > 200) throw new BusinessException("Enter between 1 and 200 lines.");
@@ -147,6 +148,12 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
                 if (currency is not null) amount = AccountingEngine.Money(amount * exchangeRate); // stock and payable are carried in NLe at the receipt-date rate
                 var deliveredCost = delivered is null ? 0 : -movements.Where(x => x.DocumentId == delivered.Id && x.ProductId == p.Id && x.Serial == serial && x.Batch == batch && x.Expiry == line.Expiry).Sum(x => x.Value);
                 var lineCost = delivered is not null ? AccountingEngine.Money(deliveredCost * quantity / input.Lines.Where(x => x.ProductId == p.Id && (string.IsNullOrWhiteSpace(x.Serial) ? null : x.Serial.Trim().ToUpperInvariant()) == serial && (string.IsNullOrWhiteSpace(x.Batch) ? null : x.Batch.Trim().ToUpperInvariant()) == batch && x.Expiry == line.Expiry).Sum(x => x.Quantity * x.Conversion)) : sale ? (available == quantity ? matching.Sum(x => x.Value) : AccountingEngine.Money(matching.Sum(x => x.Value) / available * quantity)) : amount;
+                if (sale && delivered is null)
+                {
+                    var per = line.UnitPrice / line.Conversion;
+                    if (policy.MaxDiscountPercent is decimal max && p.Price > 0 && (p.Price - per) / p.Price * 100 > max) triggers.Add(new("Discount", $"{p.Sku} at NLe {per:N2} is {(p.Price - per) / p.Price * 100:0.#}% below its list price NLe {p.Price:N2} (limit {max:0.#}%)", "pricing.manage"));
+                    if (policy.ApproveBelowCost && amount < lineCost) triggers.Add(new("BelowCost", $"{p.Sku} sold for NLe {amount:N2}, below its stock cost NLe {lineCost:N2}", "pricing.manage"));
+                }
                 var movement = new Movement { Id = Guid.NewGuid(), DocumentId = doc.Id, ProductId = p.Id, Branch = actor.Branch, Location = input.Location, Serial = serial, Batch = batch, Expiry = line.Expiry, Quantity = sale ? -quantity : quantity, Value = sale ? -lineCost : lineCost };
                 if (!sale) receiptLines.Add(new { Movement = movement.Id, Source = lineSource });
                 if (delivered is null) { db.Movements.Add(movement); movements.Add(movement); if (sale) await CommerceRules.Consume(db, input.OrderId, p.Id, input.Location, serial, batch, line.Expiry, quantity); }
@@ -165,7 +172,8 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
                 var allocations = await db.BillAllocations.Where(x => ids.Contains(x.InvoiceId) && !db.Documents.Any(r => r.Reverses == x.VoucherId)).ToListAsync(cancellationToken);
                 var outstanding = bills.Sum(x => x.Total) - allocations.Sum(x => x.Amount);
                 outstanding -= (await db.ReturnAllocations.Where(x => ids.Contains(x.OriginalDocumentId) && !db.Documents.Any(r => r.Reverses == x.ReturnDocumentId)).ToListAsync(cancellationToken)).Sum(x => x.BillCredit);
-                if (outstanding + doc.Total > partyMaster.CreditLimit) throw new BusinessException("This sale exceeds the customer's credit limit. Record payment or update the approved limit before posting.");
+                if (outstanding + doc.Total > partyMaster.CreditLimit && policy.CreditOverride) triggers.Add(new("CreditLimit", $"{party} would owe NLe {outstanding + doc.Total:N2} against a credit limit of NLe {partyMaster.CreditLimit:N2}", "accounting.write"));
+                else if (outstanding + doc.Total > partyMaster.CreditLimit) throw new BusinessException("This sale exceeds the customer's credit limit. Record payment or update the approved limit before posting.");
             }
             doc.Detail = currency is null ? JsonSerializer.Serialize(new { Request = input, TaxRate = sale ? configuredRate : 0, Net = net, Tax = tax, Cost = cost })
                 : JsonSerializer.Serialize(new { Request = input, TaxRate = 0m, Net = net, Tax = tax, Cost = cost, Currency = currency, ExchangeRate = exchangeRate, SourceTotal = sourceTotal });
@@ -185,13 +193,15 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
             if (sale && delivered is null) await EquipmentRules.StartAtSale(db, doc, movements.Where(x => x.DocumentId == doc.Id), actor.Id, cancellationToken); // customer warranties that start at sale
             if (input.HeldSaleId is not null) db.HeldSaleEnds.Add(new() { Id = Guid.NewGuid(), HeldSaleId = input.HeldSaleId.Value, DocumentId = doc.Id, Reason = "Posted as sale" });
             if (sale && !delivery && input.Payment == PaymentMethod.Cheque) await BankingRules.NewCheque(db, doc, input.PaymentReference!, input.Bank!, input.PaymentDate!.Value);
+            if (Controls.Backdated(policy, input.BusinessDate) is { } late) triggers.Add(late with { Detail = $"{input.Kind} {late.Detail}" });
+            await Controls.Gate(db, actor, Controls.Trade, input with { ApprovalId = null }, input.ApprovalId, input.OperationId, triggers, $"{input.Kind} · {party} · {input.BusinessDate:dd MMM yyyy} · {input.Lines.Count} line{(input.Lines.Count == 1 ? "" : "s")} · NLe {(doc.Total == 0 ? net : doc.Total):N2}");
             return doc.Id;
-        }, cancellationToken);
+        }, cancellationToken));
     }
     public Task<Guid> Reverse(Actor actor, ReverseCommand input, CancellationToken cancellationToken = default)
     {
         Scope(actor, "documents.reverse");
-        return Execute(actor, input.OperationId, "document.reverse", input, async db =>
+        return Controls.Guard(factory, actor, () => Execute(actor, input.OperationId, "document.reverse", input, async db =>
         {
             Rules.Required(input.Reason, "Reversal reason");
             var original = await db.Documents.SingleOrDefaultAsync(x => x.Id == input.DocumentId && x.Branch == actor.Branch, cancellationToken) ?? throw new BusinessException("Document not found.");
@@ -238,8 +248,12 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
             db.Documents.Add(doc);
             var journal = await db.Journal.Where(x => x.DocumentId == original.Id).ToListAsync(cancellationToken);
             foreach (var line in journal) db.Journal.Add(new JournalLine { Id = Guid.NewGuid(), DocumentId = doc.Id, Branch = doc.Branch, Account = line.Account, Debit = line.Credit, Credit = line.Debit, CostCentre = line.CostCentre });
+            var reversalPolicy = await Controls.Current(db, actor.Branch);
+            var reversalTriggers = reversalPolicy.ReversalAbove is decimal above && Math.Abs(original.Total) >= above
+                ? new List<ApprovalTrigger> { new("Reversal", $"reversing {original.Kind} {original.Number[^8..]} for {original.Party} (NLe {Math.Abs(original.Total):N2}): {input.Reason.Trim()}", "accounting.write") } : [];
+            await Controls.Gate(db, actor, Controls.Reverse, input with { ApprovalId = null }, input.ApprovalId, input.OperationId, reversalTriggers, $"Reverse {original.Kind} · {original.Party} · NLe {Math.Abs(original.Total):N2} · {input.Reason.Trim()}");
             return doc.Id;
-        }, cancellationToken);
+        }, cancellationToken));
     }
     private static void AddJournal(BusinessDb db, BusinessDocument doc, IReadOnlyList<Posting> posting)
     {

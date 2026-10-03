@@ -72,6 +72,7 @@
                 <button type="button" @onclick='() => Navigate.InvokeAsync("Tenders")'><strong>@d.OpenTenders</strong><span>open tenders</span><em>@(d.TendersClosingSoon > 0 ? $"⚠ {d.TendersClosingSoon} closing within 7 days" : d.TenderPipeline > 0 ? $"{Money(d.TenderPipeline!.Value)} bid" : "None closing soon")</em></button>
                 <button type="button" @onclick='() => Navigate.InvokeAsync("Equipment lookup")'><strong>@d.WarrantiesExpiring</strong><span>warranties ending in 30 days</span></button>
                 <button type="button" @onclick='() => Navigate.InvokeAsync("Warehouse controls")'><strong>@d.LowStock</strong><span>items to reorder</span></button>
+                @if (d.ApprovalsWaiting > 0) { <button type="button" class="ops-alert" @onclick='() => Navigate.InvokeAsync("Approvals")'><strong>@d.ApprovalsWaiting</strong><span>approval@(d.ApprovalsWaiting == 1 ? "" : "s") waiting for you</span></button> }
             </div>
         </section>
     </div>
@@ -245,7 +246,7 @@ else if (busy) { <section class="panel"><p class="empty">Loading…</p></section
     private IReadOnlyList<LedgerDefinition> accounts = [];
     private readonly List<Crumb> trail = [];
     private readonly HashSet<string> expanded = new(StringComparer.OrdinalIgnoreCase);
-    private readonly CancellationTokenSource stopping = new(); private int pending; private Timer? poll;
+    private readonly CancellationTokenSource stopping = new(); private int pending; private volatile bool disposed; private bool stale; private Timer? poll;
     private bool Financial => Actor.Permissions.Contains("accounting.read");
     private string[] ReportList => Financial ? ["Dashboard", SalesReport, RegisterReport, StockReport, ReceivablesReport, PayablesReport] : ["Dashboard", SalesReport, RegisterReport, StockReport];
     private string Root => trail.Count > 0 ? trail[0].View : view;
@@ -262,11 +263,31 @@ else if (busy) { <section class="panel"><p class="empty">Loading…</p></section
         view = StartView == "Reports" ? SalesReport : "Dashboard";
         if (StartView == "Reports") from = Today.AddDays(-29);
         Feed.Changed += OnChanged; live = true;
-        poll = new Timer(_ => _ = InvokeAsync(async () => { if (!busy) { await Load(); StateHasChanged(); } }), null, TimeSpan.FromMinutes(2), TimeSpan.FromMinutes(2));
+        poll = new Timer(_ => Background(), null, TimeSpan.FromMinutes(2), TimeSpan.FromMinutes(2));
         if (Financial) { try { accounts = await Reports.Accounts(); } catch (UnauthorizedAccessException) { } }
         await Load();
     }
-    public void Dispose() { Feed.Changed -= OnChanged; stopping.Cancel(); poll?.Dispose(); }
+    public void Dispose() { disposed = true; Feed.Changed -= OnChanged; stopping.Cancel(); poll?.Dispose(); }
+    /// <summary>Background refresh: never throws on a timer or feed thread, and does nothing once the screen has closed.</summary>
+    private void Background()
+    {
+        if (disposed) return;
+        try
+        {
+            _ = InvokeAsync(async () =>
+            {
+                try
+                {
+                    if (disposed) return;
+                    if (busy) { stale = true; return; } // a read is under way: read again as soon as it finishes
+                    await Load(); StateHasChanged();
+                }
+                catch (Exception) when (disposed) { }
+                catch (ObjectDisposedException) { }
+            });
+        }
+        catch (Exception) { /* the renderer has gone */ }
+    }
     /// <summary>Throttled, not debounced: busy branches post constantly, so a refresh runs at most 1.2 s after the first change rather than waiting for quiet.</summary>
     private void OnChanged()
     {
@@ -274,7 +295,7 @@ else if (busy) { <section class="panel"><p class="empty">Loading…</p></section
         _ = Task.Delay(1200, stopping.Token).ContinueWith(t =>
         {
             Interlocked.Exchange(ref pending, 0);
-            if (!t.IsCanceled) _ = InvokeAsync(async () => { if (!busy) { await Load(); StateHasChanged(); } });
+            if (!t.IsCanceled) Background();
         }, TaskScheduler.Default);
     }
     private async Task Load()
@@ -296,7 +317,7 @@ else if (busy) { <section class="panel"><p class="empty">Loading…</p></section
         }
         catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
         catch (Exception) { error = "The report could not be produced. Refresh to try again."; }
-        finally { busy = false; }
+        finally { busy = false; if (stale && !disposed) { stale = false; Background(); } }
     }
     private Task Reload() => Load();
     private Task Preset(string which)

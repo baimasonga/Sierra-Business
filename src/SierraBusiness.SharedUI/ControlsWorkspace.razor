@@ -1,0 +1,118 @@
+@inject IControlService Controls
+@inject IServiceProvider Services
+@inject Microsoft.JSInterop.IJSRuntime JS
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+
+<section class="panel">
+    <div class="panel-title"><h2>Business controls</h2>@if (!policy.Active) { <span class="status-badge a-Rejected">Off</span> } else { <span class="status-badge a-Approved">On · version @policy.Version</span> }</div>
+    <p class="hint">Postings that go beyond these limits are held for approval instead of being refused or silently accepted. Leave a limit off to allow it freely.</p>
+    <fieldset disabled="@(!CanEdit || busy)" class="control-grid">
+        <label class="check"><input type="checkbox" checked="@(discount is not null)" @onchange="e => discount = (bool)(e.Value ?? false) ? 10 : null" /> Discounts more than <input class="num" type="number" min="0" max="100" step="0.5" disabled="@(discount is null)" @bind="DiscountValue" /> % below list price</label>
+        <label class="check"><input type="checkbox" @bind="belowCost" /> Sales priced below their stock cost</label>
+        <label class="check"><input type="checkbox" checked="@(backdate is not null)" @onchange="e => backdate = (bool)(e.Value ?? false) ? 3 : null" /> Postings dated more than <input class="num" type="number" min="0" max="365" disabled="@(backdate is null)" @bind="BackdateValue" /> days ago</label>
+        <label class="check"><input type="checkbox" checked="@(reversal is not null)" @onchange="e => reversal = (bool)(e.Value ?? false) ? 0 : null" /> Reversals of documents worth NLe <input class="num" type="number" min="0" step="0.01" disabled="@(reversal is null)" @bind="ReversalValue" /> or more (0 = every reversal)</label>
+        <label class="check"><input type="checkbox" checked="@(adjustment is not null)" @onchange="e => adjustment = (bool)(e.Value ?? false) ? 500 : null" /> Stock count adjustments of NLe <input class="num" type="number" min="0" step="0.01" disabled="@(adjustment is null)" @bind="AdjustmentValue" /> or more</label>
+        <label class="check"><input type="checkbox" @bind="creditOverride" /> Credit sales over a customer's limit can be approved (otherwise they are refused)</label>
+        <label class="check"><input type="checkbox" @bind="selfApproval" /> Allow self-approval when nobody else can approve (recorded as self-approved)</label>
+        <div class="form-grid compact"><label>Working hours from<input type="time" @bind="workStart" /></label><label>to<input type="time" @bind="workEnd" /></label></div>
+    </fieldset>
+    @if (CanEdit)
+    {
+        <button class="primary" disabled="@busy" @onclick="Save">Save controls</button>
+        <button class="secondary" disabled="@busy" @onclick="Recommended">Use recommended settings</button>
+    }
+    else { <p class="hint">Only users who manage users and permissions can change the controls.</p> }
+</section>
+
+@if (CanAudit)
+{
+    <section class="panel">
+        <div class="panel-title"><h2>Exceptions for review</h2><button class="secondary" disabled="@busy" @onclick="Export">Export to Excel</button></div>
+        <div class="report-period">
+            <label>From<input type="date" @bind="from" @bind:after="Load" /></label>
+            <label>To<input type="date" @bind="to" @bind:after="Load" /></label>
+        </div>
+        <p class="hint">Reversals, back-dated postings, discounts and below-cost sales, stock adjustments, work outside working hours and approval decisions. These are business controls to review, not findings against anyone.</p>
+        @if (report is { } r)
+        {
+            @if (r.Users.Count > 0)
+            {
+                <div class="table-wrap"><table class="report-table"><thead><tr><th>User</th><th class="numeric">Reversals</th><th class="numeric">Back-dated</th><th class="numeric">Discounts</th><th class="numeric">Below cost</th><th class="numeric">Stock adj.</th><th class="numeric">After hours</th><th class="numeric">Self-approved</th><th></th></tr></thead><tbody>
+                @foreach (var u in r.Users)
+                {
+                    var user = u;
+                    <tr class="drill" @onclick="() => userFilter = userFilter == user.Actor ? string.Empty : user.Actor"><td>@u.Actor</td><td class="numeric">@u.Reversals</td><td class="numeric">@u.Backdated</td><td class="numeric">@u.Discounts</td><td class="numeric">@u.BelowCost</td><td class="numeric">@u.StockAdjustments</td><td class="numeric">@u.AfterHours</td><td class="numeric">@u.SelfApprovals</td><td>@if (u.Review) { <span class="status-badge a-Pending">⚠ Review</span> }</td></tr>
+                }
+                </tbody></table></div>
+            }
+            <div class="view-toggle exception-kinds">
+                @foreach (var k in new[] { "All" }.Concat(r.Rows.Select(x => x.Kind).Distinct().Order())) { var kind = k; <button type="button" class="@(kindFilter == k ? "active" : "")" @onclick="() => kindFilter = kind">@k (@(k == "All" ? r.Rows.Count : r.Rows.Count(x => x.Kind == k)))</button> }
+            </div>
+            @if (userFilter.Length > 0) { <p class="hint">Showing @userFilter only · <button class="text-button" @onclick="() => userFilter = string.Empty">show everyone</button></p> }
+            var rows = r.Rows.Where(x => (kindFilter == "All" || x.Kind == kindFilter) && (userFilter.Length == 0 || x.Actor == userFilter)).Take(500).ToList();
+            @if (rows.Count == 0) { <p class="empty">No exceptions in this period.</p> }
+            else
+            {
+                <div class="table-wrap"><table class="report-table"><thead><tr><th>Time</th><th>User</th><th>Kind</th><th>Reference</th><th>Detail</th><th class="numeric">Amount</th><th>Approval</th></tr></thead><tbody>
+                @foreach (var x in rows)
+                {
+                    var row = x;
+                    <tr class="@(x.DocumentId is null ? "" : "drill")" @onclick="() => Open(row)"><td>@x.Time.ToLocalTime().ToString("dd MMM HH:mm")</td><td>@x.Actor</td><td><span class="kind-tag k-@x.Kind.Replace(" ", "")">@x.Kind</span></td><td class="code">@x.Reference</td><td>@x.Detail</td><td class="numeric">@(x.Amount == 0 ? "" : x.Amount.ToString("N2"))</td><td class="code">@x.Approval</td></tr>
+                }
+                </tbody></table></div>
+            }
+        }
+    </section>
+}
+
+@code {
+    [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
+    [Parameter] public EventCallback<Guid> OpenDocument { get; set; }
+    private ControlPolicy policy = new();
+    private decimal? discount, reversal, adjustment; private int? backdate;
+    private bool belowCost, creditOverride, selfApproval = true, busy;
+    private TimeOnly workStart = new(7, 0), workEnd = new(19, 0);
+    private DateOnly from = DateOnly.FromDateTime(DateTime.Now).AddDays(-29), to = DateOnly.FromDateTime(DateTime.Now);
+    private ExceptionReport? report;
+    private string error = "", message = "", kindFilter = "All", userFilter = "";
+    private bool CanEdit => Actor.Permissions.Contains("users.manage");
+    private bool CanAudit => Actor.Permissions.Contains("audit.read");
+    private decimal DiscountValue { get => discount ?? 0; set => discount = value; }
+    private int BackdateValue { get => backdate ?? 0; set => backdate = value; }
+    private decimal ReversalValue { get => reversal ?? 0; set => reversal = value; }
+    private decimal AdjustmentValue { get => adjustment ?? 0; set => adjustment = value; }
+
+    protected override Task OnInitializedAsync() => Run(async () => { Apply(await Controls.Policy()); await LoadReport(); });
+    private void Apply(ControlPolicy p)
+    {
+        policy = p; discount = p.MaxDiscountPercent; belowCost = p.ApproveBelowCost; backdate = p.BackdateDays; reversal = p.ReversalAbove; adjustment = p.StockAdjustmentAbove;
+        creditOverride = p.CreditOverride; selfApproval = p.SelfApprovalWhenAlone;
+        workStart = TimeOnly.TryParse(p.WorkStart, out var s) ? s : new(7, 0); workEnd = TimeOnly.TryParse(p.WorkEnd, out var e) ? e : new(19, 0);
+    }
+    private async Task LoadReport() { if (CanAudit) report = await Controls.Exceptions(from, to); }
+    private Task Load() => Run(LoadReport);
+    private async Task Run(Func<Task> action)
+    {
+        if (busy) return; busy = true; error = message = "";
+        try { await action(); }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
+        catch (Exception) { error = "The controls could not be loaded or saved. Refresh and try again."; }
+        finally { busy = false; }
+    }
+    private void Recommended() { var v = policy.Version; Apply(ControlPolicy.Recommended with { Version = v }); message = "Recommended settings filled in. Review them and select Save controls."; }
+    private Task Save() => Run(async () =>
+    {
+        await Controls.SavePolicy(new(Guid.NewGuid(), new ControlPolicy(policy.Version, discount, belowCost, backdate, reversal, adjustment, creditOverride, selfApproval, workStart.ToString("HH:mm"), workEnd.ToString("HH:mm"))));
+        Apply(await Controls.Policy()); await LoadReport();
+        message = policy.Active ? "Controls saved. Postings beyond these limits now wait for approval." : "Controls saved. All limits are off.";
+    });
+    private async Task Open(ExceptionRow row) { if (row.DocumentId is Guid id) await OpenDocument.InvokeAsync(id); }
+    private Task Export() => Run(async () =>
+    {
+        var bytes = await Controls.Export(from, to); var name = $"Sierra Business - exceptions and audit {from:yyyy-MM-dd} to {to:yyyy-MM-dd}.xlsx";
+        if (Services.GetService(typeof(IFileExport)) is IFileExport export) { message = "Saved to " + await export.Save(name, bytes) + "."; return; }
+        await Microsoft.JSInterop.JSRuntimeExtensions.InvokeVoidAsync(JS, "sierraDownload", name, Convert.ToBase64String(bytes));
+        message = "Downloaded " + name + ".";
+    });
+}

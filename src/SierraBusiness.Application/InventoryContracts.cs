@@ -7,7 +7,8 @@ public sealed record TransferCommand(Guid OperationId, Guid ProductId, string Fr
 public sealed record StockCountCommand(Guid OperationId, Guid ProductId, string Location, decimal ExpectedQuantity, decimal CountedQuantity, decimal SurplusUnitCost, string Reason,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Batch = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] DateOnly? Expiry = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Serial = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Serial = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] Guid? ApprovalId = null);
 public interface IInventoryService
 {
     Task<IReadOnlyList<LocationView>> Locations();

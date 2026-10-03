@@ -47,6 +47,7 @@ builder.Services.AddScoped<IEquipmentService, EquipmentService>();
 builder.Services.AddScoped<ITenderService, TenderService>();
 builder.Services.AddScoped<IServiceDesk, ServiceDesk>();
 builder.Services.AddScoped<IReportService, ReportService>();
+builder.Services.AddScoped<IControlService, ControlService>();
 builder.Services.AddSingleton<IChangeFeed, ChangeFeed>();
 builder.Services.AddSingleton<IFileStore, DatabaseFileStore>();
 builder.Services.AddScoped<IDocumentLibrary, DocumentLibrary>();

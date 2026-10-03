@@ -1,0 +1,68 @@
+@inject IControlService Controls
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+
+<section class="panel">
+    <div class="panel-title"><h2>Approvals</h2><button class="secondary" disabled="@busy" @onclick="Refresh">Refresh</button></div>
+    <p class="hint">When a sale, reversal, stock adjustment or back-dated voucher goes beyond the business controls, it is held here instead of being posted. An approver decides; the person who asked then posts it — exactly as requested, once.</p>
+    <div class="view-toggle">
+        @foreach (var f in Filters) { var filter = f; <button type="button" class="@(view == f ? "active" : "")" @onclick="() => view = filter">@f (@Shown(f).Count())</button> }
+    </div>
+</section>
+
+@{ var list = Shown(view).ToList(); }
+@if (list.Count == 0) { <section class="panel"><p class="empty">@(view == "To decide" ? "Nothing is waiting for your decision." : view == "Mine" ? "You have no requests." : "No requests yet.")</p></section> }
+@foreach (var a in list)
+{
+    var item = a;
+    <section class="panel approval @(a.State == ApprovalState.Pending ? "pending" : "")">
+        <div class="panel-title">
+            <h2><span class="code">@a.Number</span> · @ActionName(a.Action)</h2>
+            <span class="status-badge a-@a.State">@StateName(a)</span>
+        </div>
+        <p class="approval-summary">@a.Summary</p>
+        <ul class="approval-reasons">@foreach (var t in a.Triggers) { <li><strong>@RuleName(t.Rule)</strong> — @t.Detail</li> }</ul>
+        <p class="hint">Requested by @a.RequestedBy, @a.RequestedAt.ToLocalTime().ToString("dd MMM yyyy HH:mm")@if (a.DecidedBy.Length > 0) { <span> · @StateName(a).ToLowerInvariant() by @a.DecidedBy@(a.DecidedAt is DateTimeOffset t ? $", {t.ToLocalTime():dd MMM HH:mm}" : "")@(a.DecisionNote.Length > 0 ? $": “{a.DecisionNote}”" : "")</span> }@if (a.UsedDocument.Length > 0) { <span> · posted as <span class="code">@a.UsedDocument</span></span> }</p>
+        @if (a.Note.Length > 0) { <p class="approval-notes">@a.Note</p> }
+        <div class="approval-actions">
+            @if (a.CanDecide)
+            {
+                <input aria-label="Decision note for @a.Number" maxlength="200" placeholder="Note (required to reject)" value="@Note(a.Id)" @onchange="e => notes[item.Id] = e.Value?.ToString() ?? string.Empty" />
+                <button class="primary" disabled="@busy" @onclick="() => Decide(item, true)">Approve</button>
+                <button class="danger" disabled="@busy" @onclick="() => Decide(item, false)">Reject</button>
+                @if (a.Mine) { <span class="hint">No other approver is available, so this will be recorded as self-approved.</span> }
+            }
+            @if (a.CanPost) { <button class="primary" disabled="@busy" @onclick="() => Post(item)">Post now</button><span class="hint">Or post the same entry again from its own screen.</span> }
+            @if (a.Mine && a.State == ApprovalState.Pending) { <button class="secondary" disabled="@busy" @onclick="() => Withdraw(item)">Withdraw</button> }
+        </div>
+    </section>
+}
+
+@code {
+    [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
+    private static readonly string[] Filters = ["To decide", "Mine", "All"];
+    private IReadOnlyList<ApprovalView> approvals = [];
+    private readonly Dictionary<Guid, string> notes = [];
+    private string view = "To decide", error = "", message = "";
+    private bool busy;
+    private string Note(Guid id) => notes.GetValueOrDefault(id, "");
+    private IEnumerable<ApprovalView> Shown(string f) => f switch { "To decide" => approvals.Where(x => x.CanDecide), "Mine" => approvals.Where(x => x.Mine), _ => approvals };
+    private static string ActionName(string action) => action switch { "trade.post" => "Sale or receipt", "document.reverse" => "Reversal", "stock.count" => "Stock adjustment", "voucher.post" => "Voucher", _ => action };
+    private static string RuleName(string rule) => rule switch { "Discount" => "Discount", "BelowCost" => "Below cost", "Backdated" => "Back-dated", "CreditLimit" => "Credit limit", "Reversal" => "Reversal", "StockAdjustment" => "Stock adjustment", _ => rule };
+    private static string StateName(ApprovalView a) => a.State switch { ApprovalState.Pending => "Waiting", ApprovalState.Approved => a.SelfApproved ? "Self-approved" : "Approved", ApprovalState.Used => "Posted", _ => a.State.ToString() };
+
+    protected override async Task OnInitializedAsync() { await Run(Load); if (!approvals.Any(x => x.CanDecide)) view = approvals.Any(x => x.Mine) ? "Mine" : "All"; }
+    private async Task Load() => approvals = await Controls.Approvals();
+    private Task Refresh() => Run(Load);
+    private async Task Run(Func<Task> action)
+    {
+        if (busy) return; busy = true; error = message = "";
+        try { await action(); }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
+        catch (Exception) { error = "The request could not be completed. Refresh and try again."; }
+        finally { busy = false; }
+    }
+    private Task Decide(ApprovalView a, bool approve) => Run(async () => { await Controls.Decide(new(Guid.NewGuid(), a.Id, approve, Note(a.Id))); notes.Remove(a.Id); await Load(); message = approve ? $"{a.Number} approved. {a.RequestedBy} can now post it." : $"{a.Number} rejected."; });
+    private Task Post(ApprovalView a) => Run(async () => { await Controls.Post(new(a.Id)); await Load(); message = $"{a.Number} posted."; });
+    private Task Withdraw(ApprovalView a) => Run(async () => { await Controls.Withdraw(new(Guid.NewGuid(), a.Id, "")); await Load(); message = $"{a.Number} withdrawn."; });
+}

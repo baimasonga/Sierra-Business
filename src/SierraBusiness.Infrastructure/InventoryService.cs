@@ -83,7 +83,20 @@ public sealed class InventoryService(IDbContextFactory<BusinessDb> factory, IAct
         db.Movements.Add(new() { Id = Guid.NewGuid(), DocumentId = doc.Id, ProductId = product.Id, Branch = actor.Branch, Location = input.To, Serial = serial, Batch = batch, Expiry = input.Expiry, Quantity = input.Quantity, Value = cost });
         return doc.Id;
     });
-    public Task<Guid> Count(StockCountCommand input) => Execute(input.OperationId, "stock.count", input, (db, actor) => CountWithin(db, actor, input));
+    public async Task<Guid> Count(StockCountCommand input)
+    {
+        var actor = await session.CurrentActor();
+        return await Controls.Guard(factory, actor, () => Execute(input.OperationId, "stock.count", input, async (db, actor) =>
+        {
+            var id = await CountWithin(db, actor, input);
+            var adjustment = db.Documents.Local.Single(x => x.Id == id).Total;
+            var policy = await Controls.Current(db, actor.Branch);
+            var triggers = policy.StockAdjustmentAbove is decimal above && Math.Abs(adjustment) >= above
+                ? new List<ApprovalTrigger> { new("StockAdjustment", $"stock count adjustment of NLe {adjustment:N2} ({input.Reason.Trim()})", "accounting.write") } : [];
+            await Controls.Gate(db, actor, Controls.Count, input with { ApprovalId = null }, input.ApprovalId, input.OperationId, triggers, $"Stock count · {input.Location} · counted {input.CountedQuantity:0.####} against {input.ExpectedQuantity:0.####} · NLe {adjustment:N2} · {input.Reason.Trim()}");
+            return id;
+        }));
+    }
     internal async Task<Guid> CountWithin(BusinessDb db, Actor actor, StockCountCommand input)
     {
         await Location(db, input.Location); var product = await db.Products.FindAsync(input.ProductId) ?? throw new BusinessException("Product not found.");

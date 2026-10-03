@@ -109,7 +109,7 @@ public sealed class ReportService(IDbContextFactory<BusinessDb> factory, IActorS
         }
         return new(from, to, financial, net, salesDocuments, financial ? cost : null, financial ? net - cost : null, cash, bank, cheques, receivables, overdueReceivables, payables, overduePayables,
             stockValue, lowStock, openJobs, awaiting, tenders.Count, tenders.Sum(t => t.Bids.Count > 0 ? t.Bids[0].Total : 0), tenders.Count(t => t.DaysLeft is >= 0 and <= 7), warranties,
-            trend, monthly, customers, products, branches, checks, DateTimeOffset.UtcNow);
+            trend, monthly, customers, products, branches, checks, DateTimeOffset.UtcNow, (await new ControlService(factory, session, options).Approvals()).Count(x => x.CanDecide));
     }
 
     private static async Task<(int Open, int Awaiting)> ServiceCounts(BusinessDb db, string branch)

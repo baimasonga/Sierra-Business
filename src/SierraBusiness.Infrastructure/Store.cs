@@ -139,6 +139,11 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
     public DbSet<ServiceJobEvent> ServiceJobEvents => Set<ServiceJobEvent>();
     public DbSet<MaintenancePlan> MaintenancePlans => Set<MaintenancePlan>();
     public DbSet<MaintenancePlanEnd> MaintenancePlanEnds => Set<MaintenancePlanEnd>();
+    public DbSet<ControlPolicyVersion> ControlPolicies => Set<ControlPolicyVersion>();
+    public DbSet<ApprovalRequest> ApprovalRequests => Set<ApprovalRequest>();
+    public DbSet<ApprovalDecision> ApprovalDecisions => Set<ApprovalDecision>();
+    public DbSet<ApprovalUse> ApprovalUses => Set<ApprovalUse>();
+    public DbSet<ApprovalNote> ApprovalNotes => Set<ApprovalNote>();
     public DbSet<StoredDocumentLink> StoredDocumentLinks => Set<StoredDocumentLink>();
     public DbSet<StoredDocumentLinkRemoval> StoredDocumentLinkRemovals => Set<StoredDocumentLinkRemoval>();
     protected override void OnModelCreating(ModelBuilder builder)
@@ -270,6 +275,15 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
         builder.Entity<MaintenancePlan>().HasIndex(x => x.Number).IsUnique();
         builder.Entity<MaintenancePlanEnd>().HasIndex(x => x.PlanId).IsUnique();
         builder.Entity<MaintenancePlanEnd>().HasOne<MaintenancePlan>().WithMany().HasForeignKey(x => x.PlanId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<ControlPolicyVersion>().HasIndex(x => new { x.Branch, x.Version }).IsUnique();
+        builder.Entity<ApprovalRequest>().HasIndex(x => x.Number).IsUnique();
+        builder.Entity<ApprovalRequest>().HasIndex(x => new { x.Branch, x.PayloadHash });
+        builder.Entity<ApprovalDecision>().HasIndex(x => x.RequestId).IsUnique();
+        builder.Entity<ApprovalDecision>().HasOne<ApprovalRequest>().WithMany().HasForeignKey(x => x.RequestId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<ApprovalUse>().HasIndex(x => x.RequestId).IsUnique();
+        builder.Entity<ApprovalUse>().HasIndex(x => x.OperationId);
+        builder.Entity<ApprovalUse>().HasOne<ApprovalRequest>().WithMany().HasForeignKey(x => x.RequestId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<ApprovalNote>().HasOne<ApprovalRequest>().WithMany().HasForeignKey(x => x.RequestId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<Warranty>().HasIndex(x => new { x.SaleId, x.ProductId, x.Serial }).IsUnique();
         builder.Entity<Warranty>().HasIndex(x => x.Serial);
         builder.Entity<Warranty>().HasOne<BusinessDocument>().WithMany().HasForeignKey(x => x.SaleId).OnDelete(DeleteBehavior.Restrict);

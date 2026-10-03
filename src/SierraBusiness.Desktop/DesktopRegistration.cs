@@ -52,6 +52,7 @@ public static class DesktopRegistration
         services.AddTransient<ITenderService, TenderService>();
         services.AddTransient<IServiceDesk, ServiceDesk>();
         services.AddTransient<IReportService, ReportService>();
+        services.AddTransient<IControlService, ControlService>();
         services.AddSingleton<IChangeFeed, ChangeFeed>();
         services.AddSingleton<IFileStore, DatabaseFileStore>();
         services.AddTransient<IDocumentLibrary, DocumentLibrary>();

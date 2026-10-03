@@ -8,7 +8,7 @@ public sealed record LedgerInput(Guid OperationId, int Code, string Name, Ledger
 public sealed record LedgerDefinition(int Code, string Name, LedgerGroup Group, bool CashOrBank, bool Control);
 public sealed record VoucherLine(int AccountCode, decimal Debit, decimal Credit, string CostCentre = "");
 public sealed record BillSettlement(Guid DocumentId, decimal Amount);
-public sealed record VoucherCommand(Guid OperationId, VoucherType Type, DateOnly Date, string Narration, List<VoucherLine> Lines, List<BillSettlement> Allocations);
+public sealed record VoucherCommand(Guid OperationId, VoucherType Type, DateOnly Date, string Narration, List<VoucherLine> Lines, List<BillSettlement> Allocations, [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] Guid? ApprovalId = null);
 public sealed record BankMatchCommand(Guid OperationId, Guid JournalLineId, DateOnly ClearedDate, string StatementReference, Guid? StatementRowId = null);
 public sealed record CancelBankMatchCommand(Guid OperationId, Guid MatchId, string Reason);
 public sealed record BankMatchHistory(Guid Id, Guid JournalLineId, int AccountCode, string Number, DateOnly ClearedDate, string Reference, string? CancellationReason);

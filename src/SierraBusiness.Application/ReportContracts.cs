@@ -16,7 +16,7 @@ public sealed record DashboardView(DateOnly From, DateOnly To, bool Financial,
     decimal? Cash, decimal? Bank, decimal? Cheques, decimal? Receivables, decimal? OverdueReceivables, decimal? Payables, decimal? OverduePayables,
     decimal StockValue, int LowStock, int OpenServiceJobs, int AwaitingBilling, int OpenTenders, decimal? TenderPipeline, int TendersClosingSoon, int WarrantiesExpiring,
     IReadOnlyList<TrendPoint> Trend, bool MonthlyTrend, IReadOnlyList<RankedItem> TopCustomers, IReadOnlyList<RankedItem> TopProducts,
-    IReadOnlyList<BranchFigure> Branches, IReadOnlyList<ReconciliationCheck> Checks, DateTimeOffset AsOf)
+    IReadOnlyList<BranchFigure> Branches, IReadOnlyList<ReconciliationCheck> Checks, DateTimeOffset AsOf, int ApprovalsWaiting = 0)
 {
     public decimal? Margin => GrossProfit is decimal g && NetSales != 0 ? Math.Round(g / NetSales * 100, 1) : null;
 }

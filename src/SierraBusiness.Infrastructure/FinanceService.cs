@@ -33,9 +33,11 @@ public sealed class FinanceService(IDbContextFactory<BusinessDb> factory, IActor
         db.LedgerAccounts.Add(new() { Id = input.Code, Name = Rules.Required(input.Name, "Ledger name"), Group = input.Group, CashOrBank = input.CashOrBank });
         return Guid.NewGuid();
     });
-    public Task<Guid> PostVoucher(VoucherCommand input) => Execute(input.OperationId, "voucher.post", input, async (db, actor) =>
+    public async Task<Guid> PostVoucher(VoucherCommand input) => await Controls.Guard(factory, await session.CurrentActor(), () => Execute(input.OperationId, "voucher.post", input, async (db, actor) =>
     {
         await OpenDate(db, actor.Branch, input.Date);
+        if (Controls.Backdated(await Controls.Current(db, actor.Branch), input.Date) is { } late)
+            await Controls.Gate(db, actor, Controls.Voucher, input with { ApprovalId = null }, input.ApprovalId, input.OperationId, [late with { Detail = $"{input.Type} voucher {late.Detail}" }], $"{input.Type} voucher · {input.Date:dd MMM yyyy} · NLe {input.Lines.Sum(x => x.Debit):N2} · {input.Narration.Trim()}");
         if (!Enum.IsDefined(input.Type) || input.Lines is null || input.Lines.Count is < 2 or > 200 || input.Allocations is null || input.Allocations.Count > 200) throw new BusinessException("Enter a valid voucher with 2–200 lines.");
         var narration = Rules.Required(input.Narration, "Narration", 200);
         var accounts = await db.LedgerAccounts.ToDictionaryAsync(x => x.Id);
@@ -89,7 +91,7 @@ public sealed class FinanceService(IDbContextFactory<BusinessDb> factory, IActor
         db.Documents.Add(doc);
         foreach (var line in input.Lines) db.Journal.Add(new() { Id = Guid.NewGuid(), DocumentId = doc.Id, Branch = actor.Branch, Account = (Account)line.AccountCode, Debit = line.Debit, Credit = line.Credit, CostCentre = line.CostCentre.Trim() });
         return doc.Id;
-    });
+    }));
     public Task<Guid> Reconcile(BankMatchCommand input) => Execute(input.OperationId, "bank.reconcile", input, async (db, actor) =>
     {
         var line = await db.Journal.SingleOrDefaultAsync(x => x.Id == input.JournalLineId && x.Branch == actor.Branch) ?? throw new BusinessException("Bank entry not found.");
