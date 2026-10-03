@@ -18,3 +18,15 @@ window.sierraPrint = (id) => {
     frame.contentWindow.print();
     // Keep the frame alive until the next print so asynchronous native dialogs can finish.
 };
+
+// Downloads a generated workbook (templates, error reports) in the browser host.
+window.sierraDownload = (name, base64) => {
+    const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    link.download = name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+};

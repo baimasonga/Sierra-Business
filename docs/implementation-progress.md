@@ -84,3 +84,7 @@ Release 0.10.0 packaged and checksum-verified: 126 tests, authenticated HTTP che
 ## Records safety — 0.10.2
 
 Source baseline 0.10.1 (2026-10-03) fixed a stale barcode-scan test and added 13 inventory-management tests (139 passing). Release 0.10.2 adds database guards and a verifiable seal chain over posted history, automatic and off-machine backups, an owner-level restore with safety backup, and separation of duties for stock-count approval. 157 tests pass. See [records-safety notes](records-safety-0.10.2.md). Next per the specification roadmap: Excel onboarding (Skill 10, Phase 2 exit condition), then foreign-currency purchasing, landed cost and supplier-invoice matching (Skill 13, Phase 4).
+
+## Excel import — 0.11.0
+
+Specification Skill 10 implemented: six generated templates, Open XML parsing with safety limits, column mapping, row-level validation using the manual-entry rules, staging (ImportBatch/ImportRow), error workbooks, retry-safe commits with in-transaction re-validation, and import history. Opening stock posts per-warehouse documents against the new 3200 Opening balance equity account. This meets the roadmap Phase 2 exit condition. 174 tests pass. See [Excel import notes](excel-import-0.11.0.md). Next: foreign-currency purchasing, landed cost and supplier-invoice matching (Skill 13, Phase 4).

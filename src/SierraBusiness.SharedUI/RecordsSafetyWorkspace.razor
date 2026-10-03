@@ -11,7 +11,7 @@
         <button class="secondary" disabled="@busy" @onclick="Verify">@(busy && verifying ? "Checking every record…" : "Check records now")</button>
         @if (report is not null)
         {
-            <p>@(report.Ok ? $"All {report.Rows:N0} posted records match their seals." : "Problems were found. Do not correct them by editing the database; keep a copy of the file and investigate who had access.") Checked @report.CheckedAt.ToString("dd MMM yyyy HH:mm") UTC · @report.Seals.ToString("N0") seals · database guards @(report.DatabaseGuards ? "active" : "missing")</p>
+            <p>@(report.Ok ? $"All {report.Rows:N0} posted records match their seals." : "Problems were found. Do not correct them by editing the database; keep a copy of the file and investigate who had access.") Checked @report.CheckedAt.ToString("dd MMM yyyy HH:mm") UTC · @report.Seals.ToString("N0") @(report.Seals == 1 ? "seal" : "seals") · database guards @(report.DatabaseGuards ? "active" : "missing")</p>
             <p class="hint">Chain fingerprint: <span class="code">@report.Head</span>. Write it in your daily cash book or till report; if the history were rewritten later, this fingerprint would no longer match.</p>
             @if (report.Problems.Count > 0) { <ul>@foreach (var problem in report.Problems) { <li>@problem</li> }</ul> }
             @foreach (var note in report.Notes) { <p class="hint">@note</p> }

@@ -24,6 +24,7 @@ public sealed class LedgerAccount
         new() { Id=2300, Name="Payroll deductions payable", Group=LedgerGroup.Liability },
         new() { Id=3000, Name="Owner capital", Group=LedgerGroup.Equity },
         new() { Id=3100, Name="Retained earnings", Group=LedgerGroup.Equity },
+        new() { Id=3200, Name="Opening balance equity", Group=LedgerGroup.Equity, Control=true },
         new() { Id=4000, Name="Sales", Group=LedgerGroup.Income, Control=true },
         new() { Id=4100, Name="Other income", Group=LedgerGroup.Income },
         new() { Id=5000, Name="Cost of sales", Group=LedgerGroup.Expense, Control=true },

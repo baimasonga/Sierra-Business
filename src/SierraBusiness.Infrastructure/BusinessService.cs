@@ -35,18 +35,21 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
     public Task<Guid> AddProduct(Actor actor, ProductInput input, CancellationToken cancellationToken = default)
     {
         Scope(actor, "catalogue.write");
-        return Execute(actor, input.OperationId, "catalogue.create", input, async db =>
-        {
-            Rules.Positive(input.Price, "Selling price");
-            if (!Enum.IsDefined(input.Tracking)) throw new BusinessException("Unknown tracking mode.");
-            if (input.Tracking is TrackingMode.Variant or TrackingMode.Compatibility) throw new BusinessException("Structured variant and compatibility tracking are not available. Use a separate quantity-tracked SKU for each stocked variant.");
-            var sku = Rules.Required(input.Sku, "SKU", 40).ToUpperInvariant();
-            if (await db.Products.AnyAsync(x => x.Sku == sku, cancellationToken) || await db.ProductBarcodes.AnyAsync(x => x.Code == sku, cancellationToken)) throw new BusinessException("That SKU already exists.");
-            var p = new Product { Id = Guid.NewGuid(), Sku = sku, Name = Rules.Required(input.Name, "Product name"), Category = Rules.Required(input.Category, "Category"), Unit = Rules.Required(input.Unit, "Base unit", 30), Price = input.Price, Tracking = input.Tracking };
-            db.Products.Add(p);
-            if (input.MinimumPrice is not null) { actor.Demand("pricing.manage"); Rules.Positive(input.MinimumPrice.Value, "Minimum price"); db.PricePolicies.Add(new() { Id = Guid.NewGuid(), ProductId = p.Id, MinimumPrice = input.MinimumPrice.Value, Version = 1 }); }
-            return p.Id;
-        }, cancellationToken);
+        return Execute(actor, input.OperationId, "catalogue.create", input, async db => (await CreateProduct(db, actor, input, cancellationToken)).Id, cancellationToken);
+    }
+    /// <summary>Single source of catalogue rules, shared by manual entry and Excel import.</summary>
+    /// <param name="uniquenessVerified">True only when the caller has already checked SKUs against the database inside the same serializable transaction (bulk import).</param>
+    internal static async Task<Product> CreateProduct(BusinessDb db, Actor actor, ProductInput input, CancellationToken cancellationToken = default, bool uniquenessVerified = false)
+    {
+        Rules.Positive(input.Price, "Selling price");
+        if (!Enum.IsDefined(input.Tracking)) throw new BusinessException("Unknown tracking mode.");
+        if (input.Tracking is TrackingMode.Variant or TrackingMode.Compatibility) throw new BusinessException("Structured variant and compatibility tracking are not available. Use a separate quantity-tracked SKU for each stocked variant.");
+        var sku = Rules.Required(input.Sku, "SKU", 40).ToUpperInvariant();
+        if (!uniquenessVerified && (await db.Products.AnyAsync(x => x.Sku == sku, cancellationToken) || await db.ProductBarcodes.AnyAsync(x => x.Code == sku, cancellationToken) || db.Products.Local.Any(x => x.Sku == sku) || db.ProductBarcodes.Local.Any(x => x.Code == sku))) throw new BusinessException("That SKU already exists.");
+        var p = new Product { Id = Guid.NewGuid(), Sku = sku, Name = Rules.Required(input.Name, "Product name"), Category = Rules.Required(input.Category, "Category"), Unit = Rules.Required(input.Unit, "Base unit", 30), Price = input.Price, Tracking = input.Tracking };
+        db.Products.Add(p);
+        if (input.MinimumPrice is not null) { actor.Demand("pricing.manage"); Rules.Positive(input.MinimumPrice.Value, "Minimum price"); db.PricePolicies.Add(new() { Id = Guid.NewGuid(), ProductId = p.Id, MinimumPrice = input.MinimumPrice.Value, Version = 1 }); }
+        return p;
     }
     public Task<Guid> Post(Actor actor, TradeCommand input, CancellationToken cancellationToken = default)
     {

@@ -109,6 +109,8 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
     public DbSet<TillClose> TillCloses => Set<TillClose>();
     public DbSet<TillEntry> TillEntries => Set<TillEntry>();
     public DbSet<IntegritySeal> IntegritySeals => Set<IntegritySeal>();
+    public DbSet<Imports.ImportBatch> ImportBatches => Set<Imports.ImportBatch>();
+    public DbSet<Imports.ImportRow> ImportRows => Set<Imports.ImportRow>();
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
@@ -188,6 +190,9 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
         builder.Entity<BankMatch>().HasIndex(x => x.JournalLineId);
         builder.Entity<BankMatchCancellation>().HasIndex(x => x.MatchId).IsUnique();
         builder.Entity<BankMatchCancellation>().HasOne<BankMatch>().WithMany().HasForeignKey(x => x.MatchId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<Imports.ImportBatch>().HasIndex(x => new { x.Branch, x.Key, x.Status });
+        builder.Entity<Imports.ImportRow>().HasOne<Imports.ImportBatch>().WithMany().HasForeignKey(x => x.BatchId).OnDelete(DeleteBehavior.Cascade);
+        builder.Entity<Imports.ImportRow>().HasIndex(x => new { x.BatchId, x.RowNumber }).IsUnique();
         builder.Entity<IntegritySeal>().HasKey(x => x.Sequence);
         builder.Entity<IntegritySeal>().Property(x => x.Sequence).ValueGeneratedNever();
         builder.Entity<LedgerBudget>().HasOne<LedgerAccount>().WithMany().HasForeignKey(x => x.AccountCode).OnDelete(DeleteBehavior.Restrict);
@@ -206,7 +211,7 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
         foreach (var property in entity.GetProperties())
         {
             if (property.ClrType == typeof(decimal)) { property.SetPrecision(19); property.SetScale(4); }
-            if (property.ClrType == typeof(string) && property.GetMaxLength() is null && property.Name is not "Detail" and not "Payload" and not "Rows") property.SetMaxLength(200);
+            if (property.ClrType == typeof(string) && property.GetMaxLength() is null && property.Name is not "Detail" and not "Payload" and not "Rows" && !property.Name.EndsWith("Json", StringComparison.Ordinal)) property.SetMaxLength(200);
         }
     }
     private void GuardHistory()

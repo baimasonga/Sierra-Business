@@ -1,0 +1,171 @@
+@using Microsoft.AspNetCore.Components.Forms
+@inject IImportService Imports
+@inject IServiceProvider Services
+@inject Microsoft.JSInterop.IJSRuntime JS
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+
+<section class="panel">
+    <h2>1. What are you importing?</h2>
+    <div class="form-grid">
+        <label>Import type<select value="@type" @onchange="ChangeType" disabled="@busy">@foreach (var t in Available) { <option value="@t.Type">@t.Title</option> }</select></label>
+    </div>
+    @if (Current is { } current)
+    {
+        <p>@current.Description</p>
+        <p class="hint">Columns: @string.Join(", ", current.Fields.Select(f => f.Required ? f.Label + " *" : f.Label)). Up to 10,000 rows and 10 MB, saved as .xlsx.</p>
+        <button class="secondary" disabled="@busy" @onclick="DownloadTemplate">Download Excel template</button>
+    }
+</section>
+
+<section class="panel">
+    <h2>2. Choose your workbook</h2>
+    <label>Excel file (.xlsx)<InputFile OnChange="LoadFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled="@busy" /></label>
+    @if (sheets.Count > 0)
+    {
+        <div class="form-grid">
+            <label>Sheet<select value="@sheet" @onchange="ChangeSheet" disabled="@busy">@foreach (var s in sheets) { <option value="@s.Name">@s.Name (@s.Rows rows)</option> }</select></label>
+            @if (IsStock) { <label>Stock as at<input type="date" @bind="asAt" @bind:after="ClearPreview" /></label> }
+            @if (type == ImportType.StockCount) { <label>Count session name<input maxlength="120" @bind="sessionName" @bind:after="ClearPreview" placeholder="Imported count" /></label> }
+        </div>
+    }
+</section>
+
+@if (sheets.Count > 0 && Current is { } fields)
+{
+    <section class="panel">
+        <h2>3. Match the columns</h2>
+        <p class="hint">Columns with matching names are chosen for you. Fields marked * are required.</p>
+        <div class="table-wrap"><table><thead><tr><th>Field</th><th>Column in your sheet</th><th>What to enter</th></tr></thead><tbody>
+        @foreach (var field in fields.Fields)
+        {
+            <tr><td>@field.Label@(field.Required ? " *" : "")</td>
+            <td><select value="@(mapping.GetValueOrDefault(field.Key) ?? "")" @onchange="e => Map(field.Key, e.Value?.ToString())" disabled="@busy"><option value="">— not used —</option>@foreach (var h in Headers) { <option value="@h">@h</option> }</select></td>
+            <td class="hint">@field.Hint</td></tr>
+        }
+        </tbody></table></div>
+        <button class="primary" disabled="@busy" @onclick="Validate">@(busy && validating ? "Checking every row…" : "Check the data")</button>
+    </section>
+}
+
+@if (preview is not null)
+{
+    <section class="panel">
+        <div class="panel-title"><h2>4. Review</h2><span class="pill">@(preview.Errors == 0 ? "Ready to import" : $"{preview.Errors} row(s) to fix")</span></div>
+        @if (preview.AlreadyImported.Length > 0) { <div class="notice">@preview.AlreadyImported</div> }
+        <p>@preview.Total rows · @preview.Valid ready · @preview.Warnings with warnings · @preview.Errors with errors</p>
+        @if (preview.Errors + preview.Warnings > 0)
+        {
+            <p class="hint">Rows with errors must be corrected in your file. The error workbook contains your rows with a "What to fix" column.</p>
+            <button class="secondary" disabled="@busy" @onclick="DownloadErrors">Download error workbook</button>
+            <label class="check"><input type="checkbox" @bind="problemsOnly" /> Show only rows with errors or warnings</label>
+        }
+        <div class="table-wrap"><table><thead><tr><th>Row</th><th>Status</th><th>Data</th><th>Messages</th></tr></thead><tbody>
+        @foreach (var row in VisibleRows)
+        {
+            <tr><td class="numeric">@row.Row</td><td><span class="pill">@row.Status</span></td><td class="code">@string.Join(" · ", row.Values.Where(v => v.Value.Length > 0).Select(v => v.Value))</td><td>@string.Join(" ", row.Messages)</td></tr>
+        }
+        </tbody></table></div>
+        @if (Shown < Filtered.Count()) { <p class="hint">Showing the first @Shown of @Filtered.Count() rows. Download the error workbook to see them all.</p> }
+        <button class="primary" disabled="@(busy || preview.Errors > 0)" @onclick="Commit">@(busy && !validating ? "Importing…" : CommitLabel)</button>
+    </section>
+}
+
+<section class="panel">
+    <h2>Import history</h2>
+    @if (history.Count == 0) { <p class="empty">No imports yet.</p> }
+    else
+    {
+        <div class="table-wrap"><table><thead><tr><th>When (UTC)</th><th>Type</th><th>File</th><th>Status</th><th class="numeric">Rows</th><th>Result</th></tr></thead><tbody>
+        @foreach (var h in history)
+        {
+            <tr><td>@((h.Committed ?? h.Created).ToString("dd MMM yyyy HH:mm"))</td><td>@Title(h.Type)</td><td>@h.FileName</td><td>@(h.Status == "Committed" ? "Imported" : "Checked, not imported")</td><td class="numeric">@h.Rows</td><td>@h.Summary</td></tr>
+        }
+        </tbody></table></div>
+        <p class="hint">Opening stock is posted as Opening stock documents; reverse one under Documents if it was wrong. Imported products can be deactivated under Product settings.</p>
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
+    private ImportType type;
+    private string fileName = "", sheet = "", sessionName = "", error = "", message = "";
+    private byte[]? content;
+    private List<SheetInfo> sheets = [];
+    private Dictionary<string, string> mapping = [];
+    private DateOnly asAt = DateOnly.FromDateTime(DateTime.UtcNow);
+    private ImportPreview? preview;
+    private Guid commitOperation;
+    private List<ImportHistoryView> history = [];
+    private bool busy, validating, problemsOnly;
+    private const int Shown = 300;
+    public bool HasDraft => content is not null;
+    private IEnumerable<ImportTemplate> Available => Imports.Templates().Where(t => t.Permission.Split(',').All(Actor.Permissions.Contains));
+    private ImportTemplate? Current => Available.FirstOrDefault(x => x.Type == type);
+    private bool IsStock => type is ImportType.OpeningStock or ImportType.SerialStock or ImportType.BatchStock;
+    private IReadOnlyList<string> Headers => sheets.FirstOrDefault(x => x.Name == sheet)?.Headers ?? [];
+    private IEnumerable<ImportRowView> Filtered => preview is null ? [] : problemsOnly ? preview.Rows.Where(r => r.Status != "Valid") : preview.Rows;
+    private IEnumerable<ImportRowView> VisibleRows => Filtered.Take(Shown);
+    private string CommitLabel => preview?.AlreadyImported.Length > 0 ? "Confirm (nothing new will be created)" : type == ImportType.StockCount ? $"Create count session for {preview?.Total} rows" : $"Import {preview?.Total} rows";
+    private string Title(ImportType t) => Imports.Templates().FirstOrDefault(x => x.Type == t)?.Title ?? t.ToString();
+
+    protected override async Task OnInitializedAsync()
+    {
+        type = Available.Select(x => x.Type).DefaultIfEmpty(ImportType.Products).First();
+        await Run(async () => history = (await Imports.History()).ToList());
+    }
+    private async Task Run(Func<Task> action)
+    {
+        if (busy) return; busy = true; error = message = "";
+        try { await action(); }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
+        catch (Exception) { error = "The import step could not complete. Check the file and try again; nothing has been imported."; }
+        finally { busy = validating = false; }
+    }
+    private void ClearPreview() { preview = null; }
+    private void ChangeType(ChangeEventArgs e)
+    {
+        if (!Enum.TryParse<ImportType>(e.Value?.ToString(), out var selected)) return;
+        type = selected; preview = null; error = message = "";
+        mapping = sheets.Count > 0 ? Imports.SuggestMapping(type, Headers).ToDictionary() : [];
+    }
+    private void ChangeSheet(ChangeEventArgs e) { sheet = e.Value?.ToString() ?? ""; preview = null; mapping = Imports.SuggestMapping(type, Headers).ToDictionary(); }
+    private void Map(string key, string? header) { if (string.IsNullOrEmpty(header)) mapping.Remove(key); else mapping[key] = header; preview = null; }
+
+    private Task LoadFile(InputFileChangeEventArgs args) => Run(async () =>
+    {
+        preview = null; sheets = []; content = null;
+        if (args.File.Size > 10 * 1024 * 1024) throw new BusinessException("The file is larger than 10 MB. Split it into smaller workbooks.");
+        using var stream = new MemoryStream();
+        await args.File.OpenReadStream(10 * 1024 * 1024).CopyToAsync(stream);
+        fileName = args.File.Name; var bytes = stream.ToArray();
+        sheets = (await Imports.Inspect(fileName, bytes)).ToList();
+        content = bytes;
+        sheet = (sheets.FirstOrDefault(x => x.Name == "Data" && x.Rows > 0) ?? sheets.FirstOrDefault(x => x.Rows > 0) ?? sheets[0]).Name;
+        mapping = Imports.SuggestMapping(type, Headers).ToDictionary();
+    });
+    private Task Validate() => Run(async () =>
+    {
+        validating = true;
+        preview = await Imports.Validate(new(type, fileName, content ?? throw new BusinessException("Choose a file first."), sheet, mapping, IsStock ? asAt : null, sessionName));
+        commitOperation = Guid.NewGuid(); problemsOnly = preview.Errors > 0;
+    });
+    private async Task Commit()
+    {
+        if (preview is null || !await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", $"Import {preview.Total} rows from {fileName}? Posted records can be corrected only by reversal.")) return;
+        await Run(async () =>
+        {
+            var result = await Imports.Commit(new(commitOperation, preview.BatchId));
+            message = result.Summary; preview = null; content = null; sheets = []; fileName = "";
+            history = (await Imports.History()).ToList();
+        });
+    }
+    private Task DownloadTemplate() => Run(async () => message = await Deliver($"Sierra Business - {Current!.Title} template.xlsx", await Imports.Template(type)));
+    private Task DownloadErrors() => Run(async () => message = await Deliver($"{Path.GetFileNameWithoutExtension(fileName)} - rows to fix.xlsx", await Imports.ErrorWorkbook(preview!.BatchId)));
+    private async Task<string> Deliver(string name, byte[] bytes)
+    {
+        if (Services.GetService(typeof(IFileExport)) is IFileExport export) return "Saved to " + await export.Save(name, bytes) + ". Open it in Excel.";
+        await Microsoft.JSInterop.JSRuntimeExtensions.InvokeVoidAsync(JS, "sierraDownload", name, Convert.ToBase64String(bytes));
+        return "Downloaded " + name + ".";
+    }
+}
