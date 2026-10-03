@@ -17,7 +17,10 @@ public sealed class WorkspaceTests
     {
         var component = new Workspace(); var quantity = Guid.NewGuid(); var serial = Guid.NewGuid();
         Set(component, "data", new BusinessSnapshot([new(quantity, "PAPER", "Paper", "Office", "ream", 100, TrackingMode.Quantity), new(serial, "MACHINE", "Machine", "Equipment", "unit", 500, TrackingMode.Serial)], [], [], [], [], 0));
-        Set(component, "page", "New sale"); Set(component, "barcodes", new BarcodeView[] { new(Guid.NewGuid(), quantity, "000123", 6) }); Set(component, "scanCode", "000123");
+        var barcodes = new BarcodeView[] { new(Guid.NewGuid(), quantity, "000123", 6) };
+        // Scan reloads current barcodes from the POS service so retired/changed codes are never used from a stale cache.
+        typeof(Workspace).GetProperty("Pos", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(component, new StubPos(barcodes));
+        Set(component, "page", "New sale"); Set(component, "scanCode", "000123");
         await (Task)Call(component, "Scan")!; var lines = Get<List<TradeLine>>(component, "lines"); Assert.Equal(6, lines.Single().Conversion); Assert.Equal(600, lines.Single().UnitPrice);
         Set(component, "scanCode", "000123"); await (Task)Call(component, "Scan")!; Call(component, "ChangeLinePrice", lines[1], 550m); Assert.Equal(600, lines[0].UnitPrice); Assert.Equal(550, lines[1].UnitPrice);
         Set(component, "scanCode", "MACHINE"); await (Task)Call(component, "Scan")!; Assert.Equal(serial, Get<Guid>(component, "selectedProduct")); Assert.Equal(2, lines.Count);
@@ -100,6 +103,14 @@ public sealed class WorkspaceTests
         public int Calls { get; private set; }
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args) { Calls++; return ValueTask.FromResult((TValue)(object)Accept); }
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, CancellationToken cancellationToken, object?[]? args) => InvokeAsync<TValue>(identifier, args);
+    }
+    private sealed class StubPos(IReadOnlyList<BarcodeView> barcodes) : IPosService
+    {
+        public Task<IReadOnlyList<BarcodeView>> Barcodes() => Task.FromResult(barcodes);
+        public Task<Guid> AddBarcode(BarcodeCommand input) => throw new NotSupportedException();
+        public Task<IReadOnlyList<HeldSaleView>> HeldSales() => throw new NotSupportedException();
+        public Task<Guid> Hold(HoldSaleCommand input) => throw new NotSupportedException();
+        public Task<Guid> Cancel(CancelHeldSaleCommand input) => throw new NotSupportedException();
     }
 }
 
