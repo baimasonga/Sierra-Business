@@ -111,6 +111,10 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
     public DbSet<IntegritySeal> IntegritySeals => Set<IntegritySeal>();
     public DbSet<Imports.ImportBatch> ImportBatches => Set<Imports.ImportBatch>();
     public DbSet<Imports.ImportRow> ImportRows => Set<Imports.ImportRow>();
+    public DbSet<ExchangeRate> ExchangeRates => Set<ExchangeRate>();
+    public DbSet<ForeignBill> ForeignBills => Set<ForeignBill>();
+    public DbSet<ForeignSettlement> ForeignSettlements => Set<ForeignSettlement>();
+    public DbSet<LandedCostAllocation> LandedCostAllocations => Set<LandedCostAllocation>();
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
@@ -190,6 +194,13 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
         builder.Entity<BankMatch>().HasIndex(x => x.JournalLineId);
         builder.Entity<BankMatchCancellation>().HasIndex(x => x.MatchId).IsUnique();
         builder.Entity<BankMatchCancellation>().HasOne<BankMatch>().WithMany().HasForeignKey(x => x.MatchId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<ExchangeRate>().HasIndex(x => new { x.Branch, x.Currency, x.EffectiveFrom }).IsUnique();
+        builder.Entity<ForeignBill>().HasIndex(x => x.DocumentId).IsUnique();
+        builder.Entity<ForeignBill>().HasOne<BusinessDocument>().WithMany().HasForeignKey(x => x.DocumentId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<ForeignSettlement>().HasOne<BusinessDocument>().WithMany().HasForeignKey(x => x.BillId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<ForeignSettlement>().HasOne<BusinessDocument>().WithMany().HasForeignKey(x => x.VoucherId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<LandedCostAllocation>().HasOne<BusinessDocument>().WithMany().HasForeignKey(x => x.DocumentId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<LandedCostAllocation>().HasOne<Movement>().WithMany().HasForeignKey(x => x.ReceiptMovementId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<Imports.ImportBatch>().HasIndex(x => new { x.Branch, x.Key, x.Status });
         builder.Entity<Imports.ImportRow>().HasOne<Imports.ImportBatch>().WithMany().HasForeignKey(x => x.BatchId).OnDelete(DeleteBehavior.Cascade);
         builder.Entity<Imports.ImportRow>().HasIndex(x => new { x.BatchId, x.RowNumber }).IsUnique();

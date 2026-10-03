@@ -1,0 +1,183 @@
+@inject IPurchasingService Purchasing
+@inject IFinanceService Finance
+@inject Microsoft.JSInterop.IJSRuntime JS
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+
+<section class="panel">
+    <h2>Exchange rates</h2>
+    <p class="hint">NLe per one unit of foreign currency. Each goods receipt, landed cost and bill uses the rate in force on its date; earlier documents keep their own rate.</p>
+    @if (CanWrite)
+    {
+        <div class="form-grid">
+            <label>Currency<input maxlength="3" @bind="rateCurrency" placeholder="USD" /></label>
+            <label>Effective from<input type="date" @bind="rateDate" /></label>
+            <label>NLe per 1 unit<input type="number" min="0.0001" step="0.0001" @bind="rateValue" /></label>
+            <label>Source<input maxlength="120" @bind="rateSource" placeholder="Bank of Sierra Leone mid-rate" /></label>
+        </div>
+        <button class="secondary" disabled="@busy" @onclick="SaveRate">Add rate</button>
+    }
+    @if (rates.Count > 0)
+    {
+        <div class="table-wrap"><table><thead><tr><th>Currency</th><th>From</th><th class="numeric">NLe per unit</th><th>Source</th></tr></thead><tbody>
+        @foreach (var r in rates) { <tr><td>@r.Currency</td><td>@r.EffectiveFrom.ToString("dd MMM yyyy")</td><td class="numeric">@r.Rate.ToString("N4")</td><td>@r.Source</td></tr> }
+        </tbody></table></div>
+    }
+</section>
+
+<section class="panel">
+    <h2>Foreign-currency bills</h2>
+    @if (bills.Count == 0) { <p class="empty">No foreign-currency amounts are owed.</p> }
+    else
+    {
+        <div class="table-wrap"><table><thead><tr><th>Bill</th><th>Supplier</th><th>Date</th><th class="numeric">Owed</th><th class="numeric">Carried at (NLe)</th><th></th></tr></thead><tbody>
+        @foreach (var b in bills)
+        {
+            <tr><td class="code">@b.Number</td><td>@b.Party</td><td>@b.Date.ToString("dd MMM yyyy")</td><td class="numeric">@b.Currency @b.SourceOutstanding.ToString("N2")</td><td class="numeric">@b.CarryingOutstanding.ToString("N2") @@ @b.Rate.ToString("N4")</td>
+            <td>@if (CanWrite) { <button class="text-button" disabled="@busy" @onclick="() => ChooseBill(b)">Pay…</button> }</td></tr>
+        }
+        </tbody></table></div>
+    }
+    @if (payBill is not null)
+    {
+        <h3>Pay @payBill.Party · @payBill.Number</h3>
+        <div class="form-grid">
+            <label>Payment date<input type="date" @bind="payDate" /></label>
+            <label>Amount settled (@payBill.Currency)<input type="number" min="0.01" step="0.01" @bind="paySource" /></label>
+            <label>NLe actually paid<input type="number" min="0.01" step="0.01" @bind="payLocal" /></label>
+            <label>Paid from<select @bind="payFunds">@foreach (var a in Funds) { <option value="@a.Code">@a.Code · @a.Name</option> }</select></label>
+            <label>Bank / transfer reference<input maxlength="100" @bind="payReference" /></label>
+        </div>
+        @if (paySource > 0 && payLocal > 0)
+        {
+            var carrying = paySource == payBill.SourceOutstanding ? payBill.CarryingOutstanding : Math.Round(paySource * payBill.Rate, 2, MidpointRounding.AwayFromZero);
+            var difference = payLocal - carrying;
+            <p class="hint">Effective rate @((payLocal / paySource).ToString("N4")). Clears NLe @carrying.ToString("N2") of the bill; @(difference == 0 ? "no exchange difference." : difference > 0 ? $"exchange loss NLe {difference:N2}." : $"exchange gain NLe {-difference:N2}.")</p>
+        }
+        <button class="primary" disabled="@busy" @onclick="Pay">Record payment</button>
+        <button class="text-button" disabled="@busy" @onclick="() => payBill = null">Cancel</button>
+    }
+</section>
+
+@if (CanWrite && Actor.Permissions.Contains("inventory.receive"))
+{
+    <section class="panel">
+        <h2>Landed cost</h2>
+        <p class="hint">Add freight, insurance, clearing, duty and other costs of bringing goods in to the value of the stock received. Costs for units already sold go to cost of sales.</p>
+        <div class="form-grid">
+            <label>Service provider<input maxlength="160" list="lc-parties" @bind="lcParty" /></label>
+            <label>Invoice date<input type="date" @bind="lcDate" @bind:after="ClearPreview" /></label>
+            <label>Provider's invoice number<input maxlength="100" @bind="lcReference" /></label>
+            <label>Currency of the charges<select @bind="lcCurrency" @bind:after="ClearPreview"><option value="">NLe</option>@foreach (var c in Currencies) { <option>@c</option> }</select></label>
+            <label>Settlement<select @bind="lcFunds" @bind:after="ClearPreview"><option value="0">Owed to the provider (bill)</option>@if (lcCurrency.Length == 0) { @foreach (var a in Funds) { <option value="@a.Code">Paid now from @a.Code · @a.Name</option> } }</select></label>
+            <label>Share costs by<select @bind="lcBasis" @bind:after="ClearPreview"><option value="@LandedCostBasis.Value">Value of goods</option><option value="@LandedCostBasis.Quantity">Quantity</option><option value="@LandedCostBasis.Manual">Manual amounts</option></select></label>
+        </div>
+        <h3>Charges</h3>
+        @foreach (var charge in charges)
+        {
+            <div class="form-grid">
+                <label>Type<select @bind="charge.Type" @bind:after="ClearPreview">@foreach (var t in Enum.GetValues<LandedCostCharge>()) { <option value="@t">@ChargeName(t)</option> }</select></label>
+                <label>Amount (@(lcCurrency.Length > 0 ? lcCurrency : "NLe"))<input type="number" min="0.01" step="0.01" @bind="charge.Amount" @bind:after="ClearPreview" /></label>
+                <label>Description<input maxlength="120" @bind="charge.Description" /></label>
+            </div>
+        }
+        <button class="text-button" disabled="@busy" @onclick="AddCharge">+ Add charge</button>
+        @if (charges.Count > 1) { <button class="text-button" disabled="@busy" @onclick="RemoveCharge">Remove last charge</button> }
+
+        <h3>Goods receipts</h3>
+        @if (receipts.Count == 0) { <p class="empty">No goods receipts yet.</p> }
+        else
+        {
+            <div class="table-wrap"><table><thead><tr><th></th><th>Receipt</th><th>Supplier</th><th>Date</th><th class="numeric">Value (NLe)</th><th>Lines</th></tr></thead><tbody>
+            @foreach (var r in receipts.Take(50))
+            {
+                <tr><td><input type="checkbox" checked="@selected.Contains(r.Id)" @onchange="e => Toggle(r.Id, (bool)(e.Value ?? false))" aria-label="Select @r.Number" /></td><td class="code">@r.Number</td><td>@r.Party</td><td>@r.Date.ToString("dd MMM yyyy")</td><td class="numeric">@r.Total.ToString("N2")@(r.Currency != "SLE" ? $" ({r.Currency})" : "")</td><td>@string.Join(", ", r.Lines.Select(l => $"{l.Sku} × {l.Quantity:0.####}"))</td></tr>
+            }
+            </tbody></table></div>
+        }
+        @if (lcBasis == LandedCostBasis.Manual && selected.Count > 0)
+        {
+            <h3>Manual amounts (NLe)</h3>
+            @foreach (var line in receipts.Where(r => selected.Contains(r.Id)).SelectMany(r => r.Lines))
+            {
+                <label>@line.ReceiptNumber · @line.Sku · @line.Quantity.ToString("0.####") @line.Location<input type="number" min="0" step="0.01" value="@(manual.GetValueOrDefault(line.MovementId))" @onchange="e => SetManual(line.MovementId, e.Value?.ToString())" /></label>
+            }
+        }
+        <button class="secondary" disabled="@(busy || selected.Count == 0)" @onclick="Preview">Show allocation</button>
+        @if (preview is not null)
+        {
+            <p>Total NLe @preview.LocalTotal.ToString("N2")@(preview.Rate != 1 ? $" at {preview.Rate:N4} per {lcCurrency}" : "").</p>
+            <div class="table-wrap"><table><thead><tr><th>Product</th><th>Warehouse</th><th class="numeric">Allocated</th><th class="numeric">To stock on hand</th><th class="numeric">To cost of sales (already sold)</th></tr></thead><tbody>
+            @foreach (var line in preview.Lines) { <tr><td>@line.Sku</td><td>@line.Location</td><td class="numeric">@line.Allocated.ToString("N2")</td><td class="numeric">@line.ToInventory.ToString("N2")</td><td class="numeric">@line.ToCostOfSales.ToString("N2")</td></tr> }
+            </tbody></table></div>
+            <button class="primary" disabled="@busy" @onclick="Post">Post landed cost</button>
+        }
+    </section>
+}
+
+@code {
+    [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
+    private sealed class ChargeInput { public LandedCostCharge Type { get; set; } public decimal Amount { get; set; } public string Description { get; set; } = ""; }
+    private List<ExchangeRateView> rates = [];
+    private List<ForeignBillView> bills = [];
+    private List<LandedReceiptView> receipts = [];
+    private IReadOnlyList<LedgerDefinition> accounts = [];
+    private readonly List<ChargeInput> charges = [new()];
+    private readonly HashSet<Guid> selected = [];
+    private readonly Dictionary<Guid, decimal> manual = [];
+    private LandedCostPreview? preview;
+    private ForeignBillView? payBill;
+    private Guid rateOperation = Guid.NewGuid(), payOperation = Guid.NewGuid(), landedOperation = Guid.NewGuid();
+    private string rateCurrency = "USD", rateSource = "", payReference = "", lcParty = "", lcReference = "", lcCurrency = "", error = "", message = "";
+    private decimal rateValue, paySource, payLocal;
+    private int payFunds = 1010, lcFunds;
+    private DateOnly rateDate = DateOnly.FromDateTime(DateTime.UtcNow), payDate = DateOnly.FromDateTime(DateTime.UtcNow), lcDate = DateOnly.FromDateTime(DateTime.UtcNow);
+    private LandedCostBasis lcBasis = LandedCostBasis.Value;
+    private bool busy;
+    private bool CanWrite => Actor.Permissions.Contains("accounting.write");
+    public bool HasDraft => payBill is not null || selected.Count > 0 || charges.Any(x => x.Amount != 0) || rateValue != 0;
+    private IEnumerable<LedgerDefinition> Funds => accounts.Where(x => x.CashOrBank);
+    private IEnumerable<string> Currencies => rates.Select(x => x.Currency).Distinct();
+    private static string ChargeName(LandedCostCharge type) => type switch { LandedCostCharge.Duty => "Customs duty", LandedCostCharge.PortCharges => "Port charges", LandedCostCharge.BankCharges => "Bank charges", LandedCostCharge.LocalTransport => "Local transport", _ => type.ToString() };
+
+    protected override Task OnInitializedAsync() => Run(Load);
+    private async Task Load()
+    {
+        rates = (await Purchasing.Rates()).ToList(); bills = (await Purchasing.ForeignBills()).ToList();
+        if (CanWrite) { receipts = (await Purchasing.Receipts()).ToList(); accounts = (await Finance.Read(DateOnly.FromDateTime(DateTime.UtcNow), DateOnly.FromDateTime(DateTime.UtcNow))).Accounts; }
+    }
+    private async Task Run(Func<Task> action)
+    {
+        if (busy) return; busy = true; error = message = "";
+        try { await action(); }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
+        catch (Exception) { error = "The operation could not complete. Refresh and check Documents before retrying."; }
+        finally { busy = false; }
+    }
+    private void ClearPreview() => preview = null;
+    private void AddCharge() { charges.Add(new()); preview = null; }
+    private void RemoveCharge() { charges.RemoveAt(charges.Count - 1); preview = null; }
+    private void Toggle(Guid id, bool on) { if (on) selected.Add(id); else selected.Remove(id); preview = null; }
+    private void SetManual(Guid movement, string? value) { manual[movement] = decimal.TryParse(value, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 0; preview = null; }
+    private void ChooseBill(ForeignBillView bill) { payBill = bill; paySource = bill.SourceOutstanding; payLocal = 0; payReference = ""; payOperation = Guid.NewGuid(); error = message = ""; }
+    private LandedCostCommand Command() => new(landedOperation, lcParty, lcDate, selected.ToList(), charges.Select(c => new LandedCostChargeLine(c.Type, c.Amount, c.Description)).ToList(), lcBasis,
+        lcFunds == 0 ? null : lcFunds, lcCurrency.Length == 0 ? null : lcCurrency, lcReference, lcBasis == LandedCostBasis.Manual ? manual.Where(x => x.Value > 0).ToDictionary() : null);
+
+    private Task SaveRate() => Run(async () => { await Purchasing.SetRate(new(rateOperation, rateCurrency, rateDate, rateValue, rateSource)); rateOperation = Guid.NewGuid(); rateValue = 0; rateSource = ""; await Load(); message = "Exchange rate saved."; });
+    private Task Pay() => Run(async () =>
+    {
+        await Purchasing.PayForeign(new(payOperation, payBill!.BillId, payDate, paySource, payLocal, payFunds, payReference));
+        payBill = null; await Load(); message = "Payment recorded. Any exchange difference is posted to Exchange gains or Exchange losses.";
+    });
+    private Task Preview() => Run(async () => preview = await Purchasing.PreviewLandedCost(Command()));
+    private async Task Post()
+    {
+        if (preview is null || !await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", $"Post landed cost of NLe {preview.LocalTotal:N2}? It can be corrected only by reversal.")) return;
+        await Run(async () =>
+        {
+            await Purchasing.PostLandedCost(Command());
+            landedOperation = Guid.NewGuid(); preview = null; selected.Clear(); manual.Clear(); charges.Clear(); charges.Add(new()); lcParty = lcReference = "";
+            await Load(); message = "Landed cost posted. Stock values and cost of sales are updated.";
+        });
+    }
+}

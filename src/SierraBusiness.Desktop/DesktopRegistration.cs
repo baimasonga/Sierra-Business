@@ -47,6 +47,7 @@ public static class DesktopRegistration
         services.AddTransient<IIntegrityService, IntegrityService>();
         services.AddTransient<IImportService, SierraBusiness.Infrastructure.Imports.ImportService>();
         services.AddSingleton<IFileExport, DesktopFileExport>();
+        services.AddTransient<IPurchasingService, PurchasingService>();
         services.AddTransient<DocumentCaptureService>();
         services.AddTransient<IDocumentStorage, SqliteDocumentStorage>();
         services.AddTransient<BusinessService>();

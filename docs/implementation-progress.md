@@ -88,3 +88,7 @@ Source baseline 0.10.1 (2026-10-03) fixed a stale barcode-scan test and added 13
 ## Excel import — 0.11.0
 
 Specification Skill 10 implemented: six generated templates, Open XML parsing with safety limits, column mapping, row-level validation using the manual-entry rules, staging (ImportBatch/ImportRow), error workbooks, retry-safe commits with in-transaction re-validation, and import history. Opening stock posts per-warehouse documents against the new 3200 Opening balance equity account. This meets the roadmap Phase 2 exit condition. 174 tests pass. See [Excel import notes](excel-import-0.11.0.md). Next: foreign-currency purchasing, landed cost and supplier-invoice matching (Skill 13, Phase 4).
+
+## Purchasing, imports and landed cost — 0.12.0
+
+Specification Skill 13 implemented for roadmap Phase 4: effective-dated exchange rates, foreign-currency goods receipts carried in NLe with foreign bills, foreign supplier payments with realised exchange gains/losses (4200/5300), and landed-cost documents allocated by value, quantity or manual amounts, split between stock on hand and cost of sales, payable or paid. Purchase returns of foreign receipts use the receipt's rate. 185 tests pass. See [purchasing notes](purchasing-imports-0.12.0.md). Remaining in Skill 13: separate supplier-invoice matching (GRNI/price variance) and foreign-currency purchase orders. Next per roadmap: Phase 6 institutional/equipment workflows or Phase 5 synchronization.

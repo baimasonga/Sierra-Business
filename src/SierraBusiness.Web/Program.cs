@@ -42,6 +42,7 @@ builder.Services.AddScoped<IUserAdministration, UserAdministration>();
 builder.Services.AddScoped<IPeriodService, PeriodService>();
 builder.Services.AddScoped<IIntegrityService, IntegrityService>();
 builder.Services.AddScoped<IImportService, SierraBusiness.Infrastructure.Imports.ImportService>();
+builder.Services.AddScoped<IPurchasingService, PurchasingService>();
 builder.Services.AddProblemDetails();
 builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database");
 var app = builder.Build();

@@ -802,6 +802,110 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.ToTable("Employees");
                 });
 
+            modelBuilder.Entity("SierraBusiness.Infrastructure.ExchangeRate", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Branch")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateOnly>("EffectiveFrom")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("Rate")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Branch", "Currency", "EffectiveFrom")
+                        .IsUnique();
+
+                    b.ToTable("ExchangeRates");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.ForeignBill", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("DocumentId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("Rate")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("SourceAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DocumentId")
+                        .IsUnique();
+
+                    b.ToTable("ForeignBills");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.ForeignSettlement", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("BillId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("CarryingAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("PaidAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("SourceAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("VoucherId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BillId");
+
+                    b.HasIndex("VoucherId");
+
+                    b.ToTable("ForeignSettlements");
+                });
+
             modelBuilder.Entity("SierraBusiness.Infrastructure.HeldSale", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1102,6 +1206,46 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.ToTable("Journal");
                 });
 
+            modelBuilder.Entity("SierraBusiness.Infrastructure.LandedCostAllocation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Basis")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<decimal>("CostOfSalesAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("DocumentId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("InventoryAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ReceiptMovementId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("Weight")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DocumentId");
+
+                    b.HasIndex("ReceiptMovementId");
+
+                    b.ToTable("LandedCostAllocations");
+                });
+
             modelBuilder.Entity("SierraBusiness.Infrastructure.LedgerAccount", b =>
                 {
                     b.Property<int>("Id")
@@ -1272,6 +1416,14 @@ namespace SierraBusiness.Infrastructure.Migrations
                         },
                         new
                         {
+                            Id = 4200,
+                            CashOrBank = false,
+                            Control = true,
+                            Group = 3,
+                            Name = "Exchange gains"
+                        },
+                        new
+                        {
                             Id = 5000,
                             CashOrBank = false,
                             Control = true,
@@ -1293,6 +1445,14 @@ namespace SierraBusiness.Infrastructure.Migrations
                             Control = false,
                             Group = 4,
                             Name = "Wages and salaries"
+                        },
+                        new
+                        {
+                            Id = 5300,
+                            CashOrBank = false,
+                            Control = true,
+                            Group = 4,
+                            Name = "Exchange losses"
                         });
                 });
 
@@ -2264,6 +2424,30 @@ namespace SierraBusiness.Infrastructure.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("SierraBusiness.Infrastructure.ForeignBill", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.BusinessDocument", null)
+                        .WithMany()
+                        .HasForeignKey("DocumentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.ForeignSettlement", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.BusinessDocument", null)
+                        .WithMany()
+                        .HasForeignKey("BillId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SierraBusiness.Infrastructure.BusinessDocument", null)
+                        .WithMany()
+                        .HasForeignKey("VoucherId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("SierraBusiness.Infrastructure.HeldSaleEnd", b =>
                 {
                     b.HasOne("SierraBusiness.Infrastructure.BusinessDocument", null)
@@ -2292,6 +2476,21 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.HasOne("SierraBusiness.Infrastructure.BusinessDocument", null)
                         .WithMany()
                         .HasForeignKey("DocumentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.LandedCostAllocation", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.BusinessDocument", null)
+                        .WithMany()
+                        .HasForeignKey("DocumentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SierraBusiness.Infrastructure.Movement", null)
+                        .WithMany()
+                        .HasForeignKey("ReceiptMovementId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

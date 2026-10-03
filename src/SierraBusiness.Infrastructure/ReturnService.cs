@@ -55,6 +55,7 @@ public sealed class ReturnService(IDbContextFactory<BusinessDb> factory, IActorS
         if (!Enum.IsDefined(input.Disposition) || (!sale && input.Disposition == ReturnDisposition.CustomerCredit || sale && input.Disposition == ReturnDisposition.SupplierCredit)) throw new BusinessException("Select a valid return settlement.");
         if (sale && input.Disposition == ReturnDisposition.CustomerCredit && original.Party.Equals("Walk-in", StringComparison.OrdinalIgnoreCase)) throw new BusinessException("Customer credit requires a named customer.");
         using var detail = JsonDocument.Parse(original.Detail); var originalRequest = detail.RootElement.GetProperty("Request").Deserialize<TradeCommand>()!;
+        var exchangeRate = detail.RootElement.TryGetProperty("ExchangeRate", out var storedRate) && storedRate.ValueKind == JsonValueKind.Number ? storedRate.GetDecimal() : 1m;
         var taxTotal = detail.RootElement.GetProperty("Tax").GetDecimal(); var originalNet = detail.RootElement.GetProperty("Net").GetDecimal();
         var movements = await db.Movements.Where(x => x.Branch == actor.Branch).ToListAsync();
         var source = movements.Where(x => x.DocumentId == (originalRequest.DeliveryId ?? original.Id)).ToList();
@@ -72,7 +73,7 @@ public sealed class ReturnService(IDbContextFactory<BusinessDb> factory, IActorS
             var earlier = returned.Where(x => x.ProductId == line.ProductId && x.Serial == serial && x.Batch == batch && x.Expiry == line.Expiry).ToList();
             if (line.Quantity > originalQuantity - earlier.Sum(x => x.Quantity)) throw new BusinessException("Return exceeds the unreturned quantity.");
             var requestLines = originalRequest.Lines.Where(x => x.ProductId == line.ProductId && Normalize(x.Serial) == serial && Normalize(x.Batch) == batch && x.Expiry == line.Expiry).ToList();
-            var lineNet = requestLines.Sum(x => AccountingEngine.Money(x.Quantity * x.UnitPrice));
+            var lineNet = requestLines.Sum(x => AccountingEngine.Money(AccountingEngine.Money(x.Quantity * x.UnitPrice) * exchangeRate)); // foreign receipts are valued in NLe at their own rate
             // Cumulative rounding ensures repeated partial returns equal the original full amount.
             var cumulative = earlier.Sum(x => x.Quantity) + line.Quantity;
             var refundNet = AccountingEngine.Money(lineNet * cumulative / originalQuantity) - earlier.Sum(x => x.Net);
