@@ -1,0 +1,28 @@
+@inject IReturnService Returns
+@inject Microsoft.JSInterop.IJSRuntime JS
+<section class="panel"><h2>Sales and purchase returns</h2><p>Return part or all of an original invoice or goods receipt. Credit/debit values use the original prices and tax; purchase stock leaves at its current carrying cost with any difference posted to operating expenses.</p><label>Original document<select @bind:get="documentId" @bind:set="ChangeDocument"><option value="@Guid.Empty">Select an unreversed document</option>@foreach (var d in documents) { <option value="@d.Id">@(d.Sale ? "Sale" : "Purchase receipt") · @d.Number[^8..] · @d.Party</option> }</select></label></section>
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+@if (selected is not null)
+{
+    <section class="panel"><h2>@selected.Party · @selected.Location</h2><p class="code">@selected.Number</p><table><thead><tr><th>Product / identity</th><th>Original</th><th>Returned</th><th>Return now</th></tr></thead><tbody>@foreach (var row in rows) { <tr><td>@row.Line.Name<br />@row.Line.Serial @row.Line.Batch @row.Line.Expiry</td><td>@row.Line.OriginalQuantity</td><td>@row.Line.ReturnedQuantity</td><td><input type="number" aria-label="Return quantity for @row.Line.Name" min="0" step="0.0001" @bind="row.Quantity" /></td></tr> }</tbody></table>@if (selected.Sale) { <label>Paid portion of return<select @bind="disposition"><option value="@ReturnDisposition.CashRefund">Refund cash</option><option value="@ReturnDisposition.BankRefund">Refund bank</option><option value="@ReturnDisposition.CustomerCredit">Keep as customer credit</option></select></label><p>Any unpaid balance is credited first. The remainder is refunded or held as customer credit.</p> } else { <label>Paid portion of return<select @bind="disposition"><option value="@ReturnDisposition.SupplierCredit">Keep as supplier credit</option><option value="@ReturnDisposition.CashRefund">Cash refund received</option><option value="@ReturnDisposition.BankRefund">Bank refund received</option></select></label><p>The unpaid supplier balance is reduced first. Record a refund only when received.</p> }<label>Reason<input @bind="reason" maxlength="160" /></label><button class="primary" disabled="@(busy || !Actor.Permissions.Contains("documents.reverse"))" @onclick="Post">Post @(selected.Sale ? "sales credit note" : "purchase debit note")</button><p class="hint">Uses the original warehouse. Paid sales support partial refunds or customer credits. Paid purchases support received refunds or supplier credit. A return does not reopen an order's fulfilled quantity.</p></section>
+}
+@code {
+    [Parameter] public Actor Actor { get; set; } = default!;
+    private IReadOnlyList<ReturnableDocument> documents = [];
+    private ReturnableDocument? selected;
+    private readonly List<Row> rows = [];
+    private Guid documentId, operation = Guid.NewGuid();
+    private string error = "", message = "", reason = "";
+    private bool busy; private ReturnDisposition disposition = ReturnDisposition.CashRefund;
+    public bool HasDraft => rows.Any(x => x.Quantity > 0) || reason.Length > 0;
+    protected override Task OnInitializedAsync() => Run(async () => documents = await Returns.Read());
+    private async Task ChangeDocument(Guid value) { if (busy || (HasDraft && !await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", "Discard this unposted return?"))) return; documentId = value; Select(); }
+    private void Select() { selected = documents.SingleOrDefault(x => x.Id == documentId); disposition = selected?.Sale == true ? ReturnDisposition.CashRefund : ReturnDisposition.SupplierCredit; rows.Clear(); if (selected != null) rows.AddRange(selected.Lines.Select(x => new Row { Line = x })); reason = ""; operation = Guid.NewGuid(); }
+    private async Task Run(Func<Task> action) { if (busy) return; busy = true; error = message = ""; try { await action(); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; } catch (Exception) { error = "Return could not complete. Check the document register before retrying."; } finally { busy = false; } }
+    private Task Post() => Run(async () => { await Returns.Post(new(operation, documentId, reason, rows.Where(x => x.Quantity != 0).Select(x => new ReturnLine(x.Line.ProductId, x.Line.Serial, x.Line.Batch, x.Line.Expiry, x.Quantity)).ToList(), disposition)); documents = await Returns.Read(); Select(); message = "Return, stock, journal and audit records posted together."; });
+    private sealed class Row { public ReturnableLine Line { get; set; } = null!; public decimal Quantity { get; set; } }
+}
+
+
+

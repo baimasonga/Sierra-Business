@@ -1,0 +1,12 @@
+.capture-workspace { max-width: 1600px; margin: auto; }
+.capture-layout { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 24px; align-items: start; }
+.capture-buttons { display: flex; gap: 12px; flex-wrap: wrap; margin: 16px 0; }
+.capture-entry { display: block; width: 100%; text-align: left; border: 1px solid #dbe2dc; background: #fff; padding: 14px; border-radius: 8px; margin: 8px 0; overflow-wrap: anywhere; }
+.capture-entry small { display: block; margin-top: 6px; color: #56665c; }
+.capture-entry.selected { border-color: #163e34; background: #edf5ee; }
+.capture-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.capture-workspace textarea { display: block; width: 100%; box-sizing: border-box; padding: 12px; border: 1px solid #cbd5cd; border-radius: 6px; font: inherit; resize: vertical; margin: 8px 0 18px; }
+.capture-workspace details { margin: 18px 0; } .capture-workspace summary { cursor: pointer; font-weight: 600; padding: 8px 0; }
+.capture-text, .capture-history { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.6 Consolas, monospace; }
+.capture-history { max-height: 400px; overflow: auto; }
+@media (max-width: 850px) { .capture-layout { grid-template-columns: 1fr; } .capture-inbox { max-height: 280px; overflow: auto; } }

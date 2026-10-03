@@ -1,0 +1,12 @@
+@inject Microsoft.JSInterop.IJSRuntime JS
+<button type="button" class="secondary" @onclick="Print">Print / save PDF</button>
+@if (error.Length > 0) { <p role="alert">@error</p> }
+@code {
+    [Parameter, EditorRequired] public string Target { get; set; } = "";
+    private string error = "";
+    private async Task Print()
+    {
+        try { error = ""; await Microsoft.JSInterop.JSRuntimeExtensions.InvokeVoidAsync(JS, "sierraPrint", Target); }
+        catch (Microsoft.JSInterop.JSException) { error = "The print window could not open. Please try again."; }
+    }
+}

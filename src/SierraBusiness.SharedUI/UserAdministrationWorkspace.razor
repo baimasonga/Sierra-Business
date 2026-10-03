@@ -1,0 +1,25 @@
+@inject IUserAdministration Administration
+@inject Microsoft.JSInterop.IJSRuntime JS
+<section class="panel"><h2>Users and permissions</h2><p>Accounts are local to this company and branch. Permission changes, disablement and password resets invalidate existing sessions.</p></section>
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+<section class="panel"><table><thead><tr><th>Email</th><th>Status</th><th>Permissions</th><th></th></tr></thead><tbody>@foreach (var user in users) { <tr><td>@user.Email</td><td>@(user.Locked ? "Locked / disabled" : "Enabled")</td><td>@string.Join(", ", user.Permissions)</td><td><button class="text-button" disabled="@busy" @onclick="() => Edit(user)">Manage</button></td></tr> }</tbody></table></section>
+<section class="panel"><h2>@(userId is null ? "Create user" : "Manage " + email)</h2><div class="form-grid"><label>Email<input type="email" disabled="@(userId is not null)" @bind="email" maxlength="160" /></label><label>Permission preset<select @bind="preset" @bind:after="ApplyPreset">@foreach (var name in BusinessPermissions.Presets.Keys) { <option>@name</option> }</select></label>@if (userId is null) { <label>Initial password<input type="password" autocomplete="new-password" @bind="password" /></label> } else { <label class="check"><input type="checkbox" @bind="disabled" /> Disable account</label> }</div><p class="hint">Passwords require at least 12 characters, uppercase/lowercase, a number and a symbol. Presets select permissions below; you can adjust them.</p><div class="form-grid">@foreach (var permission in BusinessPermissions.All) { <label class="check"><input type="checkbox" checked="@permissions.Contains(permission)" @onchange="args => Toggle(permission, args)" /> @permission</label> }</div><button class="primary" disabled="@busy" @onclick="Save">@(userId is null ? "Create account" : "Save permissions")</button> <button class="secondary" disabled="@busy" @onclick="New">New account</button>
+@if (userId is not null) { <details><summary>Reset password</summary><label>New password<input type="password" autocomplete="new-password" @bind="password" /></label><button class="danger" disabled="@busy" @onclick="ResetPassword">Reset password and invalidate sessions</button></details> }</section>
+@code {
+    private IReadOnlyList<UserView> users = [];
+    private readonly HashSet<string> permissions = new(BusinessPermissions.Presets["Read only"]);
+    private string? userId;
+    private string email = "", password = "", preset = "Read only", error = "", message = "";
+    private bool busy, disabled;
+    public bool HasDraft => email.Length > 0 || password.Length > 0;
+    protected override Task OnInitializedAsync() => Run(async () => users = await Administration.Read());
+    private async Task Run(Func<Task> action) { if (busy) return; busy = true; error = message = ""; try { await action(); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; } catch (Exception) { error = "The account operation failed. Refresh or sign in again before retrying."; } finally { busy = false; password = ""; } }
+    private void ApplyPreset() { permissions.Clear(); permissions.UnionWith(BusinessPermissions.Presets[preset]); }
+    private void Toggle(string permission, ChangeEventArgs args) { if (args.Value is true) permissions.Add(permission); else permissions.Remove(permission); }
+    private async Task Edit(UserView user) { if (HasDraft && !await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", "Discard unsaved account details?")) return; userId = user.Id; email = user.Email; disabled = user.Locked; permissions.Clear(); permissions.UnionWith(user.Permissions); password = ""; }
+    private void Clear() { userId = null; email = password = ""; disabled = false; preset = "Read only"; ApplyPreset(); }
+    private async Task New() { if (!HasDraft || await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", "Discard unsaved account details?")) Clear(); }
+    private Task Save() => Run(async () => { if (userId is null) await Administration.Create(new(email, password, permissions.ToList())); else await Administration.Update(new(userId, disabled, permissions.ToList())); Clear(); users = await Administration.Read(); message = "Account saved. Changed sessions must sign in again."; });
+    private Task ResetPassword() => Run(async () => { await Administration.ResetPassword(userId!, password); password = ""; message = "Password reset. The user must sign in again."; });
+}

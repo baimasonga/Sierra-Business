@@ -1,0 +1,3 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup><ProjectReference Include="../SierraBusiness.Infrastructure/SierraBusiness.Infrastructure.csproj" /></ItemGroup>
+</Project>

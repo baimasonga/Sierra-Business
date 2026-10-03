@@ -1,0 +1,36 @@
+Offline document recognition
+
+Tesseract .NET wrapper 5.2.0, Copyright 2012-2022 Charles Weld, Apache-2.0.
+https://github.com/charlesw/tesseract
+Includes InteropDotNet, Copyright 2014 Andrey Akinshin, MIT license.
+
+Tesseract OCR 5.2.0, Apache-2.0.
+https://github.com/tesseract-ocr/tesseract
+English tessdata_fast model from release tag 4.1.0, Apache-2.0.
+https://github.com/tesseract-ocr/tessdata_fast/tree/4.1.0
+eng.traineddata SHA256:
+7D4322BD2A7749724879683FC3912CB542F19906C83BCC1A52132556427170B2
+
+Leptonica 1.82.0 is distributed under its included BSD-style license.
+https://github.com/DanBloomberg/leptonica/tree/1.82.0
+
+Microsoft Visual C++ runtime libraries are included from the Visual Studio
+redistributable directory under Microsoft's redistribution terms. This app-local
+deployment requires Sierra Business updates to service these bundled libraries.
+
+InteropDotNet MIT license:
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.

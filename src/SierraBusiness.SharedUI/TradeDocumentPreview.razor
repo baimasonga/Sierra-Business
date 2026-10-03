@@ -1,0 +1,47 @@
+@using System.Text.Json
+@if (request is not null)
+{
+    @if (Document.Kind == DocumentKind.Sale && Document.Settlement != "Credit") { <label class="check"><input type="checkbox" @bind="receipt" /> Print payment receipt</label> }
+    <PrintButton Target="trade-print" />
+    <section id="trade-print" class="panel">
+        <h1>@(CompanyName.Length == 0 ? "Sierra Business" : CompanyName)</h1>
+        <p>@Branch · Currency: NLe (SLE)</p>
+        <h2>@(Document.Kind == DocumentKind.Sale ? (receipt ? "Payment receipt" : "Sales invoice") : "Goods receipt")</h2>
+        <p class="code">@Document.Number</p>
+        @if (Reversed) { <p><strong>REVERSED — retained for audit</strong></p> }
+        <p>Date: @Document.BusinessDate · @Document.Party<br />Settlement: @Document.Settlement · Warehouse: @request.Location</p>
+        <table><thead><tr><th>Item</th><th>Quantity</th><th>Unit price</th><th class="numeric">Amount / NLe</th></tr></thead><tbody>
+        @foreach (var line in request.Lines)
+        {
+            var product = Products.SingleOrDefault(x => x.Id == line.ProductId);
+            <tr><td>@(product?.Name ?? line.ProductId.ToString())<br /><small>@product?.Sku @line.Serial @line.Batch @line.Expiry</small></td><td>@line.Quantity × @line.Conversion @product?.Unit</td><td>@line.UnitPrice.ToString("N2")</td><td class="numeric">@AccountingEngine.Money(line.Quantity * line.UnitPrice).ToString("N2")</td></tr>
+        }
+        </tbody><tfoot><tr><th colspan="3">Net</th><td class="numeric">@net.ToString("N2")</td></tr><tr><th colspan="3">Sales tax (@rate.ToString("P2"))</th><td class="numeric">@tax.ToString("N2")</td></tr><tr><th colspan="3">Total</th><td class="numeric">@Document.Total.ToString("N2")</td></tr></tfoot></table>
+        @if (!string.IsNullOrWhiteSpace(request.PaymentReference)) { <p>Payment reference: @request.PaymentReference · @request.Bank</p> }
+        <p>@(Document.Settlement == "Credit" || Document.Kind == DocumentKind.Receipt ? "Account document; not proof of payment." : "Settlement recorded as " + Document.Settlement + ".")</p>
+    </section>
+}
+@code {
+    [Parameter, EditorRequired] public DocumentView Document { get; set; } = default!;
+    [Parameter] public IReadOnlyList<ProductView> Products { get; set; } = [];
+    [Parameter] public string CompanyName { get; set; } = "";
+    [Parameter] public string Branch { get; set; } = "";
+    [Parameter] public bool Reversed { get; set; }
+    private bool receipt;
+    private TradeCommand? request;
+    private decimal net, tax, rate;
+    protected override void OnParametersSet()
+    {
+        request = null; receipt = false;
+        if (Document.Kind is not DocumentKind.Sale and not DocumentKind.Receipt) return;
+        try {
+            using var json = JsonDocument.Parse(Document.Detail);
+            request = json.RootElement.GetProperty("Request").Deserialize<TradeCommand>();
+            net = json.RootElement.GetProperty("Net").GetDecimal();
+            tax = json.RootElement.GetProperty("Tax").GetDecimal();
+            rate = json.RootElement.GetProperty("TaxRate").GetDecimal();
+        } catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException) { request = null; }
+    }
+}
+
+

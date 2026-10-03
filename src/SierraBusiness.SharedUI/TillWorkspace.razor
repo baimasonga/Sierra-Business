@@ -1,0 +1,25 @@
+@inject IBankingService Banking
+<section class="panel"><h2>Cashier tills</h2><p>Open a shift before taking cash. Every posting to the selected ledger while it is open is included, including other staff activity. Closing records the physical count and difference without automatically posting an expense.</p></section>
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+<section class="panel"><h2>Open till</h2><div class="form-grid"><label>Cash ledger code<input type="number" @bind="account" /><span class="hint">Standard cash sales use 1000. Use another code only for a configured cash ledger.</span></label><label>Counted opening cash (NLe)<input type="number" min="0" step="0.01" @bind="opening" /></label></div><button class="primary" disabled="@busy" @onclick="Open">Open shift</button><button disabled="@busy" @onclick="Refresh">Refresh activity</button></section>
+@foreach (var till in tills.OrderByDescending(x => x.Opened))
+{
+<section class="panel"><h2>@till.Cashier · ledger @till.AccountCode · @(till.Closed is null ? "Open" : "Closed")</h2><p>Opened @till.Opened.ToString("g") UTC · opening count @till.OpeningCount.ToString("N2") · opening book @till.OpeningBook.ToString("N2") · opening difference @((till.OpeningCount - till.OpeningBook).ToString("N2"))</p><p>Movement @till.Movement.ToString("N2") · expected cash <strong>@till.Expected.ToString("N2")</strong></p><table><thead><tr><th>Document</th><th>Staff</th><th>Received</th><th>Paid</th></tr></thead><tbody>@foreach (var movement in till.Movements) { <tr><td class="code">@movement.Number</td><td>@movement.Actor</td><td>@movement.Received.ToString("N2")</td><td>@movement.Paid.ToString("N2")</td></tr> }</tbody></table>
+@if (till.Closed is null) { <label>Closing physical count<input type="number" min="0" step="0.01" @bind="counts[till.Id]" /></label><label>Closing note / explanation of difference<input maxlength="160" @bind="notes[till.Id]" /></label><button class="primary" disabled="@busy" @onclick="() => Close(till)">Record count and close</button> }
+else { <p>Closed @till.Closed.Value.ToString("g") UTC · counted @till.Counted?.ToString("N2") · overage / (shortage) <strong>@till.Variance?.ToString("N2")</strong></p><p>@till.Note</p> }
+</section>
+}
+@code {
+    private IReadOnlyList<TillView> tills = [];
+    private readonly Dictionary<Guid, decimal> counts = [];
+    private readonly Dictionary<Guid, string> notes = [];
+    private int account = 1000; private decimal opening; private bool busy; private string error = "", message = "";
+    public bool HasDraft => opening != 0 || notes.Values.Any(x => x.Length > 0) || counts.Values.Any(x => x != 0);
+    protected override Task OnInitializedAsync() => Refresh();
+    private async Task Load() { tills = await Banking.Tills(); foreach (var t in tills) { counts.TryAdd(t.Id, 0); notes.TryAdd(t.Id, ""); } }
+    private Task Refresh() => Run(Load);
+    private async Task Run(Func<Task> action) { if (busy) return; busy = true; error = message = ""; try { await action(); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; } catch { error = "Could not complete. Refresh and check shift history before retrying."; } finally { busy = false; } }
+    private Task Open() => Run(async () => { await Banking.OpenTill(new(Guid.NewGuid(), account, opening)); opening = 0; await Load(); message = "Till opened."; });
+    private Task Close(TillView till) => Run(async () => { await Banking.CloseTill(new(Guid.NewGuid(), till.Id, till.Movement, counts[till.Id], notes[till.Id])); counts[till.Id] = 0; notes[till.Id] = ""; await Load(); message = "Closing count recorded. Investigate any difference before making an accounting adjustment."; });
+}

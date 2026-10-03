@@ -1,0 +1,29 @@
+@inject IPartyService Parties
+@inject Microsoft.JSInterop.IJSRuntime JS
+<section class="panel"><div class="panel-title"><h2>Customers and suppliers</h2><button class="secondary" disabled="@busy" @onclick="Refresh">Refresh</button></div><label>Search<input @bind="search" @bind:event="oninput" /></label><div class="table-wrap"><table><thead><tr><th>Code / name</th><th>Type</th><th>Contact</th><th>Terms</th><th>Credit limit / NLe</th><th>Credit hold</th><th></th></tr></thead><tbody>@foreach (var p in parties.Where(x => (x.Code + x.Name + x.Contact).Contains(search, StringComparison.OrdinalIgnoreCase))) { <tr><td>@p.Code · @p.Name</td><td>@p.Type</td><td>@p.Contact<br />@p.Phone<br />@p.Email</td><td>@p.PaymentDays days</td><td>@p.CreditLimit.ToString("N2")</td><td>@(p.CreditHold ? "On hold" : "No")</td><td>@if (CanWrite) { <button class="text-button" disabled="@busy" @onclick="() => Edit(p)">Edit</button> }</td></tr> }</tbody></table></div></section>
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+@if (CanWrite)
+{
+    <section class="panel"><h2>@(id is null ? "Create customer / supplier" : "Edit customer / supplier")</h2><div class="form-grid"><label>Code<input @bind="code" maxlength="40" /></label><label>Name<input @bind="name" maxlength="160" /></label><label>Type<select @bind="type">@foreach (var t in Enum.GetValues<PartyType>()) { <option>@t</option> }</select></label><label>Contact person<input @bind="contact" maxlength="160" /></label><label>Phone<input @bind="phone" maxlength="60" /></label><label>Email<input type="email" @bind="email" maxlength="160" /></label><label>Address<input @bind="address" maxlength="200" /></label><label>Payment term in days<input type="number" min="0" max="3650" @bind="days" /></label><label>Customer credit limit (0 = no new credit)<input type="number" min="0" step="0.01" @bind="creditLimit" /></label><label class="check"><input type="checkbox" @bind="hold" /> Credit hold</label></div><button class="primary" disabled="@busy" @onclick="Save">Save party</button> <button class="secondary" disabled="@busy" @onclick="New">New party</button><p class="hint">Use this exact party name when trading; the saved master supplies default payment terms and enforces its credit limit/hold. Legacy unregistered party names are still supported and do not have master credit controls. A party with posted history cannot be renamed.</p></section>
+}
+@code {
+    [Parameter] public Actor Actor { get; set; } = default!;
+    private IReadOnlyList<PartyView> parties = [];
+    private bool busy, hold;
+    private Guid? id;
+    private Guid operation = Guid.NewGuid();
+    private int version, days;
+    private decimal creditLimit;
+    private PartyType type;
+    private string code = "", name = "", contact = "", phone = "", email = "", address = "", search = "", error = "", message = "";
+    private bool CanWrite => Actor.Permissions.Contains("catalogue.write");
+    public bool HasDraft => code.Length > 0 || name.Length > 0 || contact.Length > 0 || phone.Length > 0 || email.Length > 0 || address.Length > 0;
+    protected override Task OnInitializedAsync() => Refresh();
+    private Task Refresh() => Run(async () => parties = await Parties.Read());
+    private async Task Run(Func<Task> action) { if (busy) return; busy = true; error = message = ""; try { await action(); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; } catch (Exception) { error = "The party could not be saved. Refresh before retrying."; } finally { busy = false; } }
+    private async Task Edit(PartyView p) { if (HasDraft && !await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", "Discard unsaved party details?")) return; id = p.Id; version = p.Version; code = p.Code; name = p.Name; type = p.Type; contact = p.Contact; phone = p.Phone; email = p.Email; address = p.Address; days = p.PaymentDays; creditLimit = p.CreditLimit; hold = p.CreditHold; operation = Guid.NewGuid(); }
+    private void Clear() { id = null; version = days = 0; code = name = contact = phone = email = address = ""; creditLimit = 0; hold = false; operation = Guid.NewGuid(); }
+    private async Task New() { if (!HasDraft || await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", "Discard unsaved party details?")) Clear(); }
+    private Task Save() => Run(async () => { await Parties.Save(new(operation, id, version, code, name, type, contact, phone, email, address, days, creditLimit, hold)); Clear(); parties = await Parties.Read(); message = "Party saved with payment terms and credit controls."; });
+}

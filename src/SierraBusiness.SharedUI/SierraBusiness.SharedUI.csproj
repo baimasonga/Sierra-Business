@@ -1,0 +1,3 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor"><ItemGroup><FrameworkReference Include="Microsoft.AspNetCore.App" /><ProjectReference Include="../SierraBusiness.Application/SierraBusiness.Application.csproj" /></ItemGroup><ItemGroup>
+  <PackageReference Include="ZXing.Net" />
+</ItemGroup></Project>

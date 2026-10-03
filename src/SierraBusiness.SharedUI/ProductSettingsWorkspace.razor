@@ -1,0 +1,41 @@
+@inject IInventoryManagement Management
+@inject IInventoryService Inventory
+@inject IPartyService Parties
+<section class="panel"><h2>Product settings and replenishment</h2><p>Each variant has its own SKU and stock balance. Use family, attributes and compatibility to describe related products. Prices remain negotiated at sale.</p>
+<label>Find product<input @bind="search" @bind:event="oninput" placeholder="SKU or name" /></label>
+<label>Product<select @bind="product" @bind:after="Select"><option value="@Guid.Empty">Choose product</option>@foreach (var p in Products.Where(x => (x.Sku + " " + x.Name).Contains(search, StringComparison.OrdinalIgnoreCase))) { <option value="@p.Id">@p.Sku · @p.Name</option> }</select></label></section>
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+@if (product != Guid.Empty)
+{
+<section class="panel"><h2>Catalogue details</h2><fieldset disabled="@(busy || !CanWrite)"><div class="form-grid">
+<label>Status<select @bind="active"><option value="true">Active</option><option value="false">Inactive — prevent new trading</option></select></label>
+<label>Brand<input @bind="brand" maxlength="100" /></label><label>Model<input @bind="model" maxlength="100" /></label><label>Variant family<input @bind="family" maxlength="100" placeholder="e.g. Classic shirt" /></label>
+<label>Variant attributes<textarea @bind="attributes" maxlength="2000" placeholder="Size: M; Colour: Blue"></textarea></label><label>Compatibility<textarea @bind="compatibility" maxlength="2000" placeholder="Compatible equipment, models and part numbers"></textarea></label>
+<label>Purchase unit<input @bind="purchaseUnit" maxlength="100" placeholder="Leave blank for base unit" /></label><label>Base units per purchase unit<input type="number" min="0.0001" step="0.0001" @bind="purchaseConversion" /></label>
+<label>Sales unit<input @bind="salesUnit" maxlength="100" placeholder="Leave blank for base unit" /></label><label>Base units per sales unit<input type="number" min="0.0001" step="0.0001" @bind="salesConversion" /></label>
+</div><button class="primary" @onclick="Save">Save product settings</button></fieldset></section>
+<section class="panel"><h2>Reorder settings</h2><fieldset disabled="@(busy || !CanWrite)"><div class="form-grid"><label>Warehouse<select @bind="location" @bind:after="SelectRule">@foreach (var l in locations) { <option value="@l.Code">@l.Name</option> }</select></label><label>Reorder at or below<input type="number" min="0" step="0.0001" @bind="minimum" /></label><label>Replenish to<input type="number" min="0" step="0.0001" @bind="target" /></label><label>Preferred supplier<select @bind="supplier"><option value="@Guid.Empty">No preference</option>@foreach (var s in suppliers) { <option value="@s.Id">@s.Name</option> }</select></label></div><button class="secondary" @onclick="SaveRule">Save reorder rule</button></fieldset></section>
+}
+<section class="panel"><div class="panel-title"><h2>Replenishment review</h2><button class="secondary" disabled="@busy" @onclick="Refresh">Refresh</button></div><p class="hint">Suggestions exclude expired and reserved stock. Review outstanding purchase orders before ordering; quantities below are in base units.</p>
+<table><thead><tr><th>Product / warehouse</th><th>On hand</th><th>Reserved</th><th>Expired</th><th>Suggested</th><th>Supplier</th></tr></thead><tbody>@foreach (var r in rules.OrderByDescending(x => x.SuggestedQuantity)) { <tr><td>@Products.Single(x => x.Id == r.Rule.ProductId).Sku · @r.Rule.Location</td><td>@r.OnHand</td><td>@r.Reserved</td><td>@r.Expired</td><td>@r.SuggestedQuantity</td><td>@suppliers.FirstOrDefault(x => x.Id == r.Rule.SupplierId)?.Name</td></tr> }</tbody></table>@if (rules.Count == 0) { <p>No reorder rules yet. Select a product to create one.</p> }</section>
+@code {
+ [Parameter] public Actor Actor { get; set; } = default!;
+ [Parameter] public IReadOnlyList<ProductView> Products { get; set; } = [];
+ private IReadOnlyList<ProductSettings> settings = []; private IReadOnlyList<ReorderView> rules = []; private IReadOnlyList<LocationView> locations = []; private IReadOnlyList<PartyView> suppliers = [];
+ private Guid product, supplier; private int version, ruleVersion; private bool active = true, busy;
+ private string brand = "", model = "", family = "", attributes = "", compatibility = "", purchaseUnit = "", salesUnit = "", location = "MAIN", search = "", error = "", message = "";
+ private decimal purchaseConversion = 1, salesConversion = 1, minimum, target;
+ private ProductSettings Current => new(product, version, active, brand, model, family, attributes, compatibility, purchaseUnit, purchaseConversion, salesUnit, salesConversion);
+ private ReorderRule Rule => new(product, location, ruleVersion, minimum, target, supplier == Guid.Empty ? null : supplier);
+ private ProductSettings? original; private ReorderRule? originalRule;
+ public bool HasDraft => product != Guid.Empty && (Current != original || Rule != originalRule);
+ private bool CanWrite => Actor.Permissions.Contains("catalogue.write");
+ protected override Task OnInitializedAsync() => Refresh();
+ private void Select() { var s = settings.FirstOrDefault(x => x.ProductId == product) ?? new(product); version = s.Version; active = s.Active; brand = s.Brand; model = s.Model; family = s.Family; attributes = s.Attributes; compatibility = s.Compatibility; purchaseUnit = s.PurchaseUnit; purchaseConversion = s.PurchaseConversion; salesUnit = s.SalesUnit; salesConversion = s.SalesConversion; original = Current; SelectRule(); }
+ private void SelectRule() { var r = rules.FirstOrDefault(x => x.Rule.ProductId == product && x.Rule.Location == location)?.Rule ?? new(product, location); ruleVersion = r.Version; minimum = r.Minimum; target = r.Target; supplier = r.SupplierId ?? Guid.Empty; originalRule = Rule; }
+ private Task Refresh() => Run(async () => { settings = await Management.Products(); rules = await Management.Reorder(); locations = await Inventory.Locations(); suppliers = (await Parties.Read()).Where(x => x.Type is PartyType.Supplier or PartyType.Both).ToArray(); Select(); });
+ private Task Save() => Run(async () => { await Management.SaveProduct(new(Guid.NewGuid(), Current)); settings = await Management.Products(); original = Current with { Version = ++version }; message = "Product settings saved."; });
+ private Task SaveRule() => Run(async () => { await Management.SaveReorder(new(Guid.NewGuid(), Rule)); rules = await Management.Reorder(); SelectRule(); message = "Reorder rule saved."; });
+ private async Task Run(Func<Task> action) { if (busy) return; busy = true; error = message = ""; try { await action(); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; } catch { error = "Could not complete. Refresh before retrying."; } finally { busy = false; } }
+}

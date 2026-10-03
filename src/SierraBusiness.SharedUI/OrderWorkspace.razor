@@ -1,0 +1,73 @@
+@inject IOrderService Orders
+@inject IBusinessService Business
+@inject IInventoryService Inventory
+@inject Microsoft.JSInterop.IJSRuntime JS
+<section class="panel"><div class="panel-title"><h2>Quotations and orders</h2><button class="secondary" disabled="@busy" @onclick="Refresh">Refresh</button></div><p>Record quantities and agreed prices, convert a quotation, then receive or invoice an order in parts. Reserve goods in Sales controls. Invoice immediately, or issue a delivery note first and invoice it later from Sales controls.</p><div class="form-grid"><label>Search party / reference<input @bind="search" @bind:event="oninput" /></label><label>Type<select @bind="filter"><option>All</option>@foreach (var type in Enum.GetValues<OrderType>()) { <option>@type</option> }</select></label></div></section>
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+<section class="panel"><div class="table-wrap"><table><thead><tr><th>Type / reference</th><th>Party</th><th>Due / expiry</th><th>Status</th><th>Net value</th><th></th></tr></thead><tbody>@foreach (var order in orders.Where(x => (filter == "All" || x.Type.ToString() == filter) && (x.Party + x.Reference + x.Number).Contains(search, StringComparison.OrdinalIgnoreCase))) { <tr><td>@order.Type · @order.Number[^8..]<br />@order.Reference</td><td>@order.Party</td><td>@order.DueDate</td><td>@Status(order)</td><td>@order.Lines.Sum(x => AccountingEngine.Money(x.Quantity * x.UnitPrice)).ToString("N2")</td><td><button class="text-button" disabled="@busy" @onclick="() => Select(order)">Open</button></td></tr> }</tbody></table></div></section>
+@if (selected is not null)
+{
+    <label class="check"><input type="checkbox" @bind="proforma" /> Print as proforma (sales only)</label><PrintButton Target="order-print" /><section class="panel"><div id="order-print"><h1>@(CompanyName.Length == 0 ? "Sierra Business" : CompanyName)</h1><p>@Actor.Branch · NLe (SLE)</p><h2>@(proforma && selected.Type != OrderType.PurchaseOrder ? "Proforma invoice" : selected.Type.ToString()) · @selected.Party</h2><p>Date: @selected.Date · Valid / due until: @selected.DueDate · Reference: @selected.Reference</p><p class="code">@selected.Number</p><table><thead><tr><th>Item</th><th>Ordered</th><th>Fulfilled</th><th>Remaining</th><th>Unit price</th></tr></thead><tbody>@foreach (var l in selected.Lines) { <tr><td>@l.Sku · @l.Name</td><td>@l.Quantity @l.Unit</td><td>@l.Fulfilled</td><td>@(l.Quantity - l.Fulfilled)</td><td>@l.UnitPrice.ToString("N2")</td></tr> }</tbody></table>
+    <p>Net value / NLe: @selected.Lines.Sum(x => AccountingEngine.Money(x.Quantity * x.UnitPrice)).ToString("N2"). Tax is calculated on invoicing. This document is not a tax invoice or proof of payment.</p></div>
+    @if (!selected.Closed && selected.ConvertedTo is null && CanWrite(selected.Type))
+    {
+        @if (selected.Type == OrderType.Quotation) { <button class="primary" disabled="@busy" @onclick="Convert">Convert to sales order</button> }
+        else
+        {
+            <h2>Post a partial @(selected.Type == OrderType.PurchaseOrder ? "goods receipt" : "sales invoice")</h2><p class="hint">Enter a quantity on each line to post now; zero skips it. Split serialized units into separate postings. Prices retain the order agreement; configured sales tax is calculated when posted.</p>
+            <div class="form-grid"><label>Business date<input type="date" @bind="postDate" /></label><label>Bill due date<input type="date" @bind="billDueDate" /></label><label>Warehouse<select @bind="location">@foreach (var l in locations) { <option value="@l.Code">@l.Name</option> }</select></label>@if (selected.Type == OrderType.SalesOrder) { <label class="check"><input type="checkbox" @bind="deliverFirst" /> Deliver now; invoice later</label><label>Settlement<select @bind="settlement"><option>Credit</option><option>Cash</option></select></label> }</div>
+            @foreach (var f in fulfillment) { <div class="form-grid"><label>@f.Line.Name · remaining @(f.Line.Quantity - f.Line.Fulfilled)<input type="number" step="0.0001" min="0" @bind="f.Quantity" /></label><label>Serial<input @bind="f.Serial" /></label><label>Batch<input @bind="f.Batch" /></label><label>Expiry<input type="date" @bind="f.Expiry" /></label></div> }
+            <button class="primary" disabled="@busy" @onclick="Fulfill">Post selected quantities</button>
+        }
+        <details><summary>Close the remaining order / quotation</summary><label>Reason<input @bind="closeReason" maxlength="160" /></label><button class="danger" disabled="@busy" @onclick="Close">Close remainder</button><p class="hint">Already posted invoices and receipts remain unchanged.</p></details>
+    }
+    </section>
+}
+<section class="panel"><h2>Create quotation or order</h2><div class="form-grid"><label>Type<select @bind="type">@foreach (var t in Enum.GetValues<OrderType>().Where(CanWrite)) { <option>@t</option> }</select></label><label>Customer / supplier<input @bind="party" maxlength="160" /></label><label>Date<input type="date" @bind="date" /></label><label>Due date / quotation expiry<input type="date" @bind="dueDate" /></label><label>Customer / supplier reference<input @bind="reference" maxlength="160" /></label></div><div class="form-grid"><label>Product<select @bind="productId"><option value="@Guid.Empty">Select product</option>@foreach (var p in products) { <option value="@p.Id">@p.Sku · @p.Name (@p.Unit)</option> }</select></label><label>Quantity in base units<input type="number" min="0.0001" step="0.0001" @bind="quantity" /></label><label>Agreed price per base unit (NLe)<input type="number" min="0.0001" step="0.0001" @bind="price" /></label></div><button class="secondary" disabled="@busy" @onclick="AddLine">Add line</button><table><thead><tr><th>Product</th><th>Quantity</th><th>Unit price</th><th></th></tr></thead><tbody>@foreach (var l in lines) { <tr><td>@products.Single(x => x.Id == l.ProductId).Name</td><td>@l.Quantity</td><td>@l.UnitPrice.ToString("N2")</td><td><button class="text-button" disabled="@busy" @onclick="() => lines.Remove(l)">Remove</button></td></tr> }</tbody></table><button class="primary" disabled="@(busy || !CanWrite(type) || lines.Count == 0)" @onclick="Create">Save @type</button></section>
+@code {
+    [Parameter] public string CompanyName { get; set; } = "";
+    [Parameter] public Actor Actor { get; set; } = default!;
+    private IReadOnlyList<OrderView> orders = [];
+    private IReadOnlyList<ProductView> products = [];
+    private IReadOnlyList<LocationView> locations = [];
+    private string location = "MAIN";
+    private OrderView? selected;
+    private readonly List<OrderLineInput> lines = [];
+    private readonly List<FulfillmentEntry> fulfillment = [];
+    private bool busy, deliverFirst, proforma;
+    private string party = "", reference = "", error = "", message = "", search = "", filter = "All", closeReason = "", settlement = "Credit";
+    private OrderType type;
+    private DateOnly date = DateOnly.FromDateTime(DateTime.UtcNow), dueDate = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30), postDate = DateOnly.FromDateTime(DateTime.UtcNow), billDueDate = DateOnly.FromDateTime(DateTime.UtcNow);
+    private decimal quantity = 1, price;
+    private Guid productId, operation = Guid.NewGuid(), postOperation = Guid.NewGuid();
+    public bool HasDraft => lines.Count > 0 || party.Length > 0 || reference.Length > 0 || fulfillment.Any(x => x.Quantity != 0 || x.Serial.Length > 0 || x.Batch.Length > 0 || x.Expiry != null);
+    private bool CanWrite(OrderType value) => Actor.Permissions.Contains(value == OrderType.PurchaseOrder ? "inventory.receive" : "sales.create");
+    private static string Status(OrderView o) => o.Closed ? "Closed" : o.ConvertedTo != null ? "Converted" : o.Type == OrderType.Quotation ? "Quotation" : o.Lines.All(x => x.Fulfilled == x.Quantity) ? "Fulfilled" : o.Lines.Any(x => x.Fulfilled > 0) ? "Part fulfilled" : "Open";
+    protected override Task OnInitializedAsync() { type = CanWrite(OrderType.Quotation) ? OrderType.Quotation : OrderType.PurchaseOrder; return Refresh(); }
+    private async Task Reload() { orders = await Orders.Read(); products = (await Business.Read(Actor)).Products; locations = await Inventory.Locations(); if (selected != null) selected = orders.Single(x => x.Id == selected.Id); }
+    private Task Refresh() => Run(Reload);
+    private async Task Run(Func<Task> action) { if (busy) return; busy = true; error = message = ""; try { await action(); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; } catch (Exception) { error = "The operation could not complete. Refresh and check order history before retrying."; } finally { busy = false; } }
+    private void AddLine() { if (productId == Guid.Empty || lines.Any(x => x.ProductId == productId)) { error = "Select a product not already on this order."; return; } lines.Add(new(productId, quantity, price)); productId = Guid.Empty; quantity = 1; price = 0; }
+    private async Task Select(OrderView order)
+    {
+        if (fulfillment.Any(x => x.Quantity > 0) && !await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", "Discard unposted fulfillment quantities?")) return;
+        LoadOrder(order);
+    }
+    private void LoadOrder(OrderView order) { selected = order; fulfillment.Clear(); fulfillment.AddRange(order.Lines.Where(x => x.Quantity > x.Fulfilled).Select(x => new FulfillmentEntry { Line = x })); closeReason = ""; postOperation = Guid.NewGuid(); }
+    private Task Create() => Run(async () => { var id = await Orders.Create(new(operation, type, party, date, dueDate, reference, lines.ToList())); operation = Guid.NewGuid(); lines.Clear(); party = reference = ""; await Reload(); LoadOrder(orders.Single(x => x.Id == id)); message = "Saved without stock or accounting movements."; });
+    private Task Convert() => Run(async () => { var q = selected!; var id = await Orders.Create(new(Guid.NewGuid(), OrderType.SalesOrder, q.Party, DateOnly.FromDateTime(DateTime.UtcNow), q.DueDate, q.Reference, q.Lines.Select(x => new OrderLineInput(x.ProductId, x.Quantity, x.UnitPrice)).ToList(), q.Id)); await Reload(); LoadOrder(orders.Single(x => x.Id == id)); message = "Quotation converted to a sales order."; });
+    private Task Close() => Run(async () => { await Orders.Close(new(Guid.NewGuid(), selected!.Id, closeReason)); await Reload(); LoadOrder(selected); message = "Remaining order closed. Posted transactions retained."; });
+    private Task Fulfill() => Run(async () =>
+    {
+        var order = selected!; var sale = order.Type == OrderType.SalesOrder;
+        var posting = fulfillment.Where(x => x.Quantity != 0).Select(x => new TradeLine(x.Line.ProductId, x.Quantity, x.Line.UnitPrice, 1, x.Serial, x.Batch, x.Expiry)).ToList();
+        await Business.Post(Actor, new(postOperation, sale ? (deliverFirst ? DocumentKind.Delivery : DocumentKind.Sale) : DocumentKind.Receipt, order.Party, postDate, posting, sale && !deliverFirst && settlement == "Cash" ? PaymentMethod.Cash : null, DueDate: billDueDate, OrderId: order.Id, Location: location));
+        await Reload(); LoadOrder(selected!); message = "Order quantities, stock, accounting and audit committed together. Open Accounting to settle credit bills.";
+    });
+    private sealed class FulfillmentEntry { public OrderLineView Line { get; set; } = null!; public decimal Quantity { get; set; } public string Serial { get; set; } = ""; public string Batch { get; set; } = ""; public DateOnly? Expiry { get; set; } }
+}
+
+
+
+

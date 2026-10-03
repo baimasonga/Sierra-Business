@@ -1,0 +1,43 @@
+@using System.Text.Json
+@if (supported)
+{
+    <PrintButton Target="business-output" />
+    <section class="panel" id="business-output"><h1>@(CompanyName.Length == 0 ? "Sierra Business" : CompanyName)</h1><p>@Branch · NLe (SLE)</p><h2>@Title</h2><p class="code">@Document.Number</p><p>Date: @Document.BusinessDate<br />Customer / supplier: @Document.Party</p>
+    @if (Reversed) { <p><strong>REVERSED — retained for audit</strong></p> }
+    @if (delivery is not null)
+    {
+        <p>Warehouse: @delivery.Location</p><table><thead><tr><th>SKU / item</th><th>Serial / batch / expiry</th><th>Quantity</th></tr></thead><tbody>@foreach (var l in delivery.Lines) { var p = Products.SingleOrDefault(x => x.Id == l.ProductId); <tr><td>@p?.Sku · @p?.Name</td><td>@l.Serial @l.Batch @l.Expiry</td><td>@(l.Quantity * l.Conversion) @p?.Unit</td></tr> }</tbody></table><p>Goods delivered; not a tax invoice or proof of payment.</p><p>Received by: ____________________ Signature: ____________________</p>
+    }
+    else
+    {
+        @if (returned is not null) { <p>Original document: @(Documents.SingleOrDefault(x => x.Id == returned.OriginalDocumentId)?.Number ?? returned.OriginalDocumentId.ToString())</p><p>Reason: @returned.Reason</p><table><thead><tr><th>Item</th><th>Tracking identity</th><th>Quantity returned</th></tr></thead><tbody>@foreach (var l in returned.Lines) { var p = Products.SingleOrDefault(x => x.Id == l.ProductId); <tr><td>@p?.Sku · @p?.Name</td><td>@l.Serial @l.Batch @l.Expiry</td><td>@l.Quantity @p?.Unit</td></tr> }</tbody></table> }
+        <p><strong>Total / NLe: @Math.Abs(Document.Total).ToString("N2")</strong></p><p>Settlement: @Document.Settlement</p>
+        @if (net is not null) { <p>Net: @net.Value.ToString("N2") · Tax: @tax?.ToString("N2") · Bill credit: @billCredit?.ToString("N2") · Refund/held credit: @remainder?.ToString("N2")</p> }
+        @if (use is not null) { <p>Reason: @use.Reason</p><p>@(use.InvoiceId is null ? (Document.Kind == DocumentKind.SupplierCreditUse ? "Supplier refund received." : "Customer credit refunded.") : "Applied to invoice " + use.InvoiceId + "; no cash payment.")</p> }
+    }
+    </section>
+}
+@code {
+    [Parameter, EditorRequired] public DocumentView Document { get; set; } = default!;
+    [Parameter] public IReadOnlyList<DocumentView> Documents { get; set; } = [];
+    [Parameter] public IReadOnlyList<ProductView> Products { get; set; } = [];
+    [Parameter] public string CompanyName { get; set; } = "";
+    [Parameter] public string Branch { get; set; } = "";
+    [Parameter] public bool Reversed { get; set; }
+    private TradeCommand? delivery; private ReturnCommand? returned; private UseCreditCommand? use; private decimal? net, tax, billCredit, remainder; private bool supported;
+    private string Title => Document.Kind switch { DocumentKind.Delivery => "Delivery note", DocumentKind.SalesReturn => "Sales credit note", DocumentKind.PurchaseReturn => "Purchase debit note", DocumentKind.MoneyReceipt => "Payment receipt", DocumentKind.Payment => "Payment voucher", DocumentKind.ChequeReceipt => "Cheque receipt", DocumentKind.ChequeMovement => "Cheque action record", DocumentKind.ChequeBounce => "Bounced cheque receivable", DocumentKind.SupplierCreditUse => use?.InvoiceId is null ? "Supplier refund received" : "Supplier credit allocation", DocumentKind.CustomerCreditUse => use?.InvoiceId is null ? "Customer refund receipt" : "Customer credit allocation", _ => "Business document" };
+    protected override void OnParametersSet()
+    {
+        delivery = null; returned = null; use = null; net = tax = billCredit = remainder = null;
+        supported = Document.Kind is DocumentKind.Delivery or DocumentKind.SalesReturn or DocumentKind.PurchaseReturn or DocumentKind.MoneyReceipt or DocumentKind.Payment or DocumentKind.CustomerCreditUse or DocumentKind.SupplierCreditUse or DocumentKind.ChequeReceipt or DocumentKind.ChequeMovement or DocumentKind.ChequeBounce;
+        if (!supported) return;
+        try { using var json = JsonDocument.Parse(Document.Detail); var root = json.RootElement;
+            if (Document.Kind == DocumentKind.Delivery) delivery = root.GetProperty("Request").Deserialize<TradeCommand>();
+            if (Document.Kind is DocumentKind.SalesReturn or DocumentKind.PurchaseReturn) { returned = root.GetProperty("Request").Deserialize<ReturnCommand>(); net = Amount(root, "Net"); tax = Amount(root, "Tax"); billCredit = Amount(root, "BillCredit"); remainder = Amount(root, "RefundOrCredit"); }
+            if (Document.Kind is DocumentKind.CustomerCreditUse or DocumentKind.SupplierCreditUse) use = root.Deserialize<UseCreditCommand>();
+        } catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException) { supported = false; }
+    }
+    private static decimal? Amount(JsonElement root, string name) => root.TryGetProperty(name, out var value) && value.TryGetDecimal(out var amount) ? amount : null;
+}
+
+

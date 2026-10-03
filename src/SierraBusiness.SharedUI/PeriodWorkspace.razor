@@ -1,0 +1,23 @@
+@inject IPeriodService Periods
+@inject Microsoft.JSInterop.IJSRuntime JS
+<section class="panel"><h2>Accounting periods and sales tax</h2><p>Currently closed through: <strong>@status?.ClosedThrough</strong>. Posted documents retain their original tax rate and amount.</p></section>
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+@if (Actor.Permissions.Contains("accounting.write"))
+{
+    <section class="panel"><h2>Close an accounting period</h2><p>Make and verify a backup first. Closing prevents new postings on or before the selected date. This release does not provide period reopening.</p><div class="form-grid"><label>Close through<input type="date" @bind="through" /></label><label>Reason<input @bind="reason" maxlength="160" /></label></div><button class="danger" disabled="@busy" @onclick="Close">Close period</button></section>
+    <section class="panel"><h2>Set an effective-dated sales tax rate</h2><p class="hint">Enter a rate verified for your business. This is a configurable sales tax calculation, not a statutory filing or compliance certification. The effective date must be later than all existing document dates.</p><div class="form-grid"><label>Effective from<input type="date" @bind="effective" /></label><label>Rate (0.15 means 15%)<input type="number" min="0" max="1" step="0.0001" @bind="rate" /></label><label>Description<input @bind="description" maxlength="160" /></label></div><button class="primary" disabled="@busy" @onclick="SetTax">Save tax rate</button></section>
+}
+<section class="panel"><h2>Tax rate history</h2><table><thead><tr><th>Effective from</th><th>Rate</th><th>Description</th></tr></thead><tbody>@foreach (var r in status?.TaxRates ?? []) { <tr><td>@(r.From == DateOnly.MinValue ? "Fallback" : r.From.ToString())</td><td>@r.Rate.ToString("P2")</td><td>@r.Description</td></tr> }</tbody></table></section>
+@code {
+    [Parameter] public Actor Actor { get; set; } = default!;
+    private PeriodStatus? status;
+    private DateOnly through = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-1), effective = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(1);
+    private decimal rate;
+    private string reason = "", description = "", error = "", message = "";
+    private bool busy;
+    protected override Task OnInitializedAsync() => Run(async () => status = await Periods.Read());
+    private async Task Run(Func<Task> action) { if (busy) return; busy = true; error = message = ""; try { await action(); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; } catch (Exception) { error = "The setting could not be saved. Refresh before retrying."; } finally { busy = false; } }
+    private async Task Close() { if (await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", $"Close all accounting dates through {through}? This cannot be reopened in this release. Confirm only after verifying your backup.")) await Run(async () => { await Periods.Close(new(Guid.NewGuid(), through, reason)); status = await Periods.Read(); message = "Period closed."; }); }
+    private Task SetTax() => Run(async () => { await Periods.SetTax(new(Guid.NewGuid(), effective, rate, description)); status = await Periods.Read(); message = "Tax rate saved. Previously posted documents are unchanged."; });
+}

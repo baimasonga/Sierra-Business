@@ -1,0 +1,29 @@
+@inject IInventoryManagement Management
+<section class="panel"><div class="panel-title"><h2>Serial and batch registers</h2><button class="secondary" disabled="@busy" @onclick="Refresh">Refresh</button></div><label>Find SKU, serial or batch<input @bind="search" @bind:event="oninput" /></label><label>Register<select @bind="tab"><option>Serials</option><option>Batches</option></select></label></section>
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+@if (tab == "Serials") {
+<section class="panel"><h2>Serial lifecycle</h2><p>In-service units remain valued inventory and cannot be sold, reserved, transferred or counted until released. Use an approved shortage count to retire a unit.</p>
+@if (CanService) { <label>Service or release reason<input @bind="reason" maxlength="160" /></label> }
+<table><thead><tr><th>Product / serial</th><th>Warehouse</th><th>Status</th><th>Value</th><th>Action</th></tr></thead><tbody>@foreach (var s in serials.Where(x => Matches(x.ProductId, x.Serial))) { <tr><td>@Sku(s.ProductId) · @s.Serial</td><td>@s.Location</td><td>@s.Status</td><td>@s.Value.ToString("N2")</td><td>@if (CanService && s.Status is "InStock" or "Returned" or "Transferred" or "InService") { <button class="secondary" disabled="@busy" @onclick="() => Service(s)">@(s.Status == "InService" ? "Release from service" : "Place in service")</button> }</td></tr> }</tbody></table></section>
+} else {
+<section class="panel"><h2>Batch and expiry register</h2><p>Lots are listed in earliest-expiry order. Expired stock remains in valuation until disposed through a count adjustment.</p><table><thead><tr><th>Product / lot</th><th>Warehouse</th><th>Received</th><th>Manufactured</th><th>Expiry</th><th>Quantity / reserved</th><th>Value</th><th>Action</th></tr></thead><tbody>@foreach (var b in batches.Where(x => Matches(x.Metadata.ProductId, x.Metadata.Batch))) { <tr><td>@Sku(b.Metadata.ProductId) · @b.Metadata.Batch</td><td>@b.Location</td><td>@b.FirstReceived</td><td>@b.Metadata.Manufactured</td><td>@b.Metadata.Expiry @(b.Expired ? "Expired" : "")</td><td>@b.Quantity / @b.Reserved</td><td>@b.Value.ToString("N2")</td><td><button class="secondary" @onclick="() => Edit(b.Metadata)">Details</button></td></tr> }</tbody></table></section>
+@if (editing is not null) { <section class="panel"><h2>Batch @editing.Batch</h2><fieldset disabled="@(busy || !Actor.Permissions.Contains("inventory.receive"))"><div class="form-grid"><label>Manufactured on<input type="date" @bind="manufactured" /></label><label>Supplier lot reference<input @bind="supplierLot" maxlength="100" /></label><label>Notes<textarea @bind="notes" maxlength="2000"></textarea></label></div><button class="primary" @onclick="Save">Save batch metadata</button></fieldset><button class="secondary" @onclick="() => editing = null">Close details</button></section> }
+}
+@code {
+ [Parameter] public Actor Actor { get; set; } = default!;
+ [Parameter] public IReadOnlyList<ProductView> Products { get; set; } = [];
+ private IReadOnlyList<SerialRegisterView> serials = []; private IReadOnlyList<BatchRegisterView> batches = []; private BatchMetadata? editing;
+ private string search = "", tab = "Serials", reason = "", supplierLot = "", notes = "", error = "", message = ""; private DateOnly? manufactured; private bool busy;
+ public bool HasDraft => editing is not null && (editing.Manufactured != manufactured || editing.SupplierLot != supplierLot || editing.Notes != notes) || reason.Length > 0;
+ private bool CanService => Actor.Permissions.Contains("inventory.receive") && Actor.Permissions.Contains("documents.reverse");
+ private string Sku(Guid id) => Products.FirstOrDefault(x => x.Id == id)?.Sku ?? "";
+ private bool Matches(Guid id, string identity) => (Sku(id) + " " + identity).Contains(search, StringComparison.OrdinalIgnoreCase);
+ protected override Task OnInitializedAsync() => Refresh();
+ private async Task Reload() { serials = await Management.Serials(); batches = await Management.Batches(); }
+ private Task Refresh() => Run(Reload);
+ private void Edit(BatchMetadata b) { editing = b; manufactured = b.Manufactured; supplierLot = b.SupplierLot; notes = b.Notes; }
+ private Task Save() => Run(async () => { await Management.SaveBatch(new(Guid.NewGuid(), editing! with { Manufactured = manufactured, SupplierLot = supplierLot, Notes = notes })); editing = null; await Reload(); message = "Batch metadata saved."; });
+ private Task Service(SerialRegisterView s) => Run(async () => { await Management.SetSerialService(new(Guid.NewGuid(), s.ProductId, s.Serial, s.Status != "InService", s.ServiceVersion, reason)); reason = ""; await Reload(); message = "Serial service state updated."; });
+ private async Task Run(Func<Task> action) { if (busy) return; busy = true; error = message = ""; try { await action(); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; } catch { error = "Could not complete. Refresh before retrying."; } finally { busy = false; } }
+}

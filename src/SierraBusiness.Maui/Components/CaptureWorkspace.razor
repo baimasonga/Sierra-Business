@@ -1,0 +1,137 @@
+@using System.Text.Json
+@using SierraBusiness.Maui
+@implements IDisposable
+@inject DocumentCaptureService Capture
+@inject IOfflineDocumentReader Reader
+@inject OnlineCaptureAssistant Online
+@inject Microsoft.JSInterop.IJSRuntime JS
+
+<main class="capture-workspace">
+    <header><button class="secondary" disabled="@busy" @onclick="Back">← Business workspace</button><span class="pill">Offline capture</span></header>
+    <div class="content">
+        <div class="heading"><div><p class="eyebrow">DOCUMENT INBOX</p><h1>Scan &amp; capture</h1><p class="subheading">Receipts, invoices, proformas and tenders. Read, check, then save.</p></div></div>
+        @if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+        @if (notice.Length > 0) { <div class="notice" role="status">@notice</div> }
+        <section class="panel">
+            <div class="capture-buttons"><button class="primary" disabled="@busy" @onclick="() => Import(false)">Import PDF or image</button><button class="secondary" disabled="@busy" @onclick="() => Import(true)">Scan one page</button>@if (busy) { <button class="secondary" @onclick="Cancel">Cancel processing</button> }</div>
+            <p class="hint">English print · PDF, PNG, JPEG, BMP or TIFF · up to 20 MiB and 100 pages. For a multi-page scanner job, save a PDF using your scanner software, then import it.</p>
+            @if (busy) { <p role="status" aria-live="polite">@progress</p> }
+        </section>
+        <div class="capture-layout">
+            <section class="panel capture-inbox"><h2>Saved captures</h2>
+                @if (documents.Count == 0) { <p class="empty">Import your first document. Its original and review history will stay on this computer.</p> }
+                @foreach (var doc in documents) { <button class="capture-entry @(review?.Source.Id == doc.Id ? "selected" : "")" disabled="@busy" @onclick="() => Select(doc.Id)"><strong>@doc.FileName</strong><small>@doc.Created.ToLocalTime().ToString("dd MMM yyyy HH:mm")</small></button> }
+            </section>
+            <div>
+            @if (review is not null)
+            {
+                <section class="panel"><div class="panel-title"><h2>@review.Source.FileName</h2><span class="pill">@review.Action</span></div>
+                    <p class="hint">@review.Pages page(s) · OCR reading score @review.Confidence.ToString("P0"). This score measures text recognition, not the correctness of the fields below.</p>
+                    <button class="secondary" disabled="@busy" @onclick="OpenOriginal">Open original for comparison</button>
+                </section>
+                <fieldset disabled="@busy" class="capture-fields">
+                <section class="panel"><h2>Review captured details</h2><p class="hint">Check all values against the original. Blank fields mean no reliable suggestion was found. Dates and amounts stay as printed; SLL and SLE are not converted.</p>
+                    <div class="form-grid">
+                        <label>Document type<select @bind="fields.Kind">@foreach (var kind in CaptureFields.Kinds) { <option>@kind</option> }</select></label>
+                        <label>Reference / document number<input @bind="fields.Reference" maxlength="500" /></label>
+                        <label>Supplier / customer / procuring entity<input @bind="fields.Party" maxlength="500" /></label>
+                        <label>Document date (as printed)<input @bind="fields.Date" maxlength="200" /></label>
+                        <label>Currency (as printed)<input @bind="fields.Currency" maxlength="100" /></label>
+                        <label>Total (as printed)<input @bind="fields.Total" maxlength="200" /></label>
+                        <label>Submission deadline / time zone<input @bind="fields.Deadline" maxlength="500" /></label>
+                    </div>
+                    <label>Items / quantities / prices<textarea rows="5" @bind="fields.Items" maxlength="100000"></textarea></label>
+                    <label>Tender eligibility / required documents<textarea rows="5" @bind="fields.Requirements" maxlength="100000"></textarea></label>
+                    <details><summary>Extracted text — edit or redact for online assistance</summary><label>Document text<textarea class="capture-text" rows="16" @bind="text" maxlength="300000"></textarea></label></details>
+                    <div class="capture-buttons"><button class="secondary" @onclick="() => Save(false)">Save draft</button><button class="primary" @onclick="() => Save(true)">Mark capture reviewed</button></div>
+                    <p class="hint">A reviewed capture is a source document. It does not create a sale, stock receipt, payment, journal entry or tender submission.</p>
+                </section>
+                <section class="panel"><details><summary>Optional online AI assistance</summary>
+                    <p>Send the current extracted text to OpenAI to suggest fields and tender requirements. Originals are not uploaded. Internet access, your API key and API billing are required. Suggestions still need your review.</p>
+                    <label>OpenAI API key<input type="password" autocomplete="off" @bind="apiKey" /></label><p class="hint">The key is used for this request only and is not saved.</p>
+                    <label>Model<input @bind="model" maxlength="100" /></label>
+                    <label class="check"><input type="checkbox" @bind="consent" /> I have checked the extracted text above and choose to send it to OpenAI for this request.</label>
+                    <button class="secondary" disabled="@(!consent || string.IsNullOrWhiteSpace(apiKey))" @onclick="Assist">Send text for AI suggestions</button>
+                </details></section>
+                </fieldset>
+                <section class="panel"><h2>Review history</h2><div class="table-wrap"><table><thead><tr><th>Revision</th><th>Action</th><th>UTC time</th><th>Actor</th><th></th></tr></thead><tbody>
+                    @foreach (var revision in review.History) { <tr><td>@revision.Version</td><td>@revision.Action</td><td>@revision.Created.ToString("yyyy-MM-dd HH:mm")</td><td>@revision.Actor</td><td><button class="text-button" @onclick="() => historyText = revision.Detail">View</button></td></tr> }
+                </tbody></table></div>@if (historyText.Length > 0) { <pre class="capture-history">@historyText</pre> }</section>
+            }
+            else { <section class="panel"><h2>Keep the original. Check the result.</h2><p>OCR runs locally without an internet connection. Select a saved capture to compare the original, correct details and see its review history.</p></section> }
+            </div>
+        </div>
+    </div>
+</main>
+
+@code {
+    [Parameter] public EventCallback OnBack { get; set; }
+    private IReadOnlyList<CaptureSummary> documents = [];
+    private CaptureReview? review;
+    private CaptureFields fields = new();
+    private string text = "", baseline = "", error = "", notice = "", progress = "", historyText = "", apiKey = "", model = "gpt-4.1-mini";
+    private bool busy, consent;
+    private CancellationTokenSource? cancellation;
+    private string DraftJson => JsonSerializer.Serialize(new CaptureDraft(fields, text));
+    protected override async Task OnInitializedAsync() => await Run(async () => documents = await Capture.List());
+    private async Task<bool> MayLeave() => review is null || DraftJson == baseline || await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", "Discard unsaved capture edits? Saved revisions and the original will remain.");
+    private async Task Back() { if (!busy && await MayLeave()) { apiKey = ""; await OnBack.InvokeAsync(); } }
+    private void Load(CaptureReview item) { review = item; fields = item.Draft.Fields; text = item.Draft.Text; baseline = DraftJson; historyText = ""; consent = false; }
+    private async Task Select(Guid id) { if (!busy && await MayLeave()) await Run(async () => Load(await Capture.Read(id))); }
+    private async Task Import(bool scan)
+    {
+        if (busy || !await MayLeave()) return;
+        await Run(async () =>
+        {
+            await Capture.Authorize(true);
+            progress = scan ? "Choose a scanner in the Windows dialog…" : "Choose a document…";
+            var file = scan ? await DocumentInput.Scan() : await DocumentInput.Pick();
+            if (file is null) return;
+            var duplicate = await Capture.FindDuplicate(file.Value.Bytes);
+            if (duplicate.HasValue) { Load(await Capture.Read(duplicate.Value)); notice = "This exact file is already in the inbox. Its existing capture has been opened."; return; }
+            progress = "Preparing offline OCR…";
+            var reporter = new Progress<string>(value => { progress = value; _ = InvokeAsync(StateHasChanged); });
+            var result = await Reader.Read(file.Value.Bytes, Path.GetExtension(file.Value.Name), reporter, cancellation!.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
+            var id = await Capture.Import(file.Value.Name, file.Value.Bytes, result);
+            Load(await Capture.Read(id)); documents = await Capture.List(); notice = "Saved locally. Check the original and correct the captured details before marking it reviewed.";
+        });
+    }
+    private Task Save(bool reviewed) => Run(async () =>
+    {
+        await Capture.Save(review!.Source.Id, review.Version, new(fields, text), reviewed);
+        Load(await Capture.Read(review.Source.Id)); notice = reviewed ? "Capture marked reviewed. No trading or accounting transaction was posted." : "Draft saved locally.";
+    });
+    private Task Assist() => Run(async () =>
+    {
+        if (!consent) throw new BusinessException("Confirm sending the current extracted text first.");
+        var approvedText = text; var key = apiKey; apiKey = ""; consent = false;
+        if (approvedText.Length is 0 or > 60_000) throw new BusinessException("Online assistance accepts up to 60,000 characters. Shorten or redact the text first; previous revisions remain available.");
+        await Capture.Save(review!.Source.Id, review.Version, new(fields, approvedText), false, "Online text assistance requested");
+        Load(await Capture.Read(review.Source.Id));
+        progress = "Waiting for online suggestions…";
+        var suggestions = await Online.Suggest(approvedText, key, model, true, cancellation!.Token);
+        await Capture.Save(review.Source.Id, review.Version, new(suggestions, approvedText), false, "Online suggestions saved");
+        Load(await Capture.Read(review.Source.Id)); notice = "AI suggestions saved as an unreviewed revision. Compare every value with the original.";
+    });
+    private Task OpenOriginal() => Run(async () =>
+    {
+        var bytes = await Capture.Original(review!.Source.Id);
+        var folder = Path.Combine(FileSystem.CacheDirectory, "CapturePreview"); Directory.CreateDirectory(folder);
+        var path = Path.Combine(folder, review.Source.Id.ToString("N") + Path.GetExtension(review.Source.FileName));
+        await File.WriteAllBytesAsync(path, bytes);
+        await Launcher.Default.OpenAsync(new OpenFileRequest("Captured original", new ReadOnlyFile(path)));
+    });
+    private async Task Run(Func<Task> action)
+    {
+        if (busy) return;
+        busy = true; error = notice = ""; cancellation = new CancellationTokenSource();
+        try { await action(); }
+        catch (OperationCanceledException) { notice = "Processing cancelled or timed out. Existing saved captures remain available."; }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
+        catch (Exception) { error = "The document could not be processed. Check the file, available disk space and connection if using AI. Password-protected PDFs must be unlocked before import."; }
+        finally { busy = false; progress = ""; cancellation.Dispose(); cancellation = null; }
+    }
+    private void Cancel() { cancellation?.Cancel(); progress = "Cancellation requested. The current OCR page or scanner dialog may need to finish first."; }
+    public void Dispose() { cancellation?.Cancel(); apiKey = ""; }
+}

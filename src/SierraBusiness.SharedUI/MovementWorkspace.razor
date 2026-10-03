@@ -1,0 +1,9 @@
+@inject IInventoryManagement Management
+<section class="panel"><div class="panel-title"><h2>Stock movement register</h2><PrintButton Target="inventory-movements" /></div><label>Product<select @bind="product" @bind:after="Load"><option value="@Guid.Empty">Select product</option>@foreach (var p in Products) { <option value="@p.Id">@p.Sku · @p.Name</option> }</select></label><label>Filter warehouse, serial or batch<input @bind="filter" @bind:event="oninput" /></label>
+@if (error.Length > 0) { <p role="alert">@error</p> }
+<div id="inventory-movements"><h3>@Products.FirstOrDefault(x => x.Id == product)?.Name</h3><table><thead><tr><th>Date / document</th><th>Warehouse</th><th>Serial / batch / expiry</th><th>Quantity</th><th>Value</th><th>User / time</th></tr></thead><tbody>@foreach (var m in rows.Where(x => (x.Location + " " + x.Serial + " " + x.Batch).Contains(filter, StringComparison.OrdinalIgnoreCase))) { <tr><td>@m.Date · @m.Kind<br /><small>@m.Document</small></td><td>@m.Location</td><td>@m.Serial @m.Batch @m.Expiry</td><td>@m.Quantity</td><td>@m.Value.ToString("N2")</td><td>@m.User<br />@m.Time?.ToLocalTime().ToString("g")</td></tr> }</tbody></table></div></section>
+@code {
+ [Parameter] public IReadOnlyList<ProductView> Products { get; set; } = [];
+ private Guid product; private string filter = "", error = ""; private IReadOnlyList<InventoryTrace> rows = [];
+ private async Task Load() { error = ""; try { rows = product == Guid.Empty ? [] : await Management.Trace(product); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; } catch { error = "Unable to load stock history."; } }
+}

@@ -1,0 +1,62 @@
+@inject IInventoryService Inventory
+@inject IBusinessService Business
+<section class="panel"><div class="panel-title"><h2>Warehouses and stock controls</h2><button class="secondary" disabled="@busy" @onclick="Refresh">Refresh balances</button></div><p>Transfers retain stock value. Counts post a valued adjustment and a balanced journal. All actions save an audit record.</p></section>
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+<section class="panel"><h2>Warehouses</h2><table><thead><tr><th>Code</th><th>Name</th></tr></thead><tbody>@foreach (var l in locations) { <tr><td>@l.Code</td><td>@l.Name</td></tr> }</tbody></table>@if (CanWrite) { <div class="form-grid"><label>New code<input @bind="code" maxlength="30" /></label><label>Name<input @bind="name" maxlength="160" /></label></div><button class="secondary" disabled="@busy" @onclick="CreateLocation">Create warehouse</button> }</section>
+@if (CanWrite)
+{
+    <section class="panel"><h2>Transfer stock</h2><div class="form-grid"><label>Source stock lot<select @bind="stockIndex"><option value="-1">Select source</option>@for (var i = 0; i < stock.Count; i++) { var s = stock[i]; <option value="@i">@s.Location · @s.Sku · @s.Serial @s.Batch · @s.Quantity @s.Unit</option> }</select></label><label>Destination<select @bind="destination">@foreach (var l in locations) { <option value="@l.Code">@l.Code · @l.Name</option> }</select></label><label>Quantity in base units<input type="number" step="0.0001" min="0.0001" @bind="transferQuantity" /></label><label>Reason<input @bind="transferReason" maxlength="160" /></label></div><button class="primary" disabled="@(busy || stockIndex < 0)" @onclick="Transfer">Post transfer</button></section>
+    <section class="panel"><h2>Physical stock count</h2><p class="hint">Count one product and warehouse at a time. For batch products, select the exact batch and expiry or enter an unrecorded batch. Expired stock can be counted but cannot be sold. For serial products, count one serial as present or absent. Previously recorded serials must be restored through a return or reversal.</p>
+        <fieldset disabled="@busy"><div class="form-grid">
+            <label>Product<select @bind="countProduct" @bind:after="ResetCountIdentity"><option value="@Guid.Empty">Select product</option>@foreach (var p in products.Where(x => x.Tracking is TrackingMode.Quantity or TrackingMode.Serial or TrackingMode.Batch or TrackingMode.BatchExpiry)) { <option value="@p.Id">@p.Sku · @p.Name</option> }</select></label>
+            <label>Warehouse<select @bind="countLocation" @bind:after="ResetCountIdentity">@foreach (var l in locations) { <option value="@l.Code">@l.Code · @l.Name</option> }</select></label>
+            @if (IsBatchCount)
+            {
+                <label>Recorded batch<select @bind="countLotIndex" @bind:after="SelectCountLot"><option value="-1">Enter batch details below</option>@for (var i = 0; i < CountLots.Count; i++) { var lot = CountLots[i]; <option value="@i">@lot.Batch · @(lot.Expiry?.ToString("yyyy-MM-dd") ?? "No expiry") · @lot.Quantity @lot.Unit</option> }</select></label>
+                <label>Batch number<input maxlength="160" @bind="countBatch" @bind:after="EditCountIdentity" /></label>
+                <label>Expiry date<input type="date" @bind="countExpiry" @bind:after="EditCountIdentity" /><span class="hint">Required for expiry-tracked products; must match the recorded lot exactly.</span></label>
+            }
+            @if (IsSerialCount)
+            {
+                <label>Serial number<input list="count-serials" maxlength="100" @bind="countSerial" @bind:after="PrepareCount" /><datalist id="count-serials">@foreach (var lot in allStock.Where(x => x.ProductId == countProduct && x.Location == countLocation && x.Serial is not null && x.Quantity > 0)) { <option value="@lot.Serial"></option> }</datalist><span class="hint">Select an on-hand serial or enter a previously unrecorded serial. Verify the physical label.</span></label>
+            }
+            <label>Book quantity<input readonly value="@expectedQuantity" /></label>
+            @if (IsSerialCount) { <label>Physical check<select @bind="countedQuantity"><option value="0">Absent (0)</option><option value="1">Present (1)</option></select></label> } else { <label>Physical count in base units<input type="number" step="0.0001" min="0" @bind="countedQuantity" /></label> }
+            @if (countedQuantity > expectedQuantity) { <label>Surplus cost per base unit<input type="number" step="0.0001" min="0.0001" @bind="surplusCost" /></label> }
+            <label>Reason<input @bind="countReason" maxlength="160" /></label>
+        </div><p role="status">Adjustment: @(countedQuantity - expectedQuantity) base units. A shortage uses the selected lot's book cost.</p>
+        <button class="primary" disabled="@(countProduct == Guid.Empty || countedQuantity == expectedQuantity || (IsBatchCount && string.IsNullOrWhiteSpace(countBatch)) || (IsSerialCount && string.IsNullOrWhiteSpace(countSerial)))" @onclick="Count">Post count adjustment</button></fieldset>
+    </section>
+}
+else { <p>Stock controls require both inventory receiving and document reversal permissions.</p> }
+@code {
+    [Parameter] public Actor Actor { get; set; } = default!;
+    private IReadOnlyList<LocationView> locations = [];
+    private IReadOnlyList<ProductView> products = [];
+    private IReadOnlyList<StockView> allStock = [];
+    private List<StockView> stock = [];
+    private bool busy;
+    private string error = "", message = "", code = "", name = "", destination = "MAIN", transferReason = "", countLocation = "MAIN", countReason = "";
+    private int stockIndex = -1, countLotIndex = -1;
+    private string countBatch = "", countSerial = "";
+    private bool IsSerialCount => products.Any(x => x.Id == countProduct && x.Tracking == TrackingMode.Serial);
+    private DateOnly? countExpiry;
+    private bool IsBatchCount => products.Any(x => x.Id == countProduct && x.Tracking is TrackingMode.Batch or TrackingMode.BatchExpiry);
+    private List<StockView> CountLots => allStock.Where(x => x.ProductId == countProduct && x.Location == countLocation && x.Batch is not null).OrderBy(x => x.Batch).ThenBy(x => x.Expiry).ToList();
+    private decimal transferQuantity = 1, countedQuantity, expectedQuantity, surplusCost;
+    private Guid countProduct, transferOperation = Guid.NewGuid(), countOperation = Guid.NewGuid();
+    public bool HasDraft => code.Length > 0 || name.Length > 0 || stockIndex >= 0 || transferReason.Length > 0 || countProduct != Guid.Empty || countReason.Length > 0;
+    private bool CanWrite => Actor.Permissions.Contains("inventory.receive") && Actor.Permissions.Contains("documents.reverse");
+    protected override Task OnInitializedAsync() => Refresh();
+    private async Task Reload() { locations = await Inventory.Locations(); var data = await Business.Read(Actor); products = data.Products; allStock = data.Stock; stock = data.Stock.Where(x => x.Quantity > 0).ToList(); stockIndex = -1; PrepareCount(); }
+    private Task Refresh() => Run(Reload);
+    private async Task Run(Func<Task> action) { if (busy) return; busy = true; error = message = ""; try { await action(); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; } catch (Exception) { error = "The operation could not complete. Check the stock and document registers before retrying."; } finally { busy = false; } }
+    private void PrepareCount() { expectedQuantity = allStock.Where(x => x.ProductId == countProduct && x.Location == countLocation && x.Serial == (IsSerialCount ? countSerial.Trim().ToUpperInvariant() : null) && x.Batch == (IsBatchCount ? countBatch.Trim().ToUpperInvariant() : null) && x.Expiry == (IsBatchCount ? countExpiry : null)).Sum(x => x.Quantity); countedQuantity = expectedQuantity; surplusCost = 0; countOperation = Guid.NewGuid(); }
+    private void ResetCountIdentity() { countBatch = countSerial = ""; countExpiry = null; countLotIndex = -1; PrepareCount(); }
+    private void EditCountIdentity() { countLotIndex = -1; PrepareCount(); }
+    private void SelectCountLot() { if (countLotIndex < 0) { ResetCountIdentity(); return; } var lot = CountLots[countLotIndex]; countBatch = lot.Batch!; countExpiry = lot.Expiry; PrepareCount(); }
+    private Task CreateLocation() => Run(async () => { await Inventory.CreateLocation(new(Guid.NewGuid(), code, name)); code = name = ""; await Reload(); message = "Warehouse created."; });
+    private Task Transfer() => Run(async () => { var s = stock[stockIndex]; await Inventory.Transfer(new(transferOperation, s.ProductId, s.Location, destination, transferQuantity, s.Serial, s.Batch, s.Expiry, transferReason)); transferOperation = Guid.NewGuid(); transferReason = ""; await Reload(); message = "Stock transferred with its value retained."; });
+    private Task Count() => Run(async () => { await Inventory.Count(new(countOperation, countProduct, countLocation, expectedQuantity, countedQuantity, surplusCost, countReason, IsBatchCount ? countBatch : null, IsBatchCount ? countExpiry : null, IsSerialCount ? countSerial : null)); countOperation = Guid.NewGuid(); countProduct = Guid.Empty; countReason = ""; await Reload(); message = "Count adjustment and accounting journal posted."; });
+}

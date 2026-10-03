@@ -1,0 +1,272 @@
+@inject IPosService Pos
+@inject IBusinessService Business
+@inject IInventoryService Inventory
+@inject IInventoryManagement InventoryManagement
+@inject IPartyService Parties
+@inject Microsoft.JSInterop.IJSRuntime JS
+@inject NavigationManager Navigation
+<div class="workspace" @onkeydown="HandleKey">
+    <a class="skip-link" href="#workspace-content">Skip to workspace</a>
+    <aside class="sidebar @(menuOpen ? "menu-open" : "")" aria-label="Business areas">
+        <div class="sidebar-brand"><div class="brand"><span class="brand-mark" aria-hidden="true">S</span><div>SIERRA<span>BUSINESS OS</span></div></div><button class="menu-toggle" aria-expanded="@menuOpen" aria-controls="business-navigation" @onclick="() => menuOpen = !menuOpen">@(menuOpen ? "Close menu" : "Menu")</button></div>
+        <div class="company-context"><span class="context-label">CURRENT COMPANY</span><strong title="@CompanyName">@(CompanyName.Length > 0 ? CompanyName : "Sierra Business")</strong><span>@Actor.Branch · NLe</span>@if (OnOpenCompanies.HasDelegate) { <button disabled="@busy" @onclick="OpenCompanies">Change company <span aria-hidden="true">↗</span></button> }</div>
+        <nav id="business-navigation" class="area-navigation" aria-label="Main navigation">
+            <span class="navigation-label">WORKSPACE</span>
+            @foreach (var area in NavigationAreas)
+            {
+                <button class="nav @(ActiveArea.Name == area.Name ? "active" : "")" aria-current="@(ActiveArea.Name == area.Name ? "true" : null)" disabled="@busy" @onclick="() => OpenArea(area)"><span class="area-symbol" aria-hidden="true">@area.Symbol</span><span class="area-name">@area.Name</span><span class="area-chevron" aria-hidden="true">›</span></button>
+            }
+        </nav>
+        <div class="sidebar-bottom"><div class="local-status"><span class="status-dot"></span>Working locally</div>
+            @if (OnBackup is not null && Actor.Permissions.Contains("backups.create")) { <button class="utility-button" disabled="@(backupBusy || busy)" @onclick="CreateBackup">@(backupBusy ? "Creating backup…" : "Back up records")</button> }
+            <button class="utility-button" disabled="@busy" @onclick="SignOut">Sign out</button>
+        </div>
+    </aside>
+    <main id="workspace-content" tabindex="-1">
+        <header class="workspace-header"><span class="breadcrumb">@ActiveArea.Name @if (page != ActiveArea.Name) { <span aria-hidden="true">/</span><strong>@(page)</strong> }</span><span class="user" title="@Actor.Id">@DateTime.UtcNow.ToString("dd MMM yyyy") · @Actor.Id</span></header>
+        @if (ActiveArea.Name != "Overview")
+        {
+            <nav class="section-navigation" aria-label="@($"{ActiveArea.Name} screens")">
+                @foreach (var item in NavigationAreas.Single(x => x.Name == ActiveArea.Name).Pages)
+                {
+                    <button class="section-link @(page == item ? "active" : "")" aria-current="@(page == item ? "page" : null)" disabled="@busy" @onclick="() => Navigate(item)">@item</button>
+                }
+                @if (ActiveArea.Name == "Documents" && OnOpenCapture.HasDelegate) { <button class="section-link" disabled="@busy" @onclick="OpenCapture">Scan &amp; capture</button> }
+            </nav>
+        }
+        <div class="content">
+            <div class="heading"><div><p class="eyebrow">SIERRA BUSINESS WORKSPACE</p><h1>@(page)</h1><p class="subheading">@Description</p></div><button class="primary" @onclick='() => Navigate("New sale")'>+ New sale</button></div>
+            @if (!string.IsNullOrEmpty(error)) { <div class="notice error" role="alert">@error</div> }
+            @if (!string.IsNullOrEmpty(success)) { <div class="notice success" role="status">@success</div> }
+            @if (data is null) { <p role="status">Loading your branch workspace…</p> }
+            else if (page == "Tracking register") { <TrackingWorkspace Actor="Actor" Products="data.Products" @ref="trackingWorkspace" /> }
+            else if (page == "Product settings") { <ProductSettingsWorkspace Actor="Actor" Products="data.Products" @ref="productSettingsWorkspace" /> }
+            else if (page == "Count sessions") { <CountSessionsWorkspace Actor="Actor" @ref="countSessionsWorkspace" /> }
+            else if (page == "Movement register") { <MovementWorkspace Products="data.Products" /> }
+            else if (page == "Barcodes") { <BarcodeWorkspace Actor="Actor" Products="data.Products" @ref="barcodeWorkspace" /> }
+            else if (page == "Banking") { <BankingWorkspace Actor="Actor" @ref="bankingWorkspace" /> }
+            else if (page == "Tills") { <TillWorkspace @ref="tillWorkspace" /> }
+            else if (page == "Sales controls") { <CommerceWorkspace Actor="Actor" @ref="commerceWorkspace" /> }
+            else if (page == "Accounting")
+            {
+                <FinanceWorkspace Actor="Actor" @ref="financeWorkspace" />
+            }
+            else if (page == "Orders & quotations")
+            {
+                <OrderWorkspace CompanyName="CompanyName" Actor="Actor" @ref="orderWorkspace" />
+            }
+            else if (page == "Warehouse controls")
+            {
+                <InventoryWorkspace Actor="Actor" @ref="inventoryWorkspace" />
+            }
+            else if (page == "Payroll")
+            {
+                <PayrollWorkspace @ref="payrollWorkspace" />
+            }
+            else if (page == "Customers & suppliers")
+            {
+                <PartyWorkspace Actor="Actor" @ref="partyWorkspace" />
+            }
+            else if (page == "Returns")
+            {
+                <ReturnWorkspace Actor="Actor" @ref="returnWorkspace" />
+            }
+            else if (page == "Users & permissions")
+            {
+                <UserAdministrationWorkspace @ref="usersWorkspace" />
+            }
+            else if (page == "Periods & tax")
+            {
+                <PeriodWorkspace Actor="Actor" />
+            }
+            else if (page == "Overview")
+            {
+                <div class="metrics"><section><small>NET SALES (EXCL. TAX)</small><strong>@Money(data.NetSales)</strong><span>@data.Documents.Count(x => x.Kind == DocumentKind.Sale) invoices · all dates</span></section><section><small>STOCK VALUE</small><strong>@Money(data.Stock.Sum(x => x.Value))</strong><span>Derived from stock movements</span></section><section><small>CATALOGUE</small><strong>@data.Products.Count.ToString("N0") <em>products</em></strong><span>@data.Stock.Count(x => x.Quantity > 0) available stock lots</span></section><section><small>PENDING SYNC</small><strong>@data.PendingSync.ToString("N0") <em>operations</em></strong><span>Safely committed locally</span></section></div>
+                <div class="overview-grid"><section class="panel"><div class="panel-title"><h2>Start a business transaction</h2><span>QUICK ACCESS</span></div><div class="actions"><button @onclick='() => Navigate("New sale")'><b>01</b><strong>Make a sale</strong><span>Cash, cheque, bank transfer or credit →</span></button><button @onclick='() => Navigate("Receive stock")'><b>02</b><strong>Receive goods</strong><span>Record stock and supplier liability →</span></button><button @onclick='() => Navigate("Catalogue")'><b>03</b><strong>Add a product</strong><span>Set up units, prices and tracking →</span></button></div></section><section class="panel note"><p class="eyebrow">BUSINESS CONTINUITY</p><h2>Your records stay here.</h2><p>Each posted transaction saves its stock movements, balanced journal and audit record together.</p><span class="pill">SQLite · durable local storage</span></section></div>
+                <section class="panel"><div class="panel-title"><h2>Recent documents</h2><button class="text-button" @onclick='() => Navigate("Documents")'>View register →</button></div>@DocumentTable(data.Documents.Take(8))</section>
+            }
+            else if (page == "Catalogue")
+            {
+                <section class="panel"><h2>Create product</h2><form @onsubmit="CreateProduct" @onsubmit:preventDefault><div class="form-grid"><label>SKU<input required maxlength="40" @bind="sku" /></label><label>Product name<input required @bind="name" /></label><label>Category<input required @bind="category" /></label><label>Base unit<input required @bind="unit" /></label><label>Indicative asking price (NLe)<input type="number" min="0.01" step="0.01" required @bind="price" /></label><label>Tracking<select @bind="tracking">@foreach (var mode in Enum.GetValues<TrackingMode>().Where(x => x is not TrackingMode.Variant and not TrackingMode.Compatibility)) { <option value="@mode">@mode</option> }</select></label></div><p class="hint">For variants, create a distinct SKU per stocked variant. Compatibility relationships are not yet available.</p><button class="primary" disabled="@busy">Save product</button></form></section>
+                <section class="panel"><div class="panel-title"><h2>Product catalogue</h2><input aria-label="Search products" placeholder="Search SKU or name" @bind="search" @bind:event="oninput" /></div><div class="table-wrap"><table><thead><tr><th>SKU</th><th>Product</th><th>Category</th><th>Unit</th><th>Tracking</th><th class="numeric">Asking price / NLe</th></tr></thead><tbody>@foreach (var p in data.Products.Where(x => (x.Sku + x.Name).Contains(search, StringComparison.OrdinalIgnoreCase))) { <tr><td class="code">@p.Sku</td><td>@p.Name</td><td>@p.Category</td><td>@p.Unit</td><td>@p.Tracking</td><td class="numeric">@p.Price.ToString("N2")</td></tr> }</tbody></table></div></section>
+            }
+            else if (page is "New sale" or "Receive stock")
+            {
+                @if (page == "New sale")
+                {
+                    <section class="panel"><h2>Counter sale</h2><form @onsubmit="Scan" @onsubmit:preventDefault><label>Scan barcode or SKU (Alt+B)<input @ref="scanInput" @bind="scanCode" @bind:event="oninput" autocomplete="off" maxlength="80" /></label><button disabled="@busy" class="secondary">Add scanned item</button></form><p class="hint">Quantity products add at the asking price; adjust the agreed price below. Tracked products require their serial/batch details before adding.</p>
+                    <details><summary>Held sales (@heldSales.Count)</summary><p>Held sales do not reserve stock or record payment. Recall refreshes stock and uses today's date. Final posting checks current prices, stock and the accounting period.</p><button disabled="@busy" @onclick="RefreshHeld">Refresh held sales</button>@foreach (var held in heldSales) { <p><strong>@held.Label</strong> · @held.Draft.Party · @held.Cashier · @held.Time.ToString("g") UTC <button disabled="@busy" @onclick="() => Recall(held)">Recall</button></p> }<label>Cancellation reason<input @bind="cancelHoldReason" maxlength="160" /></label>@if (heldSaleId is not null) { <button disabled="@(busy || string.IsNullOrWhiteSpace(cancelHoldReason))" @onclick="CancelHold">Cancel recalled held sale</button> }</details></section>
+                }
+                <section class="panel"><h2>@(page == "New sale" ? "Sales invoice" : "Goods receipt")</h2><form @onsubmit="AddLine" @onsubmit:preventDefault><fieldset disabled="@busy"><div class="form-grid"><label>@(page == "New sale" ? "Customer" : "Supplier")<input required list="party-options" @bind="party" /><datalist id="party-options">@foreach (var p in parties) { <option value="@p.Name">@p.Code</option> }</datalist></label><label>Business date<input type="date" @bind="businessDate" /></label><label>Bill due date<input type="date" @bind="dueDate" /></label><label>Warehouse<select @bind="location">@foreach (var l in locations) { <option value="@l.Code">@l.Name</option> }</select></label><label>Find product (Alt+K)<input @ref="productSearchInput" @bind="productSearch" @bind:event="oninput" placeholder="SKU or product name" /></label><label>Product<select required @bind="selectedProduct" @bind:after="ResetLineEntry"><option value="@Guid.Empty">Select a product</option>@foreach (var p in data.Products.Where(x => x.Id == selectedProduct || (x.Sku + " " + x.Name).Contains(productSearch, StringComparison.OrdinalIgnoreCase))) { <option value="@p.Id">@p.Sku · @p.Name</option> }</select></label><label>Quantity<input type="number" step="0.0001" min="0.0001" @bind="quantity" /></label><label>Agreed unit price / purchase cost (NLe)<input type="number" step="0.01" min="0" @bind="linePrice" /><span class="hint">For sales, zero uses catalogue price per base unit. Receipts require an explicit cost per entered unit.</span></label><label>Base units per entered unit<input type="number" step="0.0001" min="0.0001" @bind="conversion" /></label><label>Serial number<input @bind="serial" /></label><label>Batch / lot<input @bind="batch" /></label><label>Expiry<input type="date" @bind="expiry" /></label></div><button class="secondary">+ Add line</button>
+                @if (page == "New sale" && data.Products.Any(x => x.Id == selectedProduct && x.Tracking is TrackingMode.Batch or TrackingMode.BatchExpiry))
+                {
+                    <button type="button" class="secondary" disabled="@(conversion != 1)" @onclick="AddEarliestBatches">Add earliest-expiring batches</button>
+                    <p class="hint">Enter quantity and agreed price in base units (conversion 1). Leave tracking fields blank. Suggestions skip expired/reserved stock and batches already allocated in this draft. Review the batch and expiry on each added line before posting; stock is not reserved.</p>
+                }
+                </fieldset></form></section>
+                <section class="panel"><div class="panel-title"><h2>Document lines</h2><span>@lines.Count lines</span></div><div class="table-wrap"><table><thead><tr><th>Product</th><th>Tracking</th><th class="numeric">Quantity</th><th class="numeric">Unit price</th><th class="numeric">Amount</th><th></th></tr></thead><tbody>@foreach (var line in lines) { <tr><td>@data.Products.Single(x => x.Id == line.ProductId).Name</td><td>@line.Serial @line.Batch @if (line.Expiry is not null) { <span> · expires @line.Expiry.Value.ToString("yyyy-MM-dd")</span> }</td><td class="numeric">@line.Quantity × @line.Conversion</td><td class="numeric"><input aria-label="Agreed price for @data.Products.Single(x => x.Id == line.ProductId).Name" type="number" min="0.01" step="0.01" @bind:get="line.UnitPrice" @bind:set="value => ChangeLinePrice(line, value)" /></td><td class="numeric">@((line.Quantity * line.UnitPrice).ToString("N2"))</td><td><button class="text-button" disabled="@busy" @onclick="() => lines.Remove(line)">Remove</button></td></tr> }</tbody></table></div>@if (lines.Count == 0) { <p class="empty">Add a product above to begin this document.</p> }
+                    @if (page == "New sale") { <div class="form-grid settlement"><label>Settlement terms<select @bind="settlement"><option>Cash</option><option>Cheque</option><option>BankTransfer</option><option value="Credit">Credit sale · customer account</option></select></label>@if (settlement is "Cheque" or "BankTransfer") { <label>Cheque / transfer reference<input @bind="paymentReference" /></label><label>Bank / account<input @bind="bank" /></label><label>Payment date<input type="date" @bind="paymentDate" /></label> }</div> }
+                    @if (page == "New sale") { <label>Hold label (customer / description)<input @bind="holdLabel" maxlength="100" /></label><button class="secondary" disabled="@(busy || lines.Count == 0 || string.IsNullOrWhiteSpace(holdLabel))" @onclick="Hold">Hold sale (Alt+H)</button>@if (heldSaleId is not null) { <p class="hint">Recalled sale: @holdLabel. Saving another hold replaces its previous version.</p> }<p class="hint">Cash postings join an open shift on cash ledger 1000. Open Tills before trading if you require a counted shift.</p> }
+                    <div class="total-bar"><span>Subtotal <strong>@Money(lines.Sum(x => AccountingEngine.Money(x.Quantity * x.UnitPrice)))</strong><small>Configured tax is calculated when posted.</small></span><button class="primary" disabled="@(busy || lines.Count == 0)" @onclick="PostDocument">@(busy ? "Posting…" : "Post document")</button></div>
+                </section>
+            }
+            else if (page == "Stock summary")
+            {
+                <section class="panel"><div class="panel-title"><h2>Stock by product and tracking identity</h2><span>BASE UNITS</span></div><div class="table-wrap"><table><thead><tr><th>SKU</th><th>Product</th><th>Warehouse</th><th>Serial / batch</th><th>Expiry</th><th class="numeric">On hand</th><th class="numeric">Value / NLe</th></tr></thead><tbody>@foreach (var s in data.Stock) { <tr><td class="code">@s.Sku</td><td>@s.Name</td><td>@s.Location</td><td>@s.Serial @s.Batch</td><td>@s.Expiry</td><td class="numeric">@s.Quantity.ToString("N2") @s.Unit</td><td class="numeric">@s.Value.ToString("N2")</td></tr> }</tbody><tfoot><tr><td colspan="6">Total stock value</td><td class="numeric">@data.Stock.Sum(x => x.Value).ToString("N2")</td></tr></tfoot></table></div></section>
+            }
+            else if (page == "Documents")
+            {
+                <section class="panel">@DocumentTable(data.Documents)</section>
+                @if (selectedDocument is not null) { <TradeDocumentPreview Document="selectedDocument" Products="data.Products" CompanyName="CompanyName" Branch="Actor.Branch" Reversed="data.Documents.Any(x => x.Reverses == selectedDocument.Id)" /><BusinessDocumentOutput Documents="data.Documents" Document="selectedDocument" Products="data.Products" CompanyName="CompanyName" Branch="Actor.Branch" Reversed="data.Documents.Any(x => x.Reverses == selectedDocument.Id)" /><section class="panel"><h2>@selectedDocument.Kind · @selectedDocument.Party</h2><p class="code">@selectedDocument.Number</p><pre>@Pretty(selectedDocument.Detail)</pre>@if (selectedDocument.Kind != DocumentKind.Reversal && Actor.Permissions.Contains("documents.reverse")) { <label>Reason for reversal<input @bind="reason" /></label><label class="check"><input type="checkbox" @bind="confirmReversal" /> I confirm the reversal of this posted document.</label><button class="danger" disabled="@(busy || !confirmReversal || string.IsNullOrWhiteSpace(reason))" @onclick="ReverseDocument">Post reversal</button> }</section> }
+            }
+            else if (page == "Trial balance")
+            {
+                <section class="panel"><div class="panel-title"><h2>Trial balance</h2><span class="pill">@(data.Ledger.Sum(x => x.Debit) == data.Ledger.Sum(x => x.Credit) ? "Balanced" : "Needs review")</span></div><p class="hint">All posted activity · branch scope · NLe</p><div class="table-wrap"><table><thead><tr><th>Account</th><th class="numeric">Debits</th><th class="numeric">Credits</th><th class="numeric">Net debit balance</th></tr></thead><tbody>@foreach (var a in data.Ledger) { <tr><td><span class="code">@((int)a.Account)</span> @a.Account</td><td class="numeric">@a.Debit.ToString("N2")</td><td class="numeric">@a.Credit.ToString("N2")</td><td class="numeric">@((a.Debit - a.Credit).ToString("N2"))</td></tr> }</tbody><tfoot><tr><td>Total</td><td class="numeric">@data.Ledger.Sum(x => x.Debit).ToString("N2")</td><td class="numeric">@data.Ledger.Sum(x => x.Credit).ToString("N2")</td><td class="numeric">@data.Ledger.Sum(x => x.Debit - x.Credit).ToString("N2")</td></tr></tfoot></table></div></section>
+            }
+            else if (page == "Audit & sync")
+            {
+                <div class="notice">@data.PendingSync operations await central synchronization. The transport and central conflict queue are not implemented in this build. Do not treat local commits as centrally backed up.</div><section class="panel"><h2>Audit trail</h2><div class="table-wrap"><table><thead><tr><th>UTC time</th><th>Actor</th><th>Action</th><th>Result ID</th></tr></thead><tbody>@foreach (var a in data.Audit) { <tr><td>@a.Time.ToString("g")</td><td>@a.Actor</td><td>@a.Action</td><td class="code">@a.Reference</td></tr> }</tbody></table></div></section>
+            }
+            <footer>SIERRA BUSINESS OS <span>Development build · Local branch workspace</span></footer>
+        </div>
+    </main>
+</div>
+@code {
+    [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
+    [Parameter] public EventCallback OnSignOut { get; set; }
+    [Parameter] public EventCallback OnOpenCapture { get; set; }
+    [Parameter] public EventCallback OnOpenCompanies { get; set; }
+    [Parameter] public string CompanyName { get; set; } = "";
+    private async Task OpenCompanies() { if (!busy && await MayLeave()) await OnOpenCompanies.InvokeAsync(); }
+    private async Task OpenCapture() { if (!busy && await MayLeave()) await OnOpenCapture.InvokeAsync(); }
+    [Parameter] public Func<Task<string>>? OnBackup { get; set; }
+    private bool backupBusy;
+    private async Task CreateBackup()
+    {
+        if (backupBusy || OnBackup is null) return;
+        backupBusy = true; error = success = "";
+        try { success = "Backup saved to " + await OnBackup() + ". Copy it to a secure external drive for protection against computer failure."; }
+        catch (UnauthorizedAccessException ex) { error = ex.Message; }
+        catch (Exception) { error = "The backup could not be completed. Check available disk space and try again."; }
+        finally { backupBusy = false; }
+    }
+    private IReadOnlyList<BarcodeView> barcodes = []; private IReadOnlyList<HeldSaleView> heldSales = [];
+    private Guid? heldSaleId; private Guid holdOperation = Guid.NewGuid(), cancelHoldOperation = Guid.NewGuid();
+    private string holdLabel = "", productSearch = "", scanCode = "", cancelHoldReason = "";
+    private ElementReference scanInput, productSearchInput;
+    private async Task LoadPos() { barcodes = await Pos.Barcodes(); heldSales = Actor.Permissions.Contains("sales.create") ? await Pos.HeldSales() : []; }
+    private Task RefreshHeld() => Run(LoadPos);
+    private void ChangeLinePrice(TradeLine line, decimal value) { if (busy) return; var index = lines.FindIndex(x => ReferenceEquals(x, line)); if (index >= 0) lines[index] = line with { UnitPrice = value }; }
+    private Task Scan() => Run(async () => {
+        if (selectedProduct != Guid.Empty) throw new BusinessException("Finish the selected product line before scanning another item."); var code = scanCode.Trim().ToUpperInvariant(); if (code.Length == 0) throw new BusinessException("Scan or enter a barcode or SKU.");
+        barcodes = await Pos.Barcodes();
+        var mapping = barcodes.SingleOrDefault(x => x.Code == code); var product = data!.Products.SingleOrDefault(x => mapping is not null ? x.Id == mapping.ProductId : x.Sku == code) ?? throw new BusinessException("Barcode or SKU not found. Check Barcodes in the catalogue.");
+        if (product.Tracking == TrackingMode.Quantity) { if (lines.Count >= 200) throw new BusinessException("A sale supports up to 200 lines."); var factor = mapping?.Conversion ?? 1; lines.Add(new(product.Id, 1, product.Price * factor, factor)); success = product.Name + " added. Adjust its agreed price before posting if needed."; }
+        else { selectedProduct = product.Id; ResetLineEntry(); conversion = mapping?.Conversion ?? 1; success = "Enter tracking details for " + product.Name + ", then choose Add line."; }
+        scanCode = ""; await Task.CompletedTask;
+    });
+    private TradeCommand SaleDraft() => new(Guid.NewGuid(), DocumentKind.Sale, party, businessDate, [..lines], settlement == "Credit" ? null : Enum.Parse<PaymentMethod>(settlement), paymentReference, bank, paymentDate, dueDate, Location: location);
+    private void ClearCounter() { lines.Clear(); selectedProduct = Guid.Empty; ResetLineEntry(); heldSaleId = null; holdLabel = ""; operationId = Guid.NewGuid(); holdOperation = Guid.NewGuid(); party = "Walk-in"; settlement = "Cash"; paymentReference = bank = ""; dueDate = null; businessDate = DateOnly.FromDateTime(DateTime.UtcNow); paymentDate = businessDate; }
+    private Task Hold() => Run(async () => { if (page != "New sale" || lines.Count == 0) return; await Pos.Hold(new(holdOperation, holdLabel, SaleDraft() with { OperationId = holdOperation }, heldSaleId)); ClearCounter(); await LoadPos(); success = "Sale held on this device. No stock or payment was posted."; });
+    private async Task Recall(HeldSaleView held) { if (busy || !await MayLeave()) return; await Run(async () => { await LoadPos(); var current = heldSales.SingleOrDefault(x => x.Id == held.Id) ?? throw new BusinessException("This held sale is no longer available."); data = await Business.Read(Actor); var draft = current.Draft; ClearCounter(); heldSaleId = current.Id; holdLabel = current.Label; party = draft.Party; lines.AddRange(draft.Lines); location = draft.Location; dueDate = draft.DueDate; settlement = draft.Payment?.ToString() ?? "Credit"; paymentReference = draft.PaymentReference ?? ""; bank = draft.Bank ?? ""; paymentDate = draft.PaymentDate; success = "Sale recalled using today's business date. Review prices and payment before posting."; }); }
+    private Task CancelHold() => Run(async () => { if (heldSaleId is null) return; await Pos.Cancel(new(cancelHoldOperation, heldSaleId.Value, cancelHoldReason)); cancelHoldOperation = Guid.NewGuid(); cancelHoldReason = ""; ClearCounter(); await LoadPos(); success = "Held sale cancelled; its audit history is retained."; });
+    private BusinessSnapshot? data;
+    private TrackingWorkspace? trackingWorkspace;
+    private ProductSettingsWorkspace? productSettingsWorkspace;
+    private CountSessionsWorkspace? countSessionsWorkspace;
+    private IReadOnlyList<ProductSettings> inventorySettings = [];
+    private BarcodeWorkspace? barcodeWorkspace;
+    private BankingWorkspace? bankingWorkspace; private TillWorkspace? tillWorkspace;
+    private CommerceWorkspace? commerceWorkspace;
+    private FinanceWorkspace? financeWorkspace;
+    private OrderWorkspace? orderWorkspace;
+    private InventoryWorkspace? inventoryWorkspace;
+    private PayrollWorkspace? payrollWorkspace;
+    private PartyWorkspace? partyWorkspace;
+    private ReturnWorkspace? returnWorkspace;
+    private UserAdministrationWorkspace? usersWorkspace;
+    private IReadOnlyList<PartyView> parties = [];
+    private IReadOnlyList<LocationView> locations = [];
+    private string location = "MAIN";
+    private string page = "Overview", error = "", success = "", search = "";
+    private bool busy, confirmReversal;
+    private string sku = "", name = "", category = "General merchandise", unit = "piece";
+    private decimal price = 1;
+    private TrackingMode tracking;
+    private string party = "Walk-in", serial = "", batch = "", settlement = "Cash", paymentReference = "", bank = "", reason = "";
+    private Guid selectedProduct;
+    private Guid operationId = Guid.NewGuid();
+    private decimal quantity = 1, conversion = 1, linePrice;
+    private DateOnly businessDate = DateOnly.FromDateTime(DateTime.UtcNow);
+    private DateOnly? dueDate, expiry, paymentDate = DateOnly.FromDateTime(DateTime.UtcNow);
+    private readonly List<TradeLine> lines = [];
+    private DocumentView? selectedDocument;
+    private bool menuOpen;
+    private NavigationArea ActiveArea => WorkspaceNavigation.AreaFor(page);
+    private IReadOnlyList<NavigationArea> NavigationAreas => WorkspaceNavigation.Visible(Pages);
+    private Task OpenArea(NavigationArea area) => area.Name == ActiveArea.Name ? Task.CompletedTask : Navigate(area.Pages[0]);
+    private IEnumerable<string> Pages => new[] { "Overview", "New sale", "Receive stock", "Orders & quotations", "Sales controls", "Customers & suppliers", "Catalogue", "Product settings", "Count sessions", "Movement register", "Tracking register", "Barcodes", "Stock summary", "Warehouse controls", "Returns", "Documents" }.Concat(Actor.Permissions.Contains("accounting.read") ? ["Accounting", "Banking", "Trial balance", "Periods & tax"] : Array.Empty<string>()).Concat(Actor.Permissions.Contains("tills.use") ? ["Tills"] : Array.Empty<string>()).Concat(Actor.Permissions.Contains("accounting.write") ? ["Payroll"] : Array.Empty<string>()).Concat(Actor.Permissions.Contains("users.manage") ? ["Users & permissions"] : Array.Empty<string>()).Concat(Actor.Permissions.Contains("audit.read") ? ["Audit & sync"] : Array.Empty<string>());
+    private string Description => page switch { "Overview" => "A clear view of your branch. Every transaction accounted for.", "New sale" => "Record a sale, settle payment and issue stock in one step.", "Receive stock" => "Receive goods into your branch and record the supplier payable.", "Catalogue" => "One catalogue for your products, units and tracking rules.", "Stock summary" => "Live balances calculated from your posted stock movements.", "Documents" => "Trace each business transaction to its original record.", "Sales controls" => "Manage confidential pricing, reservations, delivery invoices and customer credits.", "Barcodes" => "Map product and pack barcodes for faster counter sales.", "Banking" => "Review bank statements, received cheques and supplier credits.", "Tills" => "Count opening and closing cash and review differences.", "Accounting" => "Manage vouchers, outstanding bills, budgets and financial reports.", "Orders & quotations" => "Agree prices and track partial fulfillment.", "Customers & suppliers" => "Maintain contacts, payment terms and customer credit limits.", "Warehouse controls" => "Transfer stock and reconcile physical counts.", "Returns" => "Issue credit and debit notes against original transactions.", "Payroll" => "Manage employees and post monthly payroll.", "Users & permissions" => "Control staff access to this company.", "Periods & tax" => "Close accounting periods and configure future sales tax rates.", "Trial balance" => "Reconcile the accounting behind your business.", _ => "Review local activity and synchronization readiness." };
+    protected override async Task OnInitializedAsync() => await Run(async () => { data = await Business.Read(Actor); locations = await Inventory.Locations(); parties = await Parties.Read(); inventorySettings = await InventoryManagement.Products(); });
+    private bool HasDraft => page is "New sale" or "Receive stock" && (heldSaleId is not null || holdLabel.Length > 0 || scanCode.Length > 0 || expiry is not null || dueDate is not null || businessDate != DateOnly.FromDateTime(DateTime.UtcNow) || lines.Count > 0 || selectedProduct != Guid.Empty || linePrice != 0 || quantity != 1 || conversion != 1 || !string.IsNullOrWhiteSpace(serial) || !string.IsNullOrWhiteSpace(batch) || !string.IsNullOrWhiteSpace(paymentReference) || !string.IsNullOrWhiteSpace(bank) || settlement != "Cash" || party != (page == "New sale" ? "Walk-in" : ""));
+    private async Task<bool> MayLeave() => !(HasDraft || page == "Tracking register" && trackingWorkspace?.HasDraft == true || page == "Product settings" && productSettingsWorkspace?.HasDraft == true || page == "Count sessions" && countSessionsWorkspace?.HasDraft == true || page == "Barcodes" && barcodeWorkspace?.HasDraft == true || page == "Banking" && bankingWorkspace?.HasDraft == true || page == "Tills" && tillWorkspace?.HasDraft == true || page == "Sales controls" && commerceWorkspace?.HasDraft == true || page == "Accounting" && financeWorkspace?.HasDraft == true || page == "Orders & quotations" && orderWorkspace?.HasDraft == true || page == "Warehouse controls" && inventoryWorkspace?.HasDraft == true || page == "Payroll" && payrollWorkspace?.HasDraft == true || page == "Customers & suppliers" && partyWorkspace?.HasDraft == true || page == "Returns" && returnWorkspace?.HasDraft == true || page == "Users & permissions" && usersWorkspace?.HasDraft == true) || await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", "Discard this unfinished document? Choose Cancel to keep editing.");
+    private async Task Navigate(string target)
+    {
+        if (busy || target == page || !await MayLeave()) return;
+        var refreshAfterModule = page is "Product settings" or "Count sessions" or "Barcodes" or "Banking" or "Tills" or "Sales controls" or "Accounting" or "Orders & quotations" or "Warehouse controls" or "Payroll" or "Customers & suppliers" or "Returns";
+        heldSaleId = null; holdLabel = productSearch = scanCode = "";
+        menuOpen = false; page = target; error = success = ""; selectedDocument = null;
+        lines.Clear(); selectedProduct = Guid.Empty; ResetLineEntry();
+        operationId = Guid.NewGuid(); party = target == "New sale" ? "Walk-in" : "";
+        settlement = "Cash"; paymentReference = bank = "";
+        businessDate = DateOnly.FromDateTime(DateTime.UtcNow); paymentDate = businessDate; dueDate = null;
+        if (target == "New sale") await Run(LoadPos);
+        if (refreshAfterModule && data is not null) await Run(async () => { data = await Business.Read(Actor); locations = await Inventory.Locations(); parties = await Parties.Read(); inventorySettings = await InventoryManagement.Products(); });
+    }
+    private void ResetLineEntry() { linePrice = 0; quantity = 1; var settings = inventorySettings.FirstOrDefault(x => x.ProductId == selectedProduct); conversion = page == "Receive stock" ? settings?.PurchaseConversion ?? 1 : settings?.SalesConversion ?? 1; serial = batch = ""; expiry = null; }
+    private async Task SignOut() { if (busy || !await MayLeave()) return; if (OnSignOut.HasDelegate) await OnSignOut.InvokeAsync(); else Navigation.NavigateTo("/account/logout", true); }
+    private async Task SelectDocument(DocumentView document) { if (busy || !await MayLeave()) return; page = "Documents"; selectedDocument = document; confirmReversal = false; reason = ""; }
+    private async Task HandleKey(KeyboardEventArgs args) { if (!busy && page == "New sale" && args.AltKey) { if (args.Key.Equals("b", StringComparison.OrdinalIgnoreCase)) await scanInput.FocusAsync(); if (args.Key.Equals("k", StringComparison.OrdinalIgnoreCase)) await productSearchInput.FocusAsync(); if (args.Key.Equals("h", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(holdLabel)) await Hold(); } if (args.AltKey && args.Key.Equals("n", StringComparison.OrdinalIgnoreCase)) await Navigate("New sale"); if (args.AltKey && args.Key.Equals("r", StringComparison.OrdinalIgnoreCase)) await Navigate("Receive stock"); if (args.Key == "Escape") { selectedDocument = null; error = ""; } }
+    private async Task Run(Func<Task> action) { if (busy) return; busy = true; error = ""; try { await action(); } catch (Exception e) when (e is BusinessException or UnauthorizedAccessException) { error = e.Message; } catch (Exception) { error = "The operation could not complete. Refresh and check the document register before retrying."; } finally { busy = false; } }
+    private Task CreateProduct() => Run(async () => { await Business.AddProduct(Actor, new(operationId, sku, name, category, unit, price, tracking)); operationId = Guid.NewGuid(); sku = name = ""; data = await Business.Read(Actor); success = "Product saved. An authorized manager must configure its confidential minimum under Sales controls before it can be quoted or sold."; });
+    private void AddLine() { if (busy) return; error = ""; var p = data?.Products.SingleOrDefault(x => x.Id == selectedProduct); if (p is null) { error = "Select a product first."; return; } if (quantity <= 0 || conversion <= 0) { error = "Quantity and conversion must be positive."; return; } if (linePrice < 0 || (page == "Receive stock" && linePrice <= 0)) { error = "Enter a positive receipt cost; negative prices are not allowed."; return; } lines.Add(new(p.Id, quantity, linePrice > 0 ? linePrice : p.Price * conversion, conversion, serial, batch, expiry)); ResetLineEntry(); }
+    private Task AddEarliestBatches() => Run(async () =>
+    {
+        if (page != "New sale") throw new BusinessException("Batch suggestions are available for counter sales.");
+        var product = data?.Products.SingleOrDefault(x => x.Id == selectedProduct) ?? throw new BusinessException("Select a product first.");
+        if (conversion != 1) throw new BusinessException("Use base units (conversion 1) for batch suggestions.");
+        if (!string.IsNullOrWhiteSpace(serial) || !string.IsNullOrWhiteSpace(batch) || expiry is not null) throw new BusinessException("Clear the manual tracking details before requesting batch suggestions, or use Add line.");
+        if (linePrice < 0) throw new BusinessException("Agreed price cannot be negative.");
+        var price = linePrice > 0 ? linePrice : product.Price; Rules.Positive(price, "Agreed base-unit price");
+        var request = new BatchSuggestionCommand(product.Id, location, businessDate, quantity,
+            lines.Where(x => x.ProductId == product.Id).Select(x => new BatchPick(x.Batch ?? "", x.Expiry, x.Quantity * x.Conversion)).ToList());
+        var picks = await Inventory.SuggestBatches(request);
+        if (lines.Count + picks.Count > 200) throw new BusinessException("These suggestions would exceed 200 document lines. Split the sale; no lines were added.");
+        lines.AddRange(picks.Select(x => new TradeLine(product.Id, x.Quantity, price, 1, Batch: x.Batch, Expiry: x.Expiry)));
+        ResetLineEntry(); success = $"Added {picks.Count} batch lines to the draft. Review quantities, prices and expiry dates before posting.";
+    });
+    private Task PostDocument() => Run(async () => { var kind = page == "New sale" ? DocumentKind.Sale : DocumentKind.Receipt; var payment = kind == DocumentKind.Receipt || settlement == "Credit" ? (PaymentMethod?)null : Enum.Parse<PaymentMethod>(settlement); var id = await Business.Post(Actor, new(operationId, kind, party, businessDate, [..lines], payment, paymentReference, bank, paymentDate, dueDate, Location: location, HeldSaleId: heldSaleId)); heldSaleId = null; holdLabel = ""; operationId = Guid.NewGuid(); lines.Clear(); data = await Business.Read(Actor); page = "Documents"; selectedDocument = data.Documents.Single(x => x.Id == id); success = "Document posted. Stock, accounting and audit records committed together."; });
+    private Task ReverseDocument() => Run(async () => { if (!confirmReversal || selectedDocument is null) return; await Business.Reverse(Actor, new(operationId, selectedDocument.Id, reason)); operationId = Guid.NewGuid(); confirmReversal = false; reason = ""; data = await Business.Read(Actor); selectedDocument = null; success = "Reversal posted. The original record is preserved."; });
+    private static string Money(decimal amount) => $"NLe {amount:N2}";
+    private static string Icon(string name) => name switch { "Overview" => "◈", "New sale" => "+", "Receive stock" => "↓", "Catalogue" => "▦", "Stock summary" => "≡", "Documents" => "▤", "Trial balance" => "=", _ => "◷" };
+    private static string Pretty(string json) { using var parsed = System.Text.Json.JsonDocument.Parse(json); return System.Text.Json.JsonSerializer.Serialize(parsed.RootElement, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }); }
+    private RenderFragment DocumentTable(IEnumerable<DocumentView> docs) => @<div class="table-wrap"><table><thead><tr><th>Document</th><th>Customer / supplier</th><th>Date</th><th>Settlement</th><th class="numeric">Amount / NLe</th></tr></thead><tbody>@foreach (var d in docs) { <tr><td><button class="text-button" @onclick='() => SelectDocument(d)'>@d.Kind · @d.Number[^8..]</button></td><td>@d.Party</td><td>@d.BusinessDate.ToString("dd MMM yyyy")</td><td><span class="pill">@d.Settlement</span></td><td class="numeric">@d.Total.ToString("N2")</td></tr> }</tbody></table>@if (!docs.Any()) { <p class="empty">No documents yet. Receive your opening stock to get started.</p> }</div>;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

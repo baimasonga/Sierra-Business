@@ -1,0 +1,1 @@
+<Project Sdk="Microsoft.NET.Sdk.Web"><ItemGroup><ProjectReference Include="../SierraBusiness.Infrastructure/SierraBusiness.Infrastructure.csproj" /><ProjectReference Include="../SierraBusiness.SharedUI/SierraBusiness.SharedUI.csproj" /><ProjectReference Include="../SierraBusiness.Api/SierraBusiness.Api.csproj" /></ItemGroup></Project>

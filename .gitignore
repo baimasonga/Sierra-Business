@@ -1,0 +1,9 @@
+.tools/
+.local/
+**/bin/
+**/obj/
+**/*.db*
+**/App_Data/
+.vs/
+TestResults/
+artifacts/

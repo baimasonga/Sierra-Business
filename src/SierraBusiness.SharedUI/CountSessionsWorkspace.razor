@@ -1,0 +1,30 @@
+@inject IInventoryManagement Management
+@inject IInventoryService Inventory
+@inject IBusinessService Business
+<section class="panel"><h2>Stock count sessions</h2><p>Load a warehouse, record physical quantities, then submit the session for approval. Approval rechecks every balance and posts all adjustments together.</p></section>
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+@if (Actor.Permissions.Contains("inventory.receive"))
+{
+<section class="panel"><fieldset disabled="@busy"><div class="form-grid"><label>Session name<input @bind="name" maxlength="160" /></label><label>Warehouse<select @bind="location">@foreach (var l in locations) { <option value="@l.Code">@l.Name</option> }</select></label><label>Count reason<input @bind="reason" maxlength="160" /></label></div><button class="secondary" disabled="@(lines.Count > 0)" @onclick="Load">Load stock for counting</button>
+@if (lines.Count > 0) { <button class="secondary" @onclick="Clear">Discard draft</button><table><thead><tr><th>Product / tracking</th><th>Book</th><th>Counted</th><th>Difference</th><th>Surplus unit cost</th></tr></thead><tbody>@foreach (var row in lines) { <tr><td>@row.Stock.Sku · @row.Stock.Serial @row.Stock.Batch @row.Stock.Expiry</td><td>@row.Stock.Quantity @row.Stock.Unit</td><td><input aria-label="Count for @row.Stock.Sku @row.Stock.Serial @row.Stock.Batch" type="number" min="0" step="0.0001" @bind="row.Counted" /></td><td>@(row.Counted - row.Stock.Quantity)</td><td><input aria-label="Surplus cost for @row.Stock.Sku" type="number" min="0" step="0.0001" disabled="@(row.Counted <= row.Stock.Quantity)" @bind="row.Cost" /></td></tr> }</tbody></table><button class="primary" @onclick="Submit">Submit for approval</button> }</fieldset></section>
+}
+<section class="panel"><div class="panel-title"><h2>Count register</h2><button class="secondary" disabled="@busy" @onclick="Refresh">Refresh register</button></div>
+@foreach (var c in counts) { <details><summary>@c.Name · @c.Status · @c.Lines.Count lines</summary><p>Prepared by @c.PreparedBy on @c.Time.ToLocalTime().ToString("g")</p><table><thead><tr><th>Product / tracking</th><th>Book</th><th>Count</th><th>Adjustment</th></tr></thead><tbody>@foreach (var row in c.Lines) { <tr><td>@products.FirstOrDefault(x => x.Id == row.ProductId)?.Sku · @row.Location · @row.Serial @row.Batch @row.Expiry</td><td>@row.ExpectedQuantity</td><td>@row.CountedQuantity</td><td>@(row.CountedQuantity - row.ExpectedQuantity)</td></tr> }</tbody></table>
+@if (c.Status == "Pending approval" && CanApprove) { <label>Approval or rejection reason<input @bind="decisionReason" maxlength="160" /></label><button class="primary" disabled="@busy" @onclick="() => Decide(c.Id, true)">Approve and post</button><button class="secondary" disabled="@busy" @onclick="() => Decide(c.Id, false)">Reject session</button> } else { <p>@c.DecisionReason · @c.Documents.Count adjustment documents</p> }</details> }
+@if (counts.Count == 0) { <p>No count sessions yet.</p> }</section>
+@code {
+ [Parameter] public Actor Actor { get; set; } = default!;
+ private sealed class Row(StockView stock) { public Guid Operation = Guid.NewGuid(); public StockView Stock = stock; public decimal Counted; public decimal Cost; }
+ private List<Row> lines = []; private IReadOnlyList<LocationView> locations = []; private IReadOnlyList<ProductView> products = []; private IReadOnlyList<CountSessionView> counts = [];
+ private string name = "", reason = "", location = "MAIN", decisionReason = "", error = "", message = ""; private bool busy; private Guid operation = Guid.NewGuid();
+ public bool HasDraft => lines.Count > 0 || name.Length > 0 || reason.Length > 0;
+ private bool CanApprove => Actor.Permissions.Contains("inventory.receive") && Actor.Permissions.Contains("documents.reverse");
+ protected override Task OnInitializedAsync() => Refresh();
+ private Task Refresh() => Run(async () => { locations = await Inventory.Locations(); counts = await Management.Counts(); products = (await Business.Read(Actor)).Products; });
+ private Task Load() => Run(async () => { var data = await Business.Read(Actor); var stock = data.Stock.Where(x => x.Location == location && x.Quantity > 0).OrderBy(x => x.Sku).ToArray(); if (stock.Length > 200) throw new BusinessException("This warehouse has more than 200 stock identities. Use individual counts until filtered sessions are available."); lines = stock.Select(x => new Row(x) { Counted = x.Quantity }).ToList(); if (lines.Count == 0) message = "No on-hand stock in this warehouse. Use Warehouse controls to record unrecorded stock."; });
+ private void Clear() { lines.Clear(); name = reason = ""; operation = Guid.NewGuid(); }
+ private Task Submit() => Run(async () => { var payload = lines.Select(x => new StockCountCommand(x.Operation, x.Stock.ProductId, x.Stock.Location, x.Stock.Quantity, x.Counted, x.Cost, reason, x.Stock.Batch, x.Stock.Expiry, x.Stock.Serial)).ToArray(); await Management.SubmitCount(new(operation, name, payload)); Clear(); counts = await Management.Counts(); message = "Count submitted. Stock remains unchanged until approval."; });
+ private Task Decide(Guid id, bool approve) => Run(async () => { await Management.DecideCount(new(Guid.NewGuid(), id, approve, decisionReason)); decisionReason = ""; counts = await Management.Counts(); message = approve ? "Count approved and adjustments posted." : "Count rejected without changing stock."; });
+ private async Task Run(Func<Task> action) { if (busy) return; busy = true; error = message = ""; try { await action(); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; } catch { error = "Could not complete. Refresh the register before retrying."; } finally { busy = false; } }
+}

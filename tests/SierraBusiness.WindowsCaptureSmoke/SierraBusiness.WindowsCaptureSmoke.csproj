@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0-windows10.0.19041.0</TargetFramework><OutputType>Exe</OutputType><RuntimeIdentifier>win-x64</RuntimeIdentifier><SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/SierraBusiness.Desktop/SierraBusiness.Desktop.csproj" />
+    <PackageReference Include="Tesseract" />
+    <Compile Include="../../src/SierraBusiness.Maui/WindowsDocumentReader.cs" Link="WindowsDocumentReader.cs" />
+    <Content Include="../../src/SierraBusiness.Maui/OcrData/**" Link="OcrData/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

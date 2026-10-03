@@ -1,0 +1,102 @@
+@inject IFinanceService Finance
+@inject Microsoft.JSInterop.IJSRuntime JS
+
+<section class="panel"><div class="form-grid"><label>From<input type="date" @bind="from" /></label><label>To / as at<input type="date" @bind="to" /></label><label>View<select @bind="view"><option>Financial statements</option><option>Cash flow</option><option>Day book & ledgers</option><option>Bills & ageing</option><option>Bank reconciliation</option><option>Budgets</option><option>Post voucher</option><option>Ledger accounts</option></select></label></div><button class="secondary" disabled="@busy" @onclick="Refresh">Refresh reports</button></section>
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+@if (data is null) { <p>Loading accounting records…</p> }
+else if (view == "Financial statements")
+{
+    <PrintButton Target="financial-statements-print" /><div id="financial-statements-print"><h2>Financial statements · @Actor.Branch</h2><p>@loadedFrom to @loadedTo · NLe</p><div class="metrics"><section><small>PERIOD PROFIT / (LOSS)</small><strong>@Money(data.Profit)</strong></section><section><small>ASSETS AS AT @loadedTo</small><strong>@Money(data.Assets)</strong></section><section><small>LIABILITIES</small><strong>@Money(data.Liabilities)</strong></section><section><small>EQUITY + ACCUMULATED PROFIT</small><strong>@Money(data.Equity + data.RetainedProfit)</strong></section></div>
+    <section class="panel"><h2>Profit and loss · @loadedFrom to @loadedTo</h2><table><thead><tr><th>Ledger</th><th>Group</th><th class="numeric">Amount / NLe</th></tr></thead><tbody>@foreach (var row in data.Balances.Where(x => x.Group is LedgerGroup.Income or LedgerGroup.Expense)) { <tr><td>@row.Code · @row.Name</td><td>@row.Group</td><td class="numeric">@Money(row.Group == LedgerGroup.Income ? row.Credit - row.Debit : row.Debit - row.Credit)</td></tr> }</tbody><tfoot><tr><td colspan="2">Net profit / (loss)</td><td class="numeric">@Money(data.Profit)</td></tr></tfoot></table></section>
+    <section class="panel"><h2>Balance sheet · @loadedTo</h2><table><thead><tr><th>Ledger</th><th>Group</th><th class="numeric">Balance / NLe</th></tr></thead><tbody>@foreach (var row in data.Balances.Where(x => x.Group is not LedgerGroup.Income and not LedgerGroup.Expense && x.Closing != 0)) { <tr><td>@row.Code · @row.Name</td><td>@row.Group</td><td class="numeric">@Money(row.Group == LedgerGroup.Asset ? row.Closing : -row.Closing)</td></tr> }<tr><td>Accumulated profit / (loss)</td><td>Equity</td><td class="numeric">@Money(data.RetainedProfit)</td></tr></tbody></table><p class="hint">Balance check: assets minus liabilities, equity and accumulated profit = @Money(data.Assets - data.Liabilities - data.Equity - data.RetainedProfit).</p></section>
+    <section class="panel"><h2>Trial balance · opening, movement and closing</h2><div class="table-wrap"><table><thead><tr><th>Ledger</th><th>Opening Dr / (Cr)</th><th>Debit</th><th>Credit</th><th>Closing Dr / (Cr)</th></tr></thead><tbody>@foreach (var row in data.Balances) { <tr><td>@row.Code · @row.Name</td><td>@Money(row.Opening)</td><td>@Money(row.Debit)</td><td>@Money(row.Credit)</td><td>@Money(row.Closing)</td></tr> }</tbody><tfoot><tr><td>Total</td><td>@Money(data.Balances.Sum(x => x.Opening))</td><td>@Money(data.Balances.Sum(x => x.Debit))</td><td>@Money(data.Balances.Sum(x => x.Credit))</td><td>@Money(data.Balances.Sum(x => x.Closing))</td></tr></tfoot></table></div></section>
+</div>
+}
+else if (view == "Cash flow" && cashFlow is not null)
+{
+    <PrintButton Target="cash-flow-print" />
+    <section class="panel" id="cash-flow-print"><h2>Cash flow · @Actor.Branch</h2><p>@loadedFrom to @loadedTo · NLe</p><p>Opening cash and bank: @Money(cashFlow.Opening) · Received: @Money(cashFlow.Received) · Paid: @Money(cashFlow.Paid) · Closing: @Money(cashFlow.Closing)</p><p class="hint">Net cash movement per voucher across all cash/bank ledgers. Internal transfers cancel out. Unbanked cheques and credit transactions are excluded until posted to cash/bank. This report does not classify operating, investing and financing activities.</p><table><thead><tr><th>Date</th><th>Voucher / narration</th><th>Received</th><th>Paid</th></tr></thead><tbody>@foreach (var row in cashFlow.Entries) { <tr><td>@row.Date</td><td>@row.Number<br />@row.Narration</td><td>@Money(row.Received)</td><td>@Money(row.Paid)</td></tr> }</tbody></table><p>Reconciliation difference: @Money(cashFlow.Opening + cashFlow.Received - cashFlow.Paid - cashFlow.Closing)</p></section>
+}
+else if (view == "Day book & ledgers")
+{
+    <section class="panel"><label>Ledger<select @bind="ledgerFilter"><option value="0">All ledgers — day book</option>@foreach (var a in data.Accounts) { <option value="@a.Code">@a.Code · @a.Name</option> }</select></label><label>Party / narration / reference<input @bind="search" @bind:event="oninput" /></label><div class="table-wrap"><table><thead><tr><th>Date</th><th>Voucher</th><th>Party / narration</th><th>Ledger</th><th>Cost centre</th><th>Debit</th><th>Credit</th></tr></thead><tbody>@foreach (var entry in FilteredEntries) { <tr><td>@entry.Date</td><td class="code">@entry.Number</td><td>@entry.Party @(entry.Reversed ? "(reversed)" : "")</td><td>@entry.AccountName</td><td>@entry.CostCentre</td><td>@Money(entry.Debit)</td><td>@Money(entry.Credit)</td></tr> }</tbody></table></div><p class="hint">Reversed entries remain in the day book; their reversal vouchers offset them. @FilteredEntries.Count() lines shown.</p></section>
+}
+else if (view == "Bills & ageing")
+{
+    <section class="panel"><h2>Outstanding as at @loadedTo</h2><label>Customer / supplier<input @bind="search" @bind:event="oninput" /></label><table><thead><tr><th>Direction</th><th>Current</th><th>1–30 days</th><th>31–60</th><th>61–90</th><th>Over 90</th></tr></thead><tbody>@foreach (var receivable in new[] { true, false }) { var rows = FilteredBills.Where(x => x.Receivable == receivable); <tr><td>@(receivable ? "Receivable" : "Payable")</td><td>@Money(rows.Where(x => x.OverdueDays == 0).Sum(x => x.Outstanding))</td><td>@Money(rows.Where(x => x.OverdueDays is >= 1 and <= 30).Sum(x => x.Outstanding))</td><td>@Money(rows.Where(x => x.OverdueDays is >= 31 and <= 60).Sum(x => x.Outstanding))</td><td>@Money(rows.Where(x => x.OverdueDays is >= 61 and <= 90).Sum(x => x.Outstanding))</td><td>@Money(rows.Where(x => x.OverdueDays > 90).Sum(x => x.Outstanding))</td></tr> }</tbody></table><p class="hint">Ageing uses the recorded due date. Earlier bills without terms are treated as due on their invoice date.</p></section>
+    <section class="panel"><div class="table-wrap"><table><thead><tr><th>Bill / party</th><th>Direction</th><th>Due</th><th>Original</th><th>Settled / credited</th><th>Outstanding</th><th></th></tr></thead><tbody>@foreach (var bill in FilteredBills) { <tr><td>@bill.Number<br />@bill.Party</td><td>@(bill.Receivable ? "Receivable" : "Payable")</td><td>@bill.DueDate</td><td>@Money(bill.Original)</td><td>@Money(bill.Settled)</td><td>@Money(bill.Outstanding)</td><td>@if (CanWrite) { <button class="text-button" disabled="@busy" @onclick="() => PrepareSettlement(bill)">Settle bill</button> }</td></tr> }</tbody></table></div></section>
+}
+else if (view == "Bank reconciliation")
+{
+    <section class="panel"><h2>Cash and bank ledger clearing</h2><label>Cash / bank ledger<select @bind="bankCode">@foreach (var a in data.Accounts.Where(x => x.CashOrBank)) { <option value="@a.Code">@a.Name</option> }</select></label><p>Book balance: @Money(data.Balances.SingleOrDefault(x => x.Code == bankCode)?.Closing ?? 0). Match entries to your statement by date and reference.</p><label>Statement closing balance (NLe)<input type="number" step="0.01" @bind="statementBalance" /></label><p class="hint">Uncleared net movement through the report end date: @Money((data.BankBalances.SingleOrDefault(x => x.AccountCode == bankCode)?.Uncleared ?? 0)). The reconciliation includes opening-period uncleared entries. The list below shows only entries within the selected date range.</p>
+    <div class="form-grid"><label>Clearing date<input type="date" @bind="clearedDate" /></label><label>Statement reference<input @bind="statementReference" maxlength="160" /></label></div>
+    <table><thead><tr><th>Date / reference</th><th>Debit</th><th>Credit</th><th>Cleared</th><th></th></tr></thead><tbody>@foreach (var entry in data.Entries.Where(x => x.AccountCode == bankCode)) { <tr><td>@entry.Date<br />@entry.Number</td><td>@Money(entry.Debit)</td><td>@Money(entry.Credit)</td><td>@entry.ClearedDate @entry.StatementReference</td><td>@if (entry.ClearedDate is null && CanWrite) { <button class="secondary" disabled="@busy" @onclick="() => Reconcile(entry.Id)">Match</button> }</td></tr> }</tbody></table>
+    <p>Statement comparison difference (book − uncleared − statement): @Money((data.Balances.SingleOrDefault(x => x.Code == bankCode)?.Closing ?? 0) - (data.BankBalances.SingleOrDefault(x => x.AccountCode == bankCode)?.Uncleared ?? 0) - statementBalance).</p></section>
+    <section class="panel"><h2>Statement match history</h2><p>All dates for the selected ledger. Cancelling a mistaken match preserves its history and makes the entry available for matching again. Reports use the latest corrected matches, including reports for earlier dates.</p><label>Correction reason<input @bind="correctionReason" maxlength="200" /></label><table><thead><tr><th>Voucher</th><th>Clearing date / reference</th><th>Status / reason</th><th></th></tr></thead><tbody>@foreach (var match in matchHistory.Where(x => x.AccountCode == bankCode)) { <tr><td>@match.Number</td><td>@match.ClearedDate<br />@match.Reference</td><td>@(match.CancellationReason ?? "Active")</td><td>@if (match.CancellationReason is null && CanWrite) { <button class="secondary" disabled="@(busy || string.IsNullOrWhiteSpace(correctionReason))" @onclick="() => CancelMatch(match.Id)">Cancel match</button> }</td></tr> }</tbody></table></section>
+}
+else if (view == "Budgets")
+{
+    @if (CanWrite) { <section class="panel"><h2>Create budget</h2><div class="form-grid"><label>Income / expense ledger<select @bind="budgetAccount">@foreach (var a in data.Accounts.Where(x => x.Group is LedgerGroup.Income or LedgerGroup.Expense)) { <option value="@a.Code">@a.Name</option> }</select></label><label>From<input type="date" @bind="budgetFrom" /></label><label>To<input type="date" @bind="budgetTo" /></label><label>Amount<input type="number" min="0.01" step="0.01" @bind="budgetAmount" /></label><label>Cost centre (blank = all)<input @bind="budgetCentre" maxlength="100" /></label></div><button class="primary" disabled="@busy" @onclick="SaveBudget">Save budget</button></section> }
+    <section class="panel"><h2>Budget versus actual</h2><table><thead><tr><th>Account / cost centre</th><th>Budget period</th><th>Budget</th><th>Actual through @loadedTo</th><th>Budget less actual</th></tr></thead><tbody>@foreach (var b in data.Budgets) { <tr><td>@b.AccountName / @(b.CostCentre.Length == 0 ? "All" : b.CostCentre)</td><td>@b.From – @b.To</td><td>@Money(b.Budget)</td><td>@Money(b.Actual)</td><td>@Money(b.Budget - b.Actual)</td></tr> }</tbody></table></section>
+}
+else if (view == "Ledger accounts")
+{
+    @if (CanWrite) { <section class="panel"><h2>Create ledger account</h2><div class="form-grid"><label>Code (6000–999999)<input type="number" min="6000" max="999999" @bind="newCode" /></label><label>Name<input @bind="newName" maxlength="160" /></label><label>Group<select @bind="newGroup">@foreach (var group in Enum.GetValues<LedgerGroup>()) { <option>@group</option> }</select></label><label class="check"><input type="checkbox" @bind="cashBank" /> Cash / bank account</label></div><button class="primary" disabled="@busy" @onclick="CreateLedger">Create ledger</button></section> }
+    <section class="panel"><table><thead><tr><th>Code</th><th>Name</th><th>Group</th><th>Use</th></tr></thead><tbody>@foreach (var a in data.Accounts) { <tr><td>@a.Code</td><td>@a.Name</td><td>@a.Group</td><td>@(a.Control ? "Trading / bill control" : a.CashOrBank ? "Cash / bank" : "Voucher ledger")</td></tr> }</tbody></table></section>
+}
+else if (view == "Post voucher")
+{
+    @if (!CanWrite) { <p>You have read-only accounting access.</p> }
+    else { <section class="panel"><h2>Accounting voucher</h2><div class="form-grid"><label>Type<select @bind="voucherType">@foreach (var type in Enum.GetValues<VoucherType>()) { <option>@type</option> }</select></label><label>Business date<input type="date" @bind="voucherDate" /></label><label>Narration<input @bind="narration" maxlength="200" /></label></div><p class="hint">Enter balanced debits and credits. For bill settlement, start from Bills &amp; ageing. Inventory and trading revenue are protected from manual postings.</p>
+    <div class="form-grid"><label>Ledger<select @bind="lineAccount">@foreach (var a in data.Accounts.Where(x => !x.Control || x.Code is 1100 or 2000)) { <option value="@a.Code">@a.Code · @a.Name</option> }</select></label><label>Debit<input type="number" min="0" step="0.01" @bind="debit" /></label><label>Credit<input type="number" min="0" step="0.01" @bind="credit" /></label><label>Cost centre<input @bind="costCentre" maxlength="100" /></label></div><button class="secondary" disabled="@busy" @onclick="AddLine">Add line</button>
+    <table><thead><tr><th>Ledger</th><th>Debit</th><th>Credit</th><th>Cost centre</th><th></th></tr></thead><tbody>@foreach (var line in lines) { <tr><td>@data.Accounts.Single(x => x.Code == line.AccountCode).Name</td><td>@Money(line.Debit)</td><td>@Money(line.Credit)</td><td>@line.CostCentre</td><td><button class="text-button" disabled="@busy" @onclick="() => lines.Remove(line)">Remove</button></td></tr> }</tbody><tfoot><tr><td>Total</td><td>@Money(lines.Sum(x => x.Debit))</td><td>@Money(lines.Sum(x => x.Credit))</td><td colspan="2">Difference @Money(lines.Sum(x => x.Debit - x.Credit))</td></tr></tfoot></table>
+    @if (selectedBill is not null) { <div class="notice">Allocating to @selectedBill.Party · @selectedBill.Number. Outstanding @Money(selectedBill.Outstanding).<label>Settlement amount<input type="number" min="0.01" step="0.01" @bind="settlementAmount" /></label><label>Cash / bank<select @bind="settlementBank">@foreach (var a in data.Accounts.Where(x => x.CashOrBank)) { <option value="@a.Code">@a.Name</option> }</select></label><button class="secondary" disabled="@busy" @onclick="BuildSettlementLines">Update settlement lines</button></div> }
+    <button class="primary" disabled="@(busy || lines.Count < 2)" @onclick="Post">Post voucher</button> <button class="secondary" disabled="@busy" @onclick="ClearDraft">Clear draft</button><p class="hint">Posted vouchers are immutable. Correct them with a reversal in the document register.</p></section> }
+}
+
+@code {
+    private CashFlowReport? cashFlow;
+    private IReadOnlyList<BankMatchHistory> matchHistory = [];
+    private string correctionReason = "";
+    private Task CancelMatch(Guid id) => Run(async () => { await Finance.CancelMatch(new(Guid.NewGuid(), id, correctionReason)); correctionReason = ""; await Reload(); message = "Match cancelled; original reference and correction reason retained in history. Ledger balances are unchanged."; });
+    [Parameter] public Actor Actor { get; set; } = default!;
+    private FinanceSnapshot? data;
+    private bool busy, cashBank;
+    private string error = "", message = "", view = "Financial statements", search = "", narration = "", costCentre = "", newName = "", statementReference = "", budgetCentre = "";
+    private int ledgerFilter, bankCode = 1010, lineAccount = 1000, newCode = 6000, budgetAccount = 5100, settlementBank = 1000;
+    private decimal debit, credit, settlementAmount, statementBalance, budgetAmount;
+    private LedgerGroup newGroup = LedgerGroup.Expense;
+    private VoucherType voucherType;
+    private DateOnly from = new(DateTime.UtcNow.Year, 1, 1), to = DateOnly.FromDateTime(DateTime.UtcNow), loadedFrom, loadedTo;
+    private DateOnly voucherDate = DateOnly.FromDateTime(DateTime.UtcNow), clearedDate = DateOnly.FromDateTime(DateTime.UtcNow), budgetFrom = new(DateTime.UtcNow.Year, 1, 1), budgetTo = new(DateTime.UtcNow.Year, 12, 31);
+    private readonly List<VoucherLine> lines = [];
+    private OutstandingBill? selectedBill;
+    private Guid voucherOperation = Guid.NewGuid();
+    private bool CanWrite => Actor.Permissions.Contains("accounting.write");
+    public bool HasDraft => lines.Count > 0 || narration.Length > 0 || debit != 0 || credit != 0;
+    private IEnumerable<FinanceEntry> FilteredEntries => data!.Entries.Where(x => (ledgerFilter == 0 || x.AccountCode == ledgerFilter) && (x.Party + x.Number).Contains(search, StringComparison.OrdinalIgnoreCase));
+    private IEnumerable<OutstandingBill> FilteredBills => data!.Bills.Where(x => (x.Party + x.Number).Contains(search, StringComparison.OrdinalIgnoreCase));
+    private static string Money(decimal value) => value.ToString("N2");
+    protected override Task OnInitializedAsync() => Refresh();
+    private async Task Reload() { data = await Finance.Read(from, to); cashFlow = await Finance.CashFlow(from, to); matchHistory = await Finance.MatchHistory(); loadedFrom = from; loadedTo = to; }
+    private Task Refresh() => Run(Reload);
+    private async Task Run(Func<Task> action) { if (busy) return; busy = true; error = message = ""; try { await action(); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; } catch (Exception) { error = "The operation could not complete. Refresh and check saved records before retrying."; } finally { busy = false; } }
+    private void AddLine() { lines.Add(new(lineAccount, debit, credit, costCentre)); debit = credit = 0; costCentre = ""; }
+    private Task CreateLedger() => Run(async () => { await Finance.CreateLedger(new(Guid.NewGuid(), newCode, newName, newGroup, cashBank)); newName = ""; await Reload(); message = "Ledger created."; });
+    private Task Reconcile(Guid id) => Run(async () => { await Finance.Reconcile(new(Guid.NewGuid(), id, clearedDate, statementReference)); await Reload(); message = "Statement match recorded."; });
+    private Task SaveBudget() => Run(async () => { await Finance.SetBudget(new(Guid.NewGuid(), budgetAccount, budgetFrom, budgetTo, budgetAmount, budgetCentre)); await Reload(); message = "Budget saved."; });
+    private async Task PrepareSettlement(OutstandingBill bill)
+    {
+        if (HasDraft && !await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", "Discard the unfinished accounting voucher?")) return;
+        Clear(); selectedBill = bill; settlementAmount = bill.Outstanding; voucherType = bill.Receivable ? VoucherType.Receipt : VoucherType.Payment; narration = "Settlement: " + bill.Party; BuildSettlementLines(); view = "Post voucher";
+    }
+    private void BuildSettlementLines() { if (selectedBill is null) return; lines.Clear(); lines.Add(new(settlementBank, selectedBill.Receivable ? settlementAmount : 0, selectedBill.Receivable ? 0 : settlementAmount)); lines.Add(new(selectedBill.Receivable ? 1100 : 2000, selectedBill.Receivable ? 0 : settlementAmount, selectedBill.Receivable ? settlementAmount : 0)); }
+    private Task Post() => Run(async () => { await Finance.PostVoucher(new(voucherOperation, voucherType, voucherDate, narration, lines.ToList(), selectedBill is null ? [] : [new(selectedBill.Id, settlementAmount)])); Clear(); await Reload(); message = "Voucher posted with balanced journal and audit record."; });
+    private void Clear() { lines.Clear(); selectedBill = null; narration = costCentre = ""; debit = credit = 0; voucherOperation = Guid.NewGuid(); }
+    private async Task ClearDraft() { if (!HasDraft || await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", "Discard this accounting voucher draft?")) Clear(); }
+}
+
+
+
+

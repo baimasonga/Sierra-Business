@@ -1,0 +1,9 @@
+@page "/"
+@attribute [Authorize]
+@inject AuthenticationStateProvider Authentication
+<PageTitle>Sierra Business · Workspace</PageTitle>
+@if (actor is not null) { <Workspace Actor="actor" /> }
+@code {
+    private Actor? actor;
+    protected override async Task OnInitializedAsync() { var user = (await Authentication.GetAuthenticationStateAsync()).User; actor = new(user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "", user.FindFirst("branch")?.Value ?? "", user.FindAll("permission").Select(x => x.Value).ToHashSet()); }
+}

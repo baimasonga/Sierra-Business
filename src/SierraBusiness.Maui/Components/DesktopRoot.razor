@@ -1,0 +1,100 @@
+@inject DesktopStore Store
+@inject IDbContextFactory<BusinessDb> Factory
+@inject LocalAccountService Accounts
+@inject DesktopBackupService Backups
+@inject CompanyDirectory Companies
+@inject CompanyInfo Company
+
+@if (companiesOpen)
+{
+    <div class="login-body"><main class="login-panel"><h1>Your companies</h1><p>Current company: @Company.Name. Each company has separate accounts, stock, users and backups.</p>
+    @if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+    @foreach (var company in Companies.List()) { <p><button class="secondary" @onclick="() => SwitchCompany(company)">@company.Name</button></p> }
+    <label>New company name<input @bind="companyName" maxlength="120" /></label><button class="primary" @onclick="CreateCompany">Create separate company</button><p class="hint">Switching opens the selected company's application and closes this window. New companies require their own owner setup.</p><button class="text-button" @onclick="() => companiesOpen = false">Back</button></main></div>
+}
+else if (actor is not null)
+{
+    @if (captureOpen) { <CaptureWorkspace OnBack="() => captureOpen = false" /> }
+    else { <Workspace Actor="actor" OnSignOut="SignOut" OnBackup="CreateBackup" OnOpenCapture="() => captureOpen = true" OnOpenCompanies="() => companiesOpen = true" CompanyName="Company.Name" /> }
+}
+else
+{
+    <div class="login-body"><main class="login-panel">
+        <div class="brand"><span class="brand-mark">S</span><div>SIERRA<span>BUSINESS OS</span></div></div>
+        <p class="eyebrow">WINDOWS DESKTOP</p>
+        <p>@Company.Name · <button class="text-button" @onclick="() => companiesOpen = true">Change company</button></p>
+        <h1>@(firstRun ? "Set up your business." : "Welcome back.")</h1>
+        @if (!ready)
+        {
+            <p role="status">@(busy ? "Preparing your local workspace…" : "The workspace could not start.")</p>
+            @if (!string.IsNullOrEmpty(error)) { <p role="alert">@error</p><button class="primary" disabled="@busy" @onclick="Initialize">Try again</button> }
+        }
+        else
+        {
+            <p>@(firstRun ? "Create the owner account for this computer. Your records are stored locally." : "Sign in to your local branch workspace.")</p>
+            @if (!string.IsNullOrEmpty(error)) { <div class="notice error" role="alert">@error</div> }
+            <form @onsubmit="Submit" @onsubmit:preventDefault>
+                <label>Email<input type="email" autocomplete="username" @bind="email" required maxlength="200" /></label>
+                <label>Password<input type="password" autocomplete="@(firstRun ? "new-password" : "current-password")" @bind="password" required /></label>
+                @if (firstRun)
+                {
+                    <label>Confirm password<input type="password" autocomplete="new-password" @bind="confirm" required /></label>
+                    <p class="hint">Use at least 12 characters, including uppercase, lowercase, a number and a symbol.</p>
+                }
+                <button class="primary" disabled="@busy">@(busy ? "Please wait…" : firstRun ? "Create owner account" : "Sign in")</button>
+            </form>
+            <p class="hint">No internet connection is required for local transactions. Central synchronization is not yet available.</p>
+        }
+    </main></div>
+}
+
+@code {
+    private Actor? actor;
+    private bool captureOpen;
+    private bool companiesOpen;
+    private string companyName = "";
+    private void CreateCompany()
+    {
+        try { var created = Companies.Create(companyName); companyName = ""; SwitchCompany(created); }
+        catch (BusinessException ex) { error = ex.Message; }
+        catch (Exception) { error = "Company could not be created. Check available disk space and folder permissions."; }
+    }
+    private void SwitchCompany(CompanyInfo company)
+    {
+        if (company.Id == Company.Id) { companiesOpen = false; return; }
+        try
+        {
+            var executable = Environment.ProcessPath ?? throw new InvalidOperationException();
+            var start = new System.Diagnostics.ProcessStartInfo(executable) { UseShellExecute = false };
+            if (company.Id != Guid.Empty) { start.ArgumentList.Add("--company"); start.ArgumentList.Add(company.Id.ToString()); }
+            _ = System.Diagnostics.Process.Start(start) ?? throw new InvalidOperationException("Could not start selected company.");
+            Microsoft.Maui.Controls.Application.Current?.Quit();
+        }
+        catch (Exception) { error = "The selected company could not be opened. Your current company is still available."; }
+    }
+    private bool ready, firstRun, busy;
+    private string email = "", password = "", confirm = "", error = "";
+    protected override async Task OnInitializedAsync() => await Initialize();
+    private async Task Initialize()
+    {
+        busy = true; error = "";
+        try { await Store.Initialize(Factory); firstRun = !await Accounts.HasOwner(); ready = true; }
+        catch (Exception ex) { error = "Startup stopped to protect your local data. " + ex.Message; }
+        finally { busy = false; }
+    }
+    private async Task Submit()
+    {
+        if (busy) return;
+        busy = true; error = "";
+        try
+        {
+            if (firstRun) { await Accounts.CreateOwner(email, password, confirm); firstRun = false; }
+            actor = await Accounts.SignIn(email, password);
+        }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
+        catch (Exception) { error = "Could not open the account. Your saved records have not been removed. Try signing in again."; }
+        finally { password = confirm = ""; busy = false; }
+    }
+    private void SignOut() { Accounts.SignOut(); actor = null; password = confirm = error = ""; }
+    private async Task<string> CreateBackup() => await Backups.Create(actor ?? throw new UnauthorizedAccessException("Sign in again."));
+}
