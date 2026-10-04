@@ -165,3 +165,13 @@ Skill 18 is complete:
 - bundle offers sold at an approved package price, with spread line prices that are validated when the sale is posted.
 
 254 tests pass. See [notes](customers-merchandise-0.22.0.md).
+
+## Background jobs, reminders and system health — 0.23.0
+
+Skill 25 is implemented:
+- **Jobs.** Idempotent background jobs (reminders, fiscal retries, daily integrity check) with state and checkpoints, and bounded exponential retry.
+- **Failures.** Jobs stop after repeated or permanent failures and alert administrators, and messages are cleaned of secrets.
+- **Health.** A web health check and a System health screen.
+- **Reminders.** Shown by permission, and dismissed per user.
+
+Packaged together with 0.22.0. 260 tests pass. See [notes](background-jobs-0.23.0.md).

@@ -1,0 +1,26 @@
+@inject IOperationsService Operations
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+<section class="panel">
+    <div class="panel-title"><h2>Reminders</h2><button class="secondary" disabled="@busy" @onclick="Load">Refresh</button></div>
+    <p class="hint">Created automatically every few hours: tenders closing, maintenance visits, warranties ending, overdue customers, approvals waiting, PAYE and NASSIT not yet remitted, stock to reorder and document deadlines. Dismissing a reminder hides it for you only.</p>
+    @if (items.Count == 0 && !busy) { <p class="hint">Nothing needs attention.</p> }
+    <ul class="reminder-list">
+        @foreach (var r in items)
+        {
+            <li class="reminder k-@r.Kind">
+                <span class="reminder-kind">@KindName(r.Kind)</span>
+                <div><strong>@r.Title</strong><br /><span class="hint">@r.Detail</span>@if (r.Due is DateOnly due) { <br /><small>Due @due.ToString("dd MMM yyyy")</small> }</div>
+                <div class="reminder-actions">@if (r.Page.Length > 0 && OpenPage.HasDelegate) { <button class="text-button" @onclick="() => OpenPage.InvokeAsync(r.Page)">Open @r.Page</button> }<button class="text-button" disabled="@busy" @onclick="() => Dismiss(r)">Dismiss</button></div>
+            </li>
+        }
+    </ul>
+</section>
+@code {
+    [Parameter] public EventCallback<string> OpenPage { get; set; }
+    private IReadOnlyList<ReminderView> items = [];
+    private bool busy; private string error = "";
+    protected override Task OnInitializedAsync() => Load();
+    private async Task Load() { busy = true; error = ""; try { items = await Operations.Reminders(); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; } finally { busy = false; } }
+    private async Task Dismiss(ReminderView r) { busy = true; try { await Operations.Dismiss(r.Id); items = items.Where(x => x.Id != r.Id).ToList(); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; } finally { busy = false; } }
+    private static string KindName(ReminderKind k) => k switch { ReminderKind.TenderClosing => "Tender", ReminderKind.MaintenanceDue => "Maintenance", ReminderKind.WarrantyExpiring => "Warranty", ReminderKind.InvoiceOverdue => "Overdue", ReminderKind.ApprovalWaiting => "Approval", ReminderKind.StatutoryDue => "PAYE / NASSIT", ReminderKind.LowStock => "Stock", ReminderKind.DocumentDeadline => "Document", _ => "System" };
+}

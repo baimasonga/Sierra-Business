@@ -26,6 +26,8 @@ public static class MauiProgram
         builder.Services.AddTransient<SierraBusiness.Application.IDocumentAssistant, OnlineDocumentAssistant>();
         builder.Services.AddTransient<SierraBusiness.Application.IDocumentScanner, WiaDocumentScanner>();
         builder.Services.AddSingleton<MainPage>();
-        return builder.Build();
+        var app = builder.Build();
+        app.Services.GetRequiredService<SierraBusiness.Infrastructure.JobScheduler>().Start(); // reminders, fiscal retries and integrity checks while the app is open
+        return app;
     }
 }

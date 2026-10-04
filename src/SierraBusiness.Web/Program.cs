@@ -51,12 +51,14 @@ builder.Services.AddScoped<IReportService, ReportService>();
 builder.Services.AddScoped<IControlService, ControlService>();
 builder.Services.AddScoped<IComplianceService, ComplianceService>();
 builder.Services.AddScoped<IMerchandiseService, MerchandiseService>();
+builder.Services.AddSierraOperations();
+builder.Services.AddHostedService<JobHostedService>();
 builder.Services.TryAddSingleton<IFiscalIntegration, NoFiscalDevice>();
 builder.Services.AddSingleton<IChangeFeed, ChangeFeed>();
 builder.Services.AddSingleton<IFileStore, DatabaseFileStore>();
 builder.Services.AddScoped<IDocumentLibrary, DocumentLibrary>();
 builder.Services.AddProblemDetails();
-builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database");
+builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database").AddCheck<JobsHealthCheck>("jobs");
 var app = builder.Build();
 app.UseExceptionHandler();
 app.Use(async (context, next) =>

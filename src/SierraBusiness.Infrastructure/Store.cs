@@ -92,6 +92,10 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
     public DbSet<VariantGroup> VariantGroups => Set<VariantGroup>();
     public DbSet<VariantMember> VariantMembers => Set<VariantMember>();
     public DbSet<Bundle> Bundles => Set<Bundle>();
+    public DbSet<JobState> JobStates => Set<JobState>();
+    public DbSet<JobRun> JobRuns => Set<JobRun>();
+    public DbSet<Reminder> Reminders => Set<Reminder>();
+    public DbSet<ReminderDismissal> ReminderDismissals => Set<ReminderDismissal>();
     public DbSet<PayrollPaymentLine> PayrollPaymentLines => Set<PayrollPaymentLine>();
     public DbSet<StatutoryRemittance> StatutoryRemittances => Set<StatutoryRemittance>();
     public DbSet<BusinessParty> Parties => Set<BusinessParty>();
@@ -221,6 +225,11 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
         builder.Entity<VariantMember>().HasOne<Product>().WithOne().HasForeignKey<VariantMember>(x => x.ProductId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<VariantMember>().HasOne<VariantGroup>().WithMany().HasForeignKey(x => x.GroupId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<Bundle>().HasIndex(x => x.Code).IsUnique();
+        builder.Entity<JobState>().HasKey(x => new { x.Branch, x.Job });
+        builder.Entity<JobRun>().HasIndex(x => new { x.Branch, x.Job });
+        builder.Entity<Reminder>().HasIndex(x => new { x.Branch, x.Key }).IsUnique();
+        builder.Entity<ReminderDismissal>().HasIndex(x => new { x.ReminderId, x.Actor }).IsUnique();
+        builder.Entity<ReminderDismissal>().HasOne<Reminder>().WithMany().HasForeignKey(x => x.ReminderId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<Bundle>().Property(x => x.Version).IsConcurrencyToken();
         builder.Entity<PayrollRuleVersion>().HasIndex(x => new { x.Branch, x.EffectiveFrom });
         builder.Entity<PayrollPaymentLine>().HasIndex(x => x.PayrollItemId);

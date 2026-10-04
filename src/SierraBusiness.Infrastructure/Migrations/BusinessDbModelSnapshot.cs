@@ -1864,6 +1864,86 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.ToTable("InvoiceMatches");
                 });
 
+            modelBuilder.Entity("SierraBusiness.Infrastructure.JobRun", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Attempt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Branch")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("Finished")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Job")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Outcome")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset>("Started")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Branch", "Job");
+
+                    b.ToTable("JobRuns");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.JobState", b =>
+                {
+                    b.Property<string>("Branch")
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Job")
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Checkpoint")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("ConsecutiveFailures")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("DeadLettered")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("LastMessage")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("LastRun")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("LastSuccess")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("NextDue")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Branch", "Job");
+
+                    b.ToTable("JobStates");
+                });
+
             modelBuilder.Entity("SierraBusiness.Infrastructure.JournalLine", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2833,6 +2913,83 @@ namespace SierraBusiness.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("ReceivedCheques");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.Reminder", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Branch")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("Created")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Detail")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateOnly?>("Due")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Page")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Permission")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Branch", "Key")
+                        .IsUnique();
+
+                    b.ToTable("Reminders");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.ReminderDismissal", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Actor")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ReminderId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("Time")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ReminderId", "Actor")
+                        .IsUnique();
+
+                    b.ToTable("ReminderDismissals");
                 });
 
             modelBuilder.Entity("SierraBusiness.Infrastructure.ReservationRelease", b =>
@@ -4550,6 +4707,15 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.HasOne("SierraBusiness.Infrastructure.BusinessDocument", null)
                         .WithMany()
                         .HasForeignKey("SourceDocumentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.ReminderDismissal", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.Reminder", null)
+                        .WithMany()
+                        .HasForeignKey("ReminderId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

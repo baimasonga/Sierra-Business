@@ -56,6 +56,7 @@ public static class DesktopRegistration
         services.AddTransient<IControlService, ControlService>();
         services.AddTransient<IComplianceService, ComplianceService>();
         services.AddTransient<IMerchandiseService, MerchandiseService>();
+        services.AddSierraOperations();
         services.TryAddSingleton<IFiscalIntegration, NoFiscalDevice>();
         services.AddSingleton<IChangeFeed, ChangeFeed>();
         services.AddSingleton<IFileStore, DatabaseFileStore>();
