@@ -1,30 +1,121 @@
 @inject IPartyService Parties
+@inject IServiceProvider Services
 @inject Microsoft.JSInterop.IJSRuntime JS
-<section class="panel"><div class="panel-title"><h2>Customers and suppliers</h2><button class="secondary" disabled="@busy" @onclick="Refresh">Refresh</button></div><label>Search<input @bind="search" @bind:event="oninput" /></label><div class="table-wrap"><table><thead><tr><th>Code / name</th><th>Type</th><th>Contact</th><th>Terms</th><th>Credit limit / NLe</th><th>Credit hold</th><th></th></tr></thead><tbody>@foreach (var p in parties.Where(x => (x.Code + x.Name + x.Contact).Contains(search, StringComparison.OrdinalIgnoreCase))) { <tr><td>@p.Code · @p.Name</td><td>@p.Type</td><td>@p.Contact<br />@p.Phone<br />@p.Email</td><td>@p.PaymentDays days</td><td>@p.CreditLimit.ToString("N2")</td><td>@(p.CreditHold ? "On hold" : "No")</td><td>@if (CanWrite) { <button class="text-button" disabled="@busy" @onclick="() => Edit(p)">Edit</button> }</td></tr> }</tbody></table></div></section>
+<section class="panel"><div class="panel-title"><h2>Customers and suppliers</h2><button class="secondary" disabled="@busy" @onclick="Refresh">Refresh</button></div>
+    <div class="report-period"><label>Search<input @bind="search" @bind:event="oninput" /></label><label>Type<select @bind="categoryFilter"><option value="">All types</option>@foreach (var c in Categories) { <option>@c</option> }</select></label></div>
+    <div class="table-wrap"><table><thead><tr><th>Code / name</th><th>Type</th><th>Contacts</th><th>Terms</th><th>Credit limit / NLe</th><th>Credit hold</th><th></th></tr></thead><tbody>
+    @foreach (var p in Filtered)
+    {
+        <tr><td>@p.Code · @p.Name@if (p.Tin.Length > 0) { <br /><small>TIN @p.Tin</small> }</td><td>@p.Type@(p.Category.Length > 0 ? " · " + p.Category : "")</td>
+            <td>@p.Contact<br />@p.Phone<br />@p.Email@if (p.People.Count > 0) { <br /><small>+ @p.People.Count named contact@(p.People.Count == 1 ? "" : "s")</small> }</td>
+            <td>@p.PaymentDays days</td><td>@p.CreditLimit.ToString("N2")</td><td>@(p.CreditHold ? "On hold" : "No")</td>
+            <td>@if (CanWrite) { <button class="text-button" disabled="@busy" @onclick="() => Edit(p)">Edit</button> }@if (CanStatement) { <button class="text-button" disabled="@busy" @onclick="() => OpenStatement(p)">Statement</button> }</td></tr>
+    }
+    </tbody></table></div></section>
 @if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
 @if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+
+@if (statement is { } st)
+{
+    <section class="panel">
+        <div class="panel-title"><h2>Statement · @st.Party.Name</h2><div><button class="secondary" disabled="@busy" @onclick="ExportStatement">Export to Excel</button> <button class="text-button" @onclick="() => statement = null">Close</button></div></div>
+        <div class="report-period">
+            <label>From<input type="date" @bind="statementFrom" @bind:after="ReloadStatement" /></label><label>To<input type="date" @bind="statementTo" @bind:after="ReloadStatement" /></label>
+            @if (st.Party.Type == PartyType.Both) { <label class="check"><input type="checkbox" @bind="statementSupplier" @bind:after="ReloadStatement" /> As supplier</label> }
+        </div>
+        <PrintButton Target="statement-print" />
+        <div id="statement-print" class="printable">
+            <DocumentLetterhead Setup="printSetup" CompanyName="@CompanyName" Branch="@Actor.Branch" Title="Statement of account" Number="@($"{st.From:dd MMM yyyy} – {st.To:dd MMM yyyy}")" />
+            <p><strong>@st.Party.Name</strong>@(st.Party.Tin.Length > 0 ? $" · TIN {st.Party.Tin}" : "")<br />@st.Party.Address@(st.Party.Phone.Length > 0 ? " · " + st.Party.Phone : "")</p>
+            <table><thead><tr><th>Date</th><th>Document</th><th>Details</th><th class="numeric">@(st.Supplier ? "Paid / returned" : "Invoiced")</th><th class="numeric">@(st.Supplier ? "Billed" : "Paid / credited")</th><th class="numeric">Balance</th></tr></thead>
+                <tbody>
+                    <tr><td>@st.From.ToString("dd MMM yyyy")</td><td></td><td>Opening balance</td><td></td><td></td><td class="numeric">@st.Opening.ToString("N2")</td></tr>
+                    @foreach (var l in st.Lines) { <tr><td>@l.Date.ToString("dd MMM yyyy")</td><td>@l.Number</td><td>@l.Description</td><td class="numeric">@(l.Debit == 0 ? "" : l.Debit.ToString("N2"))</td><td class="numeric">@(l.Credit == 0 ? "" : l.Credit.ToString("N2"))</td><td class="numeric">@l.Balance.ToString("N2")</td></tr> }
+                </tbody>
+                <tfoot><tr><th colspan="5">Closing balance @(st.Supplier ? "owed to supplier" : "due")</th><td class="numeric"><strong>@printSetup.Company.Money(st.Closing)</strong></td></tr></tfoot></table>
+            <table><thead><tr><th class="numeric">Not yet due</th><th class="numeric">1–30 days</th><th class="numeric">31–60 days</th><th class="numeric">61–90 days</th><th class="numeric">Over 90 days</th></tr></thead>
+                <tbody><tr><td class="numeric">@st.Current.ToString("N2")</td><td class="numeric">@st.Days30.ToString("N2")</td><td class="numeric">@st.Days60.ToString("N2")</td><td class="numeric">@st.Days90.ToString("N2")</td><td class="numeric">@st.Over90.ToString("N2")</td></tr></tbody></table>
+            @if (st.UnappliedCredit != 0) { <p>Unapplied credit held: @st.UnappliedCredit.ToString("N2")</p> }
+            <DocumentFooter Setup="printSetup" Kind="statement" />
+        </div>
+    </section>
+}
+
 @if (CanWrite)
 {
-    <section class="panel"><h2>@(id is null ? "Create customer / supplier" : "Edit customer / supplier")</h2><div class="form-grid"><label>Code<input @bind="code" maxlength="40" /></label><label>Name<input @bind="name" maxlength="160" /></label><label>Type<select @bind="type">@foreach (var t in Enum.GetValues<PartyType>()) { <option>@t</option> }</select></label><label>Contact person<input @bind="contact" maxlength="160" /></label><label>Phone<input @bind="phone" maxlength="60" /></label><label>Email<input type="email" @bind="email" maxlength="160" /></label><label>Address<input @bind="address" maxlength="200" /></label><label>Payment term in days<input type="number" min="0" max="3650" @bind="days" /></label><label>Customer credit limit (0 = no new credit)<input type="number" min="0" step="0.01" @bind="creditLimit" /></label><label class="check"><input type="checkbox" @bind="hold" /> Credit hold</label></div><button class="primary" disabled="@busy" @onclick="Save">Save party</button> <button class="secondary" disabled="@busy" @onclick="New">New party</button><p class="hint">Use this exact party name when trading; the saved master supplies default payment terms and enforces its credit limit/hold. Legacy unregistered party names are still supported and do not have master credit controls. A party with posted history cannot be renamed.</p></section>
+    <section class="panel"><h2>@(id is null ? "Create customer / supplier" : "Edit customer / supplier")</h2>
+        <div class="form-grid">
+            <label>Code<input @bind="code" maxlength="40" /></label><label>Name<input @bind="name" maxlength="160" /></label>
+            <label>Type<select @bind="type">@foreach (var t in Enum.GetValues<PartyType>()) { <option>@t</option> }</select></label>
+            <label>Organisation type<input list="party-categories" @bind="category" maxlength="40" /></label>
+            <label>TIN<input @bind="tin" maxlength="30" /></label>
+            <label>Main contact person<input @bind="contact" maxlength="160" /></label><label>Phone<input @bind="phone" maxlength="60" /></label><label>Email<input @bind="email" maxlength="160" /></label>
+            <label>Address<input @bind="address" maxlength="200" /></label><label>Payment terms (days)<input type="number" min="0" max="3650" @bind="days" /></label>
+            <label>Credit limit / NLe<input type="number" min="0" step="0.01" @bind="creditLimit" /></label><label class="check"><input type="checkbox" @bind="hold" /> Credit hold</label>
+            <label>Notes<input @bind="notes" maxlength="500" /></label>
+        </div>
+        <datalist id="party-categories">@foreach (var c in PartyCategories.Suggested) { <option value="@c"></option> }</datalist>
+        <h3>Named contacts</h3>
+        <p class="hint">For institutions: procurement, finance, technical/biomedical, management and others.</p>
+        @for (var i = 0; i < contacts.Count; i++)
+        {
+            var index = i;
+            <div class="identifier-row contact-row">
+                <label>Role<input list="contact-roles" value="@contacts[index].Role" @onchange="v => SetContact(index, role: v.Value?.ToString())" /></label>
+                <label>Name<input value="@contacts[index].Name" @onchange="v => SetContact(index, name: v.Value?.ToString())" /></label>
+                <label>Phone<input value="@contacts[index].Phone" @onchange="v => SetContact(index, phone: v.Value?.ToString())" /></label>
+                <label>Email<input value="@contacts[index].Email" @onchange="v => SetContact(index, email: v.Value?.ToString())" /></label>
+                <button type="button" class="text-button" @onclick="() => contacts.RemoveAt(index)">Remove</button>
+            </div>
+        }
+        <datalist id="contact-roles"><option value="Procurement"></option><option value="Finance"></option><option value="Technical / biomedical"></option><option value="Management"></option><option value="Stores"></option></datalist>
+        @if (contacts.Count < 12) { <button type="button" class="secondary" @onclick="() => contacts.Add(new(string.Empty, string.Empty))">Add contact</button> }
+        <p><button class="primary" disabled="@busy" @onclick="Save">Save</button> <button class="secondary" disabled="@busy" @onclick="New">New</button></p>
+    </section>
     @if (id is Guid partyId) { <AttachedDocuments Actor="Actor" Target="DocumentLinkTarget.Party" Key="@partyId.ToString()" DefaultType="LibraryDocumentType.Contract" DefaultTitle="@name" Heading="Documents for this customer / supplier" /> }
 }
 @code {
     [Parameter] public Actor Actor { get; set; } = default!;
+    [Parameter] public string CompanyName { get; set; } = "";
     private IReadOnlyList<PartyView> parties = [];
-    private bool busy, hold;
+    private bool busy, hold, statementSupplier;
     private Guid? id;
     private Guid operation = Guid.NewGuid();
     private int version, days;
     private decimal creditLimit;
     private PartyType type;
-    private string code = "", name = "", contact = "", phone = "", email = "", address = "", search = "", error = "", message = "";
+    private string code = "", name = "", contact = "", phone = "", email = "", address = "", search = "", error = "", message = "", category = "", tin = "", notes = "", categoryFilter = "";
+    private List<PartyContact> contacts = [];
+    private AccountStatement? statement; private Guid statementParty;
+    private DateOnly statementFrom = new DateOnly(DateTime.Now.Year, 1, 1), statementTo = DateOnly.FromDateTime(DateTime.Now);
+    private PrintSetup printSetup = PrintSetups.Default;
     private bool CanWrite => Actor.Permissions.Contains("catalogue.write");
+    private bool CanStatement => Actor.Permissions.Contains("accounting.read");
+    private IEnumerable<string> Categories => PartyCategories.Suggested.Concat(parties.Select(x => x.Category)).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    private IEnumerable<PartyView> Filtered => parties.Where(x => (x.Code + x.Name + x.Contact + x.Tin + string.Join(" ", x.People.Select(c => c.Name))).Contains(search, StringComparison.OrdinalIgnoreCase) && (categoryFilter.Length == 0 || x.Category.Equals(categoryFilter, StringComparison.OrdinalIgnoreCase)));
     public bool HasDraft => code.Length > 0 || name.Length > 0 || contact.Length > 0 || phone.Length > 0 || email.Length > 0 || address.Length > 0;
-    protected override Task OnInitializedAsync() => Refresh();
+    protected override async Task OnInitializedAsync() { printSetup = await PrintSetups.Load(Services); await Refresh(); }
     private Task Refresh() => Run(async () => parties = await Parties.Read());
-    private async Task Run(Func<Task> action) { if (busy) return; busy = true; error = message = ""; try { await action(); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; } catch (Exception) { error = "The party could not be saved. Refresh before retrying."; } finally { busy = false; } }
-    private async Task Edit(PartyView p) { if (HasDraft && !await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", "Discard unsaved party details?")) return; id = p.Id; version = p.Version; code = p.Code; name = p.Name; type = p.Type; contact = p.Contact; phone = p.Phone; email = p.Email; address = p.Address; days = p.PaymentDays; creditLimit = p.CreditLimit; hold = p.CreditHold; operation = Guid.NewGuid(); }
-    private void Clear() { id = null; version = days = 0; code = name = contact = phone = email = address = ""; creditLimit = 0; hold = false; operation = Guid.NewGuid(); }
+    private async Task Run(Func<Task> action) { if (busy) return; busy = true; error = message = ""; try { await action(); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; } catch (Exception) { error = "The action could not complete. Refresh before retrying."; } finally { busy = false; } }
+    private async Task Edit(PartyView p)
+    {
+        if (HasDraft && !await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", "Discard unsaved party details?")) return;
+        id = p.Id; version = p.Version; code = p.Code; name = p.Name; type = p.Type; contact = p.Contact; phone = p.Phone; email = p.Email; address = p.Address; days = p.PaymentDays; creditLimit = p.CreditLimit; hold = p.CreditHold;
+        category = p.Category; tin = p.Tin; notes = p.Notes; contacts = p.People.ToList(); operation = Guid.NewGuid();
+    }
+    private void SetContact(int i, string? role = null, string? name = null, string? phone = null, string? email = null)
+    {
+        var c = contacts[i];
+        contacts[i] = c with { Role = role ?? c.Role, Name = name ?? c.Name, Phone = phone ?? c.Phone, Email = email ?? c.Email };
+    }
+    private void Clear() { id = null; version = days = 0; code = name = contact = phone = email = address = category = tin = notes = ""; contacts = []; creditLimit = 0; hold = false; operation = Guid.NewGuid(); }
     private async Task New() { if (!HasDraft || await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", "Discard unsaved party details?")) Clear(); }
-    private Task Save() => Run(async () => { await Parties.Save(new(operation, id, version, code, name, type, contact, phone, email, address, days, creditLimit, hold)); Clear(); parties = await Parties.Read(); message = "Party saved with payment terms and credit controls."; });
+    private Task Save() => Run(async () => { await Parties.Save(new(operation, id, version, code, name, type, contact, phone, email, address, days, creditLimit, hold, category, tin, contacts.ToList(), notes)); Clear(); parties = await Parties.Read(); message = "Saved with payment terms, credit controls and contacts."; });
+    private Task OpenStatement(PartyView p) { statementParty = p.Id; statementSupplier = p.Type == PartyType.Supplier; return ReloadStatement(); }
+    private Task ReloadStatement() => Run(async () => statement = await Parties.Statement(statementParty, statementFrom, statementTo, statementSupplier));
+    private Task ExportStatement() => Run(async () =>
+    {
+        var bytes = await Parties.ExportStatement(statementParty, statementFrom, statementTo, statementSupplier);
+        await Microsoft.JSInterop.JSRuntimeExtensions.InvokeVoidAsync(JS, "sierraDownload", $"Statement {statement?.Party.Code} {statementTo:yyyy-MM-dd}.xlsx", Convert.ToBase64String(bytes));
+    });
 }

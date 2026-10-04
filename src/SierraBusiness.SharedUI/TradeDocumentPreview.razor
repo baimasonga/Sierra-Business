@@ -8,7 +8,7 @@
         <DocumentLetterhead Setup="setup" CompanyName="@CompanyName" Branch="@Branch" Number="@Document.Number" TaxInvoice="Document.Kind == DocumentKind.Sale && !receipt"
                             Title="@(Document.Kind == DocumentKind.Sale ? (receipt ? "Payment receipt" : "Sales invoice") : "Goods receipt")" />
         @if (Reversed) { <p><strong>REVERSED — retained for audit</strong></p> }
-        <p>Date: @Document.BusinessDate.ToString("dd MMM yyyy") · @Document.Party<br />Settlement: @Document.Settlement · Warehouse: @request.Location</p>
+        <p>Date: @Document.BusinessDate.ToString("dd MMM yyyy") · @Document.Party@(customerTin.Length > 0 ? $" · {(Document.Kind == DocumentKind.Sale ? "Customer" : "Supplier")} TIN {customerTin}" : "")<br />Settlement: @Document.Settlement · Warehouse: @request.Location</p>
         <table><thead><tr><th>Item</th><th>Quantity</th><th>Unit price</th><th class="numeric">Amount / @Company.CurrencySymbol</th></tr></thead><tbody>
         @foreach (var line in request.Lines)
         {
@@ -44,7 +44,7 @@
     private Dictionary<Guid, TaxCategory> categories = [];
     private PrintSetup setup = PrintSetups.Default;
     private FiscalDocumentView? fiscal;
-    private Guid loadedFor;
+    private Guid loadedFor; private string customerTin = "";
     private CompanyProfile Company => setup.Company;
     private string Fmt(decimal amount) => amount.ToString("N" + Math.Clamp(Company.Decimals, 0, 4));
     protected override async Task OnInitializedAsync() => setup = await PrintSetups.Load(Services);
@@ -65,5 +65,8 @@
             if (root.TryGetProperty("Categories", out var c)) categories = c.Deserialize<Dictionary<Guid, TaxCategory>>() ?? [];
         } catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException) { request = null; return; }
         if (Document.Kind == DocumentKind.Sale) fiscal = await PrintSetups.Fiscal(Services, Document.Id);
+        customerTin = "";
+        if (Services.GetService(typeof(IPartyService)) is IPartyService parties)
+            try { customerTin = (await parties.Read()).FirstOrDefault(x => x.Name.Equals(Document.Party, StringComparison.OrdinalIgnoreCase))?.Tin ?? ""; } catch (UnauthorizedAccessException) { }
     }
 }

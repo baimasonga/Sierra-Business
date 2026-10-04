@@ -1,0 +1,129 @@
+@inject IMerchandiseService Merchandise
+@inject IBusinessService Business
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+
+<div class="view-toggle report-tabs" role="tablist">
+    @foreach (var t in new[] { "Variants", "Bundle offers" }) { <button type="button" role="tab" class="@(tab == t ? "active" : "")" aria-selected="@(tab == t)" @onclick="() => tab = t">@t</button> }
+</div>
+
+@if (tab == "Variants")
+{
+    <section class="panel"><h2>Product variants</h2>
+        <p class="hint">One product in several colours, sizes or finishes. Each variant is its own product with its own stock, barcode, price and reorder level, so stock never mixes.</p>
+        @foreach (var g in groups)
+        {
+            <details open="@(groups.Count <= 3)"><summary><strong>@g.Code · @g.Name</strong> · @g.Variants.Count variants · @g.OnHand.ToString("0.##") @g.Unit in stock@(g.NeedsAssembly ? " · needs assembly" : "")@(g.NeedsDelivery ? " · needs delivery" : "")</summary>
+                <div class="table-wrap"><table><thead><tr><th>SKU</th>@foreach (var a in g.Attributes) { <th>@a</th> }<th class="numeric">Price</th><th class="numeric">In stock</th></tr></thead>
+                    <tbody>@foreach (var v in g.Variants) { <tr><td>@v.Sku</td>@foreach (var a in g.Attributes) { <td>@v.Values.GetValueOrDefault(a)</td> }<td class="numeric">@v.Price.ToString("N2")</td><td class="numeric">@v.OnHand.ToString("0.##")</td></tr> }</tbody></table></div>
+                @if (CanCatalogue)
+                {
+                    <div class="form-grid compact">@foreach (var a in g.Attributes) { var attr = a; <label>@attr<input value="@NewValue(g.Id, attr)" @onchange="v => SetNewValue(g.Id, attr, v.Value?.ToString())" /></label> }
+                        <label>Price<input type="number" min="0" step="0.01" @bind="addPrice" /></label></div>
+                    <button class="secondary" disabled="@busy" @onclick="() => AddOne(g)">Add variant</button>
+                }
+                @if (g.Notes.Length > 0) { <p class="hint">@g.Notes</p> }
+            </details>
+        }
+        @if (groups.Count == 0) { <p class="hint">No variant groups yet.</p> }
+    </section>
+    @if (CanCatalogue)
+    {
+        <section class="panel"><h2>New variant group</h2>
+            <div class="form-grid">
+                <label>Base SKU<input maxlength="30" @bind="baseSku" /></label><label>Product name<input maxlength="120" @bind="groupName" /></label>
+                <label>Category<input maxlength="160" @bind="groupCategory" /></label><label>Unit<input maxlength="30" @bind="groupUnit" /></label><label>Selling price<input type="number" min="0" step="0.01" @bind="groupPrice" /></label>@if (CanPrice) { <label>Minimum price (lowest agreed price)<input type="number" min="0" step="0.01" @bind="groupMinimum" /></label> }
+                <label class="check"><input type="checkbox" @bind="needsAssembly" /> Needs assembly</label><label class="check"><input type="checkbox" @bind="needsDelivery" /> Needs delivery</label>
+            </div>
+            <p class="hint">Enter up to three attributes, with their values separated by commas. Every combination becomes a product. Without a minimum price, a manager sets each variant's pricing in Sales controls before it can be sold.</p>
+            <div class="form-grid">
+                @for (var i = 0; i < 3; i++) { var index = i;
+                    <label>Attribute @(index + 1)<input placeholder="@(index == 0 ? "Colour" : index == 1 ? "Size" : "Finish")" value="@attrNames[index]" @onchange="v => attrNames[index] = v.Value?.ToString() ?? string.Empty" /></label>
+                    <label>Values<input placeholder="@(index == 0 ? "Black, Brown, Grey" : index == 1 ? "Small, Large" : "")" value="@attrValues[index]" @onchange="v => attrValues[index] = v.Value?.ToString() ?? string.Empty" /></label> }
+            </div>
+            <p class="hint">That makes @Combinations product@(Combinations == 1 ? "" : "s").</p>
+            <button class="primary" disabled="@(busy || Combinations == 0)" @onclick="CreateGroup">Create variants</button>
+        </section>
+    }
+}
+else
+{
+    <section class="panel"><h2>Bundle offers</h2>
+        <p class="hint">Products sold together at one package price, for example a desk with a chair. Each product's stock moves as usual; the bundle price is spread over the products on the invoice. Bundles are not assemblies.</p>
+        <div class="table-wrap"><table><thead><tr><th>Bundle</th><th>Contents</th><th class="numeric">List value</th><th class="numeric">Bundle price</th><th class="numeric">Saving</th><th>Status</th><th></th></tr></thead>
+            <tbody>@foreach (var b in bundles) { <tr><td>@b.Code · @b.Name</td><td>@string.Join(", ", b.Items.Select(i => $"{i.Quantity:0.##} × {i.Sku}"))</td><td class="numeric">@b.ListValue.ToString("N2")</td><td class="numeric">@b.Price.ToString("N2")</td><td class="numeric">@b.Saving.ToString("N2")</td><td>@(b.Active ? b.ValidUntil is DateOnly u ? $"Until {u:dd MMM yyyy}" : "Active" : "Inactive")</td><td>@if (CanPrice) { <button class="text-button" @onclick="() => EditBundle(b)">Edit</button> }</td></tr> }</tbody></table></div>
+        @if (bundles.Count == 0) { <p class="hint">No bundle offers yet.</p> }
+    </section>
+    @if (CanPrice)
+    {
+        <section class="panel"><h2>@(bundleId is null ? "New bundle offer" : "Edit bundle offer")</h2>
+            <div class="form-grid">
+                <label>Code<input maxlength="30" @bind="bundleCode" /></label><label>Name<input maxlength="120" @bind="bundleName" /></label>
+                <label>Bundle price<input type="number" min="0" step="0.01" @bind="bundlePrice" /></label><label>Valid until (optional)<input type="date" @bind="bundleUntil" /></label>
+                <label class="check"><input type="checkbox" @bind="bundleActive" /> Active</label>
+            </div>
+            <div class="table-wrap"><table><thead><tr><th>Product</th><th>Quantity</th><th></th></tr></thead><tbody>
+                @for (var i = 0; i < bundleItems.Count; i++) { var index = i; var p = products.FirstOrDefault(x => x.Id == bundleItems[index].ProductId);
+                    <tr><td>@p?.Sku · @p?.Name</td><td><input class="num" type="number" min="1" step="1" value="@bundleItems[index].Quantity" @onchange="v => bundleItems[index] = bundleItems[index] with { Quantity = decimal.TryParse(v.Value?.ToString(), out var q) ? q : 1 }" /></td><td><button class="text-button" @onclick="() => bundleItems.RemoveAt(index)">Remove</button></td></tr> }
+            </tbody></table></div>
+            <div class="form-grid compact"><label>Add product<select @bind="addProduct"><option value="@Guid.Empty">Choose…</option>@foreach (var p in products.Where(x => x.Tracking == TrackingMode.Quantity)) { <option value="@p.Id">@p.Sku · @p.Name (@p.Price.ToString("N2"))</option> }</select></label></div>
+            <button class="secondary" disabled="@(addProduct == Guid.Empty)" @onclick="AddItem">Add to bundle</button>
+            <p class="hint">List value @BundleList.ToString("N2") · saving @((BundleList - bundlePrice).ToString("N2"))</p>
+            <button class="primary" disabled="@busy" @onclick="SaveBundleNow">Save bundle</button> <button class="secondary" @onclick="ClearBundle">New</button>
+        </section>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
+    private string tab = "Variants", error = "", message = "";
+    private bool busy;
+    private bool CanCatalogue => Actor.Permissions.Contains("catalogue.write");
+    private bool CanPrice => Actor.Permissions.Contains("pricing.manage");
+    private IReadOnlyList<VariantGroupView> groups = [];
+    private IReadOnlyList<BundleView> bundles = [];
+    private IReadOnlyList<ProductView> products = [];
+    // new group
+    private string baseSku = "", groupName = "", groupCategory = "Furniture", groupUnit = "piece";
+    private decimal groupPrice; private decimal? groupMinimum; private bool needsAssembly, needsDelivery;
+    private readonly string[] attrNames = ["Colour", "", ""], attrValues = ["", "", ""];
+    private Guid groupOperation = Guid.NewGuid();
+    private int Combinations { get { var used = Enumerable.Range(0, 3).Where(i => attrNames[i].Trim().Length > 0 && Values(i).Count > 0).ToList(); return used.Count == 0 ? 0 : used.Aggregate(1, (a, i) => a * Values(i).Count); } }
+    private List<string> Values(int i) => attrValues[i].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    // add one variant
+    private readonly Dictionary<(Guid, string), string> newValues = [];
+    private decimal addPrice;
+    private string NewValue(Guid g, string a) => newValues.GetValueOrDefault((g, a), "");
+    private void SetNewValue(Guid g, string a, string? v) => newValues[(g, a)] = v ?? "";
+    // bundles
+    private Guid? bundleId; private int bundleVersion; private string bundleCode = "", bundleName = ""; private decimal bundlePrice; private DateOnly? bundleUntil; private bool bundleActive = true;
+    private List<BundleItem> bundleItems = []; private Guid addProduct; private Guid bundleOperation = Guid.NewGuid();
+    private decimal BundleList => bundleItems.Sum(i => i.Quantity * (products.FirstOrDefault(p => p.Id == i.ProductId)?.Price ?? 0));
+
+    protected override Task OnInitializedAsync() => Run(Load);
+    private async Task Load() { groups = await Merchandise.Variants(); bundles = await Merchandise.Bundles(); products = (await Business.Read(Actor)).Products; }
+    private async Task Run(Func<Task> action) { if (busy) return; busy = true; error = message = ""; try { await action(); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; } catch (Exception) { error = "The action could not complete. Refresh and try again."; } finally { busy = false; } }
+
+    private Task CreateGroup() => Run(async () =>
+    {
+        var attributes = Enumerable.Range(0, 3).Where(i => attrNames[i].Trim().Length > 0 && Values(i).Count > 0).Select(i => new VariantAttribute(attrNames[i].Trim(), Values(i))).ToList();
+        await Merchandise.CreateVariants(new(groupOperation, baseSku, groupName, groupCategory, groupUnit, groupPrice, attributes, TrackingMode.Quantity, needsAssembly, needsDelivery, "", CanPrice ? groupMinimum : null));
+        message = $"{Combinations} variants of {groupName} created. Receive stock for each variant as usual.";
+        groupOperation = Guid.NewGuid(); baseSku = groupName = ""; attrValues[0] = attrValues[1] = attrValues[2] = ""; await Load();
+    });
+    private Task AddOne(VariantGroupView g) => Run(async () =>
+    {
+        await Merchandise.AddVariant(new(Guid.NewGuid(), g.Id, g.Attributes.ToDictionary(a => a, a => NewValue(g.Id, a)), addPrice, null, CanPrice && groupMinimum is not null ? groupMinimum : null));
+        foreach (var a in g.Attributes) newValues.Remove((g.Id, a));
+        message = "Variant added."; await Load();
+    });
+
+    private void EditBundle(BundleView b) { bundleId = b.Id; bundleVersion = b.Version; bundleCode = b.Code; bundleName = b.Name; bundlePrice = b.Price; bundleUntil = b.ValidUntil; bundleActive = b.Active; bundleItems = b.Items.Select(i => new BundleItem(i.ProductId, i.Quantity)).ToList(); bundleOperation = Guid.NewGuid(); }
+    private void ClearBundle() { bundleId = null; bundleVersion = 0; bundleCode = bundleName = ""; bundlePrice = 0; bundleUntil = null; bundleActive = true; bundleItems = []; bundleOperation = Guid.NewGuid(); }
+    private void AddItem() { if (bundleItems.All(i => i.ProductId != addProduct)) bundleItems.Add(new(addProduct, 1)); addProduct = Guid.Empty; }
+    private Task SaveBundleNow() => Run(async () =>
+    {
+        await Merchandise.SaveBundle(new(bundleOperation, bundleId, bundleVersion, bundleCode, bundleName, bundlePrice, bundleItems.ToList(), bundleActive, bundleUntil));
+        message = $"Bundle {bundleCode.ToUpperInvariant()} saved."; ClearBundle(); await Load();
+    });
+}

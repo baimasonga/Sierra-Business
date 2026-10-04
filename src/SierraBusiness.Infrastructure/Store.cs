@@ -89,6 +89,9 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
     public DbSet<Employee> Employees => Set<Employee>();
     public DbSet<PayrollItem> PayrollItems => Set<PayrollItem>();
     public DbSet<PayrollRuleVersion> PayrollRules => Set<PayrollRuleVersion>();
+    public DbSet<VariantGroup> VariantGroups => Set<VariantGroup>();
+    public DbSet<VariantMember> VariantMembers => Set<VariantMember>();
+    public DbSet<Bundle> Bundles => Set<Bundle>();
     public DbSet<PayrollPaymentLine> PayrollPaymentLines => Set<PayrollPaymentLine>();
     public DbSet<StatutoryRemittance> StatutoryRemittances => Set<StatutoryRemittance>();
     public DbSet<BusinessParty> Parties => Set<BusinessParty>();
@@ -212,6 +215,13 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
         builder.Entity<Employee>().Property(x => x.Tin).HasMaxLength(30);
         builder.Entity<Employee>().Property(x => x.NassitNumber).HasMaxLength(30);
         builder.Entity<PayrollRuleVersion>().HasIndex(x => new { x.Branch, x.Version }).IsUnique();
+        builder.Entity<VariantGroup>().HasIndex(x => x.Code).IsUnique();
+        builder.Entity<VariantMember>().HasKey(x => x.ProductId);
+        builder.Entity<VariantMember>().HasIndex(x => x.GroupId);
+        builder.Entity<VariantMember>().HasOne<Product>().WithOne().HasForeignKey<VariantMember>(x => x.ProductId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<VariantMember>().HasOne<VariantGroup>().WithMany().HasForeignKey(x => x.GroupId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<Bundle>().HasIndex(x => x.Code).IsUnique();
+        builder.Entity<Bundle>().Property(x => x.Version).IsConcurrencyToken();
         builder.Entity<PayrollRuleVersion>().HasIndex(x => new { x.Branch, x.EffectiveFrom });
         builder.Entity<PayrollPaymentLine>().HasIndex(x => x.PayrollItemId);
         builder.Entity<PayrollPaymentLine>().HasOne<PayrollItem>().WithMany().HasForeignKey(x => x.PayrollItemId).OnDelete(DeleteBehavior.Restrict);

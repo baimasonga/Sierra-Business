@@ -119,6 +119,7 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
                     db.OrderFulfillments.Add(new() { Id = Guid.NewGuid(), OrderId = order.Id, ProductId = group.Key, DocumentId = doc.Id, Quantity = requested });
                 }
             }
+            var bundled = await BundleRules.Validate(db, input); // bundle offers carry an approved package price
             decimal net = 0, cost = 0, taxable = 0, zeroRated = 0, exempt = 0;
             var receiptLines = new List<object>();
             var categories = new Dictionary<Guid, TaxCategory>();
@@ -128,7 +129,7 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
                 Rules.Positive(line.Quantity, "Quantity"); Rules.Positive(line.UnitPrice, "Unit price"); Rules.Positive(line.Conversion, "Unit conversion");
                 var p = await db.Products.FindAsync([line.ProductId], cancellationToken) ?? throw new BusinessException("Product does not exist.");
                 await InventoryManagement.Active(db, actor.Branch, p.Id);
-                if (sale) await CommerceRules.Price(db, p.Id, line.UnitPrice, line.Conversion);
+                if (sale && !bundled.Contains(line)) await CommerceRules.Price(db, p.Id, line.UnitPrice, line.Conversion);
                 var quantity = line.Quantity * line.Conversion;
                 Rules.Positive(quantity, "Base quantity");
                 var serial = string.IsNullOrWhiteSpace(line.Serial) ? null : Rules.Required(line.Serial, "Serial", 100).ToUpperInvariant();
@@ -152,7 +153,7 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
                 if (sale && delivered is null)
                 {
                     var per = line.UnitPrice / line.Conversion;
-                    if (policy.MaxDiscountPercent is decimal max && p.Price > 0 && (p.Price - per) / p.Price * 100 > max) triggers.Add(new("Discount", $"{p.Sku} at NLe {per:N2} is {(p.Price - per) / p.Price * 100:0.#}% below its list price NLe {p.Price:N2} (limit {max:0.#}%)", "pricing.manage"));
+                    if (!bundled.Contains(line) && policy.MaxDiscountPercent is decimal max && p.Price > 0 && (p.Price - per) / p.Price * 100 > max) triggers.Add(new("Discount", $"{p.Sku} at NLe {per:N2} is {(p.Price - per) / p.Price * 100:0.#}% below its list price NLe {p.Price:N2} (limit {max:0.#}%)", "pricing.manage"));
                     if (policy.ApproveBelowCost && amount < lineCost) triggers.Add(new("BelowCost", $"{p.Sku} sold for NLe {amount:N2}, below its stock cost NLe {lineCost:N2}", "pricing.manage"));
                 }
                 var movement = new Movement { Id = Guid.NewGuid(), DocumentId = doc.Id, ProductId = p.Id, Branch = actor.Branch, Location = input.Location, Serial = serial, Batch = batch, Expiry = line.Expiry, Quantity = sale ? -quantity : quantity, Value = sale ? -lineCost : lineCost };

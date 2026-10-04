@@ -151,3 +151,17 @@ See [payroll notes](payroll-statutory-0.21.0.md).
 Next:
 - background jobs and diagnostics (Skill 25);
 - multi-branch synchronization (Phase 5), when SQL Server work resumes.
+
+## Customers, variants and bundles — 0.22.0
+
+Skill 19 is complete:
+- organisation types and TINs;
+- named institution contacts;
+- ledger-based statements of account with ageing, printed or exported;
+- customer TIN on invoices.
+
+Skill 18 is complete:
+- variant groups that generate separately stocked products;
+- bundle offers sold at an approved package price, with spread line prices that are validated when the sale is posted.
+
+254 tests pass. See [notes](customers-merchandise-0.22.0.md).

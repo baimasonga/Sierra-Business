@@ -2,6 +2,8 @@
 
 A Microsoft .NET implementation based on [the supplied engineering specification](docs/engineering-specification.md). This repository contains an initial working vertical slice, not the full production system described in that specification.
 
+**Customers, variants & bundles 0.22.0:** customer and supplier organisation types, TINs and named institution contacts; statements of account from the ledger with ageing, printed on the letterhead or exported to Excel; furniture and merchandise variants (colour, size, finish) as separately stocked products; bundle offers sold at a package price. See [notes](docs/customers-merchandise-0.22.0.md).
+
 **Payroll with PAYE & NASSIT 0.21.0:** PAYE bands, tax-free allowances, non-resident rate and NASSIT 5%/10% are dated settings (current Sierra Leone rates can be filled in with one button). Part months are prorated, and unpaid days, overtime, bonus and one-off deductions can be entered. Salaries are paid employee by employee, PAYE and NASSIT are remitted per month, and PAYE and NASSIT schedules export to Excel. Payslips print on the letterhead. See [payroll notes](docs/payroll-statutory-0.21.0.md).
 
 **Compliance & documents 0.20.0:** products are standard-rated, zero-rated or exempt from dated settings, and only taxed lines carry GST; posted invoices keep their tax. Returns refund only the tax charged. A tax return summary reconciles to the ledger. Company identifiers (TIN, GST No.) and versioned letterheads appear on every printed document, with logo, terms, payment details, amount in words and 80 mm receipts. Fiscal registration goes through a connection point that never blocks a sale. See [compliance notes](docs/compliance-documents-0.20.0.md).
@@ -56,7 +58,7 @@ A Microsoft .NET implementation based on [the supplied engineering specification
 
 ### Windows desktop package
 
-The **Windows installer is ready** at `artifacts\windows\0.21.0\SierraBusiness-Setup-x64.exe`. Double-click it to install, open Sierra Business from the Start menu, and create your owner account on first use. Existing users should back up and close the app before updating. The package includes the application runtimes, offline WebView2 prerequisite and English OCR dependencies. It is an unsigned development preview; full clean-machine installation and UI acceptance testing are still outstanding. See [Windows package instructions and status](docs/windows-package.md).
+The **Windows installer is ready** at `artifacts\windows\0.22.0\SierraBusiness-Setup-x64.exe`. Double-click it to install, open Sierra Business from the Start menu, and create your owner account on first use. Existing users should back up and close the app before updating. The package includes the application runtimes, offline WebView2 prerequisite and English OCR dependencies. It is an unsigned development preview; full clean-machine installation and UI acceptance testing are still outstanding. See [Windows package instructions and status](docs/windows-package.md).
 
 Desktop owners can create integrity-checked backups from the workspace sidebar, including captured originals and review revisions. Backup restoration and permission checks pass in the primary .NET 10 suite (126 tests total). A Windows CI workflow is also prepared to build the native app and installer once this project is hosted in a GitHub repository; it has not yet been run.
 
