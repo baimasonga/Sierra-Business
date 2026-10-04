@@ -225,6 +225,11 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
             if (await db.ForeignSettlements.AnyAsync(x => x.BillId == original.Id && !db.Documents.Any(r => r.Reverses == x.VoucherId), cancellationToken)) throw new BusinessException("Reverse the foreign-currency payments of this bill first.");
             if (await db.Installations.AnyAsync(x => x.SaleId == original.Id && !db.InstallationCompletions.Any(c => c.InstallationId == x.Id) && !db.InstallationCancellations.Any(c => c.InstallationId == x.Id), cancellationToken)) throw new BusinessException("Cancel the scheduled installation for this sale first.");
             if (await db.InvoiceMatches.AnyAsync(x => x.ReceiptId == original.Id && !db.Documents.Any(r => r.Reverses == x.InvoiceId), cancellationToken)) throw new BusinessException("Reverse the supplier invoices matched to this receipt first.");
+            if (original.Kind == DocumentKind.Payroll)
+            {
+                if (await db.PayrollPaymentLines.AnyAsync(x => db.PayrollItems.Any(i => i.Id == x.PayrollItemId && i.DocumentId == original.Id) && !db.Documents.Any(r => r.Reverses == x.DocumentId), cancellationToken)) throw new BusinessException("Salaries from this payroll have been paid. Reverse the salary payment first.");
+                if (await db.StatutoryRemittances.AnyAsync(x => x.Branch == actor.Branch && db.PayrollItems.Any(i => i.DocumentId == original.Id && i.Month == x.Month) && !db.Documents.Any(r => r.Reverses == x.DocumentId), cancellationToken)) throw new BusinessException("PAYE or NASSIT for this payroll month has been remitted. Reverse the remittance first.");
+            }
             var date = DateOnly.FromDateTime(DateTime.UtcNow);
             if (date <= await PeriodControls.ClosedThrough(db, actor.Branch, settings.ClosedThrough)) throw new BusinessException("Current period is closed.");
             var doc = new BusinessDocument { Id = Guid.NewGuid(), Number = $"{settings.Branch}-{settings.Device}-REV-{input.OperationId:N}", Branch = actor.Branch, Kind = DocumentKind.Reversal, Party = original.Party, BusinessDate = date, Total = -original.Total, Settlement = original.Settlement, Reverses = original.Id, Detail = JsonSerializer.Serialize(input) };

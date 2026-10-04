@@ -88,6 +88,9 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
     public DbSet<StockLocation> StockLocations => Set<StockLocation>();
     public DbSet<Employee> Employees => Set<Employee>();
     public DbSet<PayrollItem> PayrollItems => Set<PayrollItem>();
+    public DbSet<PayrollRuleVersion> PayrollRules => Set<PayrollRuleVersion>();
+    public DbSet<PayrollPaymentLine> PayrollPaymentLines => Set<PayrollPaymentLine>();
+    public DbSet<StatutoryRemittance> StatutoryRemittances => Set<StatutoryRemittance>();
     public DbSet<BusinessParty> Parties => Set<BusinessParty>();
     public DbSet<ReturnAllocation> ReturnAllocations => Set<ReturnAllocation>();
     public DbSet<PeriodClosure> PeriodClosures => Set<PeriodClosure>();
@@ -206,6 +209,15 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
         builder.Entity<Employee>().Property(x => x.Version).IsConcurrencyToken();
         builder.Entity<PayrollItem>().HasOne<Employee>().WithMany().HasForeignKey(x => x.EmployeeId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<PayrollItem>().HasOne<BusinessDocument>().WithMany().HasForeignKey(x => x.DocumentId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<Employee>().Property(x => x.Tin).HasMaxLength(30);
+        builder.Entity<Employee>().Property(x => x.NassitNumber).HasMaxLength(30);
+        builder.Entity<PayrollRuleVersion>().HasIndex(x => new { x.Branch, x.Version }).IsUnique();
+        builder.Entity<PayrollRuleVersion>().HasIndex(x => new { x.Branch, x.EffectiveFrom });
+        builder.Entity<PayrollPaymentLine>().HasIndex(x => x.PayrollItemId);
+        builder.Entity<PayrollPaymentLine>().HasOne<PayrollItem>().WithMany().HasForeignKey(x => x.PayrollItemId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<PayrollPaymentLine>().HasOne<BusinessDocument>().WithMany().HasForeignKey(x => x.DocumentId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<StatutoryRemittance>().HasIndex(x => new { x.Branch, x.Month, x.Kind });
+        builder.Entity<StatutoryRemittance>().HasOne<BusinessDocument>().WithMany().HasForeignKey(x => x.DocumentId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<StockLocation>().HasKey(x => x.Code);
         builder.Entity<StockLocation>().HasData(new StockLocation { Code = "MAIN", Name = "Main warehouse" });
         builder.Entity<Movement>().Property(x => x.Location).HasDefaultValue("MAIN");

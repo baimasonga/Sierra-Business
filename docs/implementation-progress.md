@@ -137,3 +137,17 @@ Next:
 - payroll statutory deductions;
 - background jobs and diagnostics (Skill 25);
 - multi-branch synchronization (Phase 5), when SQL Server work resumes.
+
+## Payroll with PAYE and NASSIT — 0.21.0
+
+- **Statutory rules.** Effective-dated PAYE and NASSIT rules: bands, tax-free allowances, non-resident rate, employee and employer rates, contribution base and age limit, each with its source.
+- **Pay calculation.** Calendar-day proration, unpaid days, overtime, bonus and one-off deductions, with a preview before posting.
+- **Accounts.** Statutory liabilities post to 2310 PAYE payable and 2320 NASSIT payable, and employer NASSIT to 5210.
+- **Payments and remittances.** Salaries are paid per employee. PAYE and NASSIT are remitted per month, with schedules exported to Excel.
+- **Payslips.** Print on the letterhead.
+
+See [payroll notes](payroll-statutory-0.21.0.md).
+
+Next:
+- background jobs and diagnostics (Skill 25);
+- multi-branch synchronization (Phase 5), when SQL Server work resumes.

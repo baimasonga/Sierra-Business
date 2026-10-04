@@ -35,13 +35,18 @@ public sealed class PayrollTests : IAsyncLifetime
         Assert.True((await payroll.Read()).Payslips.Single().Reversed);
         await payroll.Post(run with { OperationId = Guid.NewGuid() }); Assert.Equal(1550, (await payroll.Read()).Payslips.Single(x => !x.Reversed).Net);
     }
-    [Fact] public async Task InvalidDeductionsAndPartialMonthAreRejectedAtomically()
+    [Fact] public async Task InvalidDeductionsAreRejectedAndPartialMonthsAreProrated()
     {
         await Assert.ThrowsAsync<BusinessException>(() => payroll.SaveEmployee(Employee() with { Deductions = 1500 }));
         var month = new DateOnly(today.Year, today.Month, 1).AddMonths(-1);
+        var days = DateTime.DaysInMonth(month.Year, month.Month);
         var id = await payroll.SaveEmployee(Employee() with { StartDate = month.AddDays(10) });
-        await Assert.ThrowsAsync<BusinessException>(() => payroll.Post(new(Guid.NewGuid(), month, today, [id])));
+        await Assert.ThrowsAsync<BusinessException>(() => payroll.Post(new(Guid.NewGuid(), month, today, [id], [new(id, ExtraDeduction: 5000)]))); // more than the pay
         Assert.Empty((await payroll.Read()).Payslips); Assert.Empty((await business.Read(session.Actor)).Documents);
+        await payroll.Post(new(Guid.NewGuid(), month, today, [id]));
+        var slip = (await payroll.Read()).Payslips.Single();
+        Assert.Equal(days - 10, slip.Calculation!.DaysPaid);
+        Assert.Equal(AccountingEngine.Money(1000m * (days - 10) / days), slip.Basic); // joined on day 11: paid from then
     }
     private sealed class Session : IActorSession { public Actor Actor = new("owner", "FREETOWN", new HashSet<string> { "business.read", "accounting.read", "accounting.write", "documents.reverse" }); public Task<Actor> CurrentActor() => Task.FromResult(Actor); }
     private sealed class Factory(DbContextOptions<BusinessDb> options) : IDbContextFactory<BusinessDb> { public BusinessDb CreateDbContext() => new(options); }

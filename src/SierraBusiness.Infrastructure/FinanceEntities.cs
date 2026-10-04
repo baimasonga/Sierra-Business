@@ -24,6 +24,8 @@ public sealed class LedgerAccount
         new() { Id=2100, Name="Tax payable", Group=LedgerGroup.Liability },
         new() { Id=2200, Name="Payroll payable", Group=LedgerGroup.Liability },
         new() { Id=2300, Name="Payroll deductions payable", Group=LedgerGroup.Liability },
+        new() { Id=2310, Name="PAYE payable", Group=LedgerGroup.Liability, Control=true },
+        new() { Id=2320, Name="NASSIT payable", Group=LedgerGroup.Liability, Control=true },
         new() { Id=3000, Name="Owner capital", Group=LedgerGroup.Equity },
         new() { Id=3100, Name="Retained earnings", Group=LedgerGroup.Equity },
         new() { Id=3200, Name="Opening balance equity", Group=LedgerGroup.Equity, Control=true },
@@ -34,6 +36,7 @@ public sealed class LedgerAccount
         new() { Id=5000, Name="Cost of sales", Group=LedgerGroup.Expense, Control=true },
         new() { Id=5100, Name="Operating expenses", Group=LedgerGroup.Expense },
         new() { Id=5200, Name="Wages and salaries", Group=LedgerGroup.Expense },
+        new() { Id=5210, Name="Employer NASSIT contributions", Group=LedgerGroup.Expense, Control=true },
         new() { Id=5300, Name="Exchange losses", Group=LedgerGroup.Expense, Control=true },
         new() { Id=5400, Name="Warranty and service costs", Group=LedgerGroup.Expense, Control=true } ];
 }

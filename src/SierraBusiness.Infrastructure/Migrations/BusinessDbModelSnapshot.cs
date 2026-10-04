@@ -1040,6 +1040,9 @@ namespace SierraBusiness.Infrastructure.Migrations
                         .HasPrecision(19, 4)
                         .HasColumnType("TEXT");
 
+                    b.Property<DateOnly?>("BirthDate")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Branch")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -1067,7 +1070,23 @@ namespace SierraBusiness.Infrastructure.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("NassitExempt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("NassitNumber")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("NonResident")
+                        .HasColumnType("INTEGER");
+
                     b.Property<DateOnly>("StartDate")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Tin")
+                        .IsRequired()
+                        .HasMaxLength(30)
                         .HasColumnType("TEXT");
 
                     b.Property<int>("Version")
@@ -2007,6 +2026,22 @@ namespace SierraBusiness.Infrastructure.Migrations
                         },
                         new
                         {
+                            Id = 2310,
+                            CashOrBank = false,
+                            Control = true,
+                            Group = 1,
+                            Name = "PAYE payable"
+                        },
+                        new
+                        {
+                            Id = 2320,
+                            CashOrBank = false,
+                            Control = true,
+                            Group = 1,
+                            Name = "NASSIT payable"
+                        },
+                        new
+                        {
                             Id = 3000,
                             CashOrBank = false,
                             Control = false,
@@ -2084,6 +2119,14 @@ namespace SierraBusiness.Infrastructure.Migrations
                             Control = false,
                             Group = 4,
                             Name = "Wages and salaries"
+                        },
+                        new
+                        {
+                            Id = 5210,
+                            CashOrBank = false,
+                            Control = true,
+                            Group = 4,
+                            Name = "Employer NASSIT contributions"
                         },
                         new
                         {
@@ -2440,6 +2483,70 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.HasIndex("EmployeeId");
 
                     b.ToTable("PayrollItems");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.PayrollPaymentLine", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("DocumentId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("PayrollItemId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DocumentId");
+
+                    b.HasIndex("PayrollItemId");
+
+                    b.ToTable("PayrollPaymentLines");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.PayrollRuleVersion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Branch")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateOnly>("EffectiveFrom")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RulesJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("Time")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Branch", "EffectiveFrom");
+
+                    b.HasIndex("Branch", "Version")
+                        .IsUnique();
+
+                    b.ToTable("PayrollRules");
                 });
 
             modelBuilder.Entity("SierraBusiness.Infrastructure.PeriodClosure", b =>
@@ -2917,6 +3024,44 @@ namespace SierraBusiness.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("ServiceJobEvents");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.StatutoryRemittance", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Branch")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("DocumentId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateOnly>("Month")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reference")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DocumentId");
+
+                    b.HasIndex("Branch", "Month", "Kind");
+
+                    b.ToTable("StatutoryRemittances");
                 });
 
             modelBuilder.Entity("SierraBusiness.Infrastructure.StockLocation", b =>
@@ -4214,6 +4359,21 @@ namespace SierraBusiness.Infrastructure.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("SierraBusiness.Infrastructure.PayrollPaymentLine", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.BusinessDocument", null)
+                        .WithMany()
+                        .HasForeignKey("DocumentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SierraBusiness.Infrastructure.PayrollItem", null)
+                        .WithMany()
+                        .HasForeignKey("PayrollItemId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("SierraBusiness.Infrastructure.PricePolicy", b =>
                 {
                     b.HasOne("SierraBusiness.Infrastructure.Product", null)
@@ -4302,6 +4462,15 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.HasOne("SierraBusiness.Infrastructure.ServiceJob", null)
                         .WithMany()
                         .HasForeignKey("JobId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.StatutoryRemittance", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.BusinessDocument", null)
+                        .WithMany()
+                        .HasForeignKey("DocumentId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

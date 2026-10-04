@@ -2,7 +2,7 @@ namespace SierraBusiness.Domain;
 
 public enum TrackingMode { Quantity, Serial, Batch, BatchExpiry, Variant, Compatibility }
 public enum PaymentMethod { Cash, Cheque, BankTransfer }
-public enum DocumentKind { Receipt, Sale, Reversal, Journal, Payment, MoneyReceipt, Contra, StockTransfer, StockCount, Payroll, SalesReturn, PurchaseReturn, Delivery, CustomerCreditUse, ChequeReceipt, ChequeMovement, ChequeBounce, SupplierCreditUse, OpeningStock, LandedCost, SupplierInvoice, ServiceIssue, ServiceReturn, ServiceInvoice, ServiceClose }
+public enum DocumentKind { Receipt, Sale, Reversal, Journal, Payment, MoneyReceipt, Contra, StockTransfer, StockCount, Payroll, SalesReturn, PurchaseReturn, Delivery, CustomerCreditUse, ChequeReceipt, ChequeMovement, ChequeBounce, SupplierCreditUse, OpeningStock, LandedCost, SupplierInvoice, ServiceIssue, ServiceReturn, ServiceInvoice, ServiceClose, PayrollPayment, StatutoryRemittance }
 public enum Account { Cash = 1000, Bank = 1010, ChequesInHand = 1020, Receivables = 1100, Inventory = 1200, Payables = 2000, TaxPayable = 2100, Sales = 4000, CostOfSales = 5000 }
 public class BusinessException(string message) : Exception(message);
 
