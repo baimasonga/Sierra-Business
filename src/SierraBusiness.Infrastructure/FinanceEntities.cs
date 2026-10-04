@@ -14,6 +14,7 @@ public sealed class LedgerAccount
         new() { Id=1020, Name="Cheques in hand", Group=LedgerGroup.Asset, Control=true },
         new() { Id=1030, Name="Cheques deposited awaiting clearance", Group=LedgerGroup.Asset, Control=true },
         new() { Id=1300, Name="Supplier refunds and credits", Group=LedgerGroup.Asset, Control=true },
+        new() { Id=1310, Name="Employee loans and advances", Group=LedgerGroup.Asset, Control=true },
         new() { Id=1100, Name="Trade receivables", Group=LedgerGroup.Asset, Control=true },
         new() { Id=1250, Name="Delivered goods awaiting invoice", Group=LedgerGroup.Asset, Control=true },
         new() { Id=1260, Name="Service jobs in progress", Group=LedgerGroup.Asset, Control=true },

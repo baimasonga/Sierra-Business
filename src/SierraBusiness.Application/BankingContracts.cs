@@ -3,7 +3,7 @@ using Microsoft.VisualBasic.FileIO;
 using SierraBusiness.Domain;
 namespace SierraBusiness.Application;
 public sealed record StatementLineInput(DateOnly Date, string Reference, decimal Amount);
-public sealed record ImportStatementCommand(Guid OperationId, int AccountCode, string Reference, decimal OpeningBalance, decimal ClosingBalance, string Csv);
+public sealed record ImportStatementCommand(Guid OperationId, int AccountCode, string Reference, decimal OpeningBalance, decimal ClosingBalance, string Csv, [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] StatementFormat? Format = null);
 public sealed record VoidStatementCommand(Guid OperationId, Guid StatementId, string Reason);
 public sealed record StatementView(Guid Id, string Reference, int AccountCode, decimal Opening, decimal Closing, bool Voided);
 public sealed record StatementCandidate(Guid JournalLineId, string Number, DateOnly Date, string Narration);

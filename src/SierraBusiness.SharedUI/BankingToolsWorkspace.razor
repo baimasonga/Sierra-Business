@@ -1,0 +1,113 @@
+@inject IBankingExtras Extras
+@inject IBankingService Banking
+@inject IFinanceService Finance
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+<div class="tabs" role="tablist">@foreach (var t in new[] { "Statement formats", "Cheques issued", "Cash drawers" }) { <button role="tab" aria-selected="@(tab == t)" class="@(tab == t ? "tab active" : "tab")" @onclick="() => tab = t">@t</button> }</div>
+@if (tab == "Statement formats")
+{
+    <section class="panel"><h2>Import a bank's own statement file</h2>
+        <p class="hint">Choose the layout of your bank's CSV export (or describe a new one below), paste the file, check the preview, then import. Matching works as on the Banking page.</p>
+        <div class="form-grid">
+            <label>Layout<select @bind="formatIndex" @bind:after="Pick">@for (var i = 0; i < formats.Count; i++) { var f = formats[i]; <option value="@i">@(f.Bank.Length > 0 ? f.Bank + " · " : "")@f.Format.Name</option> }</select></label>
+            <label>Bank ledger<select @bind="account">@foreach (var a in Banks) { <option value="@a.Code">@a.Code · @a.Name</option> }</select></label>
+            <label>Statement identifier<input maxlength="100" @bind="reference" /></label>
+            <label>Opening balance<input type="number" step="0.01" @bind="opening" /></label><label>Closing balance<input type="number" step="0.01" @bind="closing" /></label>
+        </div>
+        <label>Statement file contents<textarea rows="6" @bind="csv"></textarea></label>
+        <button class="secondary" disabled="@busy" @onclick="Preview">Preview</button>
+        @if (preview.Count > 0)
+        {
+            <p>@preview.Count transactions · net @preview.Sum(x => x.Amount).ToString("N2") · calculated closing @((opening + preview.Sum(x => x.Amount)).ToString("N2"))</p>
+            <div class="table-wrap"><table><thead><tr><th>Date</th><th>Details</th><th>Signed amount</th></tr></thead><tbody>@foreach (var r in preview.Take(20)) { <tr><td>@r.Date.ToString("dd MMM yyyy")</td><td>@r.Reference</td><td class="numeric">@r.Amount.ToString("N2")</td></tr> }</tbody></table></div>
+            @if (CanWrite) { <button class="primary" disabled="@busy" @onclick="Import">Import reviewed statement</button> }
+        }
+    </section>
+    @if (CanWrite)
+    {
+        <section class="panel"><h2>Save a bank's layout</h2><p class="hint">Columns are numbered from 1; 0 means not used. Give either one signed amount column or separate debit and credit columns. Several date formats can be separated by |.</p>
+            <div class="form-grid">
+                <label>Bank<input maxlength="80" @bind="bank" /></label><label>Layout name<input maxlength="120" @bind="draft.Name" /></label>
+                <label>Separator<input maxlength="2" @bind="draft.Delimiter" /></label><label>Header rows<input type="number" min="0" max="20" @bind="draft.HeaderRows" /></label>
+                <label>Date column<input type="number" min="1" @bind="draft.DateColumn" /></label><label>Date format<input @bind="draft.DateFormat" /></label>
+                <label>Details column<input type="number" min="1" @bind="draft.ReferenceColumn" /></label><label>Amount column<input type="number" min="0" @bind="draft.AmountColumn" /></label>
+                <label>Debit column<input type="number" min="0" @bind="draft.DebitColumn" /></label><label>Credit column<input type="number" min="0" @bind="draft.CreditColumn" /></label>
+            </div>
+            <button class="primary" disabled="@busy" @onclick="SaveFormat">Save layout</button>
+        </section>
+    }
+}
+else if (tab == "Cheques issued")
+{
+    <section class="panel"><h2>Cheques we have written</h2>
+        <div class="table-wrap"><table><thead><tr><th>Cheque</th><th>Drawn on</th><th>Payee</th><th>Date</th><th class="numeric">Amount</th><th>Status</th><th>Voucher</th><th></th></tr></thead>
+            <tbody>@foreach (var c in cheques) { <tr><td>@c.Number</td><td>@c.BankAccount</td><td>@c.Payee</td><td>@c.Date.ToString("dd MMM yyyy")</td><td class="numeric">@c.Amount.ToString("N2")</td>
+                <td>@c.State@(c.StateDate is DateOnly d ? $" {d:dd MMM}" : "")@(c.Reason.Length > 0 ? $" · {c.Reason}" : "")</td><td>@c.VoucherNumber</td>
+                <td>@if (CanWrite && c.State == IssuedChequeState.Issued) { <button class="text-button" disabled="@busy" @onclick="() => Act(c, IssuedChequeState.Presented)">Presented</button> <button class="text-button" disabled="@(busy || string.IsNullOrWhiteSpace(actionReason))" @onclick="() => Act(c, IssuedChequeState.Cancelled)">Cancel / stop</button> }</td></tr> }</tbody></table></div>
+        @if (cheques.Count == 0) { <p class="hint">No cheques issued yet.</p> }
+        <p class="hint">Unpresented cheques are those still marked Issued: the bank balance in the books already includes them. Cancelling reverses the payment voucher.</p>
+        @if (CanWrite) { <div class="form-grid"><label>Date presented / cancelled<input type="date" @bind="actionDate" /></label><label>Reason (needed to cancel)<input maxlength="160" @bind="actionReason" /></label></div> }
+    </section>
+    @if (CanWrite)
+    {
+        <section class="panel"><h2>Write a cheque</h2>
+            <div class="form-grid">
+                <label>Drawn on<select @bind="chequeBank">@foreach (var a in Banks.Where(x => x.Code != 1000)) { <option value="@a.Code">@a.Code · @a.Name</option> }</select></label>
+                <label>Cheque number<input maxlength="30" @bind="chequeNumber" /></label><label>Payee<input maxlength="160" list="cheque-payees" @bind="payee" /></label>
+                <label>Date<input type="date" @bind="chequeDate" /></label><label>Amount<input type="number" min="0.01" step="0.01" @bind="chequeAmount" /></label>
+                <label>Pays<select @bind="billId"><option value="@Guid.Empty">An expense (no supplier bill)</option>@foreach (var b in SupplierBills) { <option value="@b.Id">@b.Party · @b.Number · @b.Outstanding.ToString("N2")</option> }</select></label>
+                @if (billId == Guid.Empty) { <label>Expense ledger<select @bind="expense">@foreach (var a in Expenses) { <option value="@a.Code">@a.Code · @a.Name</option> }</select></label> }
+                <label>Narration<input maxlength="100" @bind="narration" /></label>
+            </div>
+            <datalist id="cheque-payees">@foreach (var p in SupplierBills.Select(x => x.Party).Distinct()) { <option value="@p"></option> }</datalist>
+            <button class="primary" disabled="@busy" @onclick="Issue">Record cheque</button>
+        </section>
+    }
+}
+else
+{
+    <section class="panel"><h2>Cash drawers</h2>
+        <p class="hint">When a drawer has cashiers assigned, only they (and till managers) can open it. A drawer with nobody assigned is open to every cashier.</p>
+        <div class="table-wrap"><table><thead><tr><th>Drawer ledger</th><th>Assigned cashiers</th></tr></thead><tbody>@foreach (var d in drawers) { <tr><td>@d.AccountCode · @d.AccountName</td><td>@(d.Cashiers.Count == 0 ? "Anyone" : string.Join(", ", d.Cashiers))</td></tr> }</tbody></table></div>
+        @if (Actor.Permissions.Contains("tills.manage"))
+        {
+            <div class="form-grid"><label>Drawer<select @bind="drawer">@foreach (var d in drawers) { <option value="@d.AccountCode">@d.AccountCode · @d.AccountName</option> }</select></label><label>Cashier user name<input maxlength="256" @bind="cashier" /></label></div>
+            <button class="primary" disabled="@busy" @onclick="() => Assign(true)">Assign</button> <button class="secondary" disabled="@busy" @onclick="() => Assign(false)">Remove</button>
+        }
+    </section>
+}
+@code {
+    [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
+    private string tab = "Statement formats", error = "", message = "", csv = "", reference = "", bank = "", chequeNumber = "", payee = "", narration = "", actionReason = "", cashier = "";
+    private bool busy; private int formatIndex, account = 1010, chequeBank = 1010, expense = 5100, drawer = 1000; private decimal opening, closing, chequeAmount; private Guid billId;
+    private DateOnly chequeDate = DateOnly.FromDateTime(DateTime.Now), actionDate = DateOnly.FromDateTime(DateTime.Now);
+    private IReadOnlyList<BankFormatView> formats = []; private IReadOnlyList<StatementLineInput> preview = []; private IReadOnlyList<IssuedChequeView> cheques = []; private IReadOnlyList<DrawerAssignment> drawers = [];
+    private FinanceSnapshot? finance; private Draft draft = new();
+    private bool CanWrite => Actor.Permissions.Contains("accounting.write");
+    private IEnumerable<LedgerDefinition> Banks => finance?.Accounts.Where(x => x.CashOrBank) ?? [];
+    private IEnumerable<LedgerDefinition> Expenses => finance?.Accounts.Where(x => x.Group == LedgerGroup.Expense) ?? [];
+    private IEnumerable<OutstandingBill> SupplierBills => finance?.Bills.Where(x => !x.Receivable && x.Outstanding > 0) ?? [];
+    private sealed class Draft { public string Name { get; set; } = ""; public string Delimiter { get; set; } = ","; public int HeaderRows { get; set; } = 1; public int DateColumn { get; set; } = 1; public string DateFormat { get; set; } = "dd/MM/yyyy"; public int ReferenceColumn { get; set; } = 2; public int AmountColumn { get; set; } = 0; public int DebitColumn { get; set; } = 3; public int CreditColumn { get; set; } = 4; }
+    protected override Task OnInitializedAsync() => Run(Load);
+    private async Task Load()
+    {
+        formats = await Extras.Formats(); drawers = await Extras.Drawers();
+        if (Actor.Permissions.Contains("accounting.read")) { cheques = await Extras.IssuedCheques(); finance = await Finance.Read(DateOnly.MinValue, DateOnly.FromDateTime(DateTime.UtcNow)); }
+        if (Banks.Any() && !Banks.Any(x => x.Code == account)) account = Banks.First().Code;
+        if (drawers.Count > 0 && !drawers.Any(x => x.AccountCode == drawer)) drawer = drawers[0].AccountCode;
+    }
+    private async Task Run(Func<Task> action) { if (busy) return; busy = true; error = message = ""; try { await action(); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; } catch (Exception) { error = "The action could not complete. Refresh and try again."; } finally { busy = false; } }
+    private StatementFormat Chosen => formats.Count == 0 ? StatementFormat.BuiltIn[0] : formats[Math.Clamp(formatIndex, 0, formats.Count - 1)].Format;
+    private void Pick() => preview = [];
+    private Task Preview() => Run(async () => preview = await Extras.Preview(csv, Chosen));
+    private Task Import() => Run(async () => { await Banking.Import(new(Guid.NewGuid(), account, reference, opening, closing, csv, Chosen)); csv = reference = ""; opening = closing = 0; preview = []; message = "Statement imported. Review the matches on the Banking page."; });
+    private Task SaveFormat() => Run(async () => { await Extras.SaveFormat(new(Guid.NewGuid(), bank, new(draft.Name, draft.Delimiter, draft.HeaderRows, draft.DateColumn, draft.DateFormat, draft.ReferenceColumn, draft.AmountColumn, draft.DebitColumn, draft.CreditColumn))); message = $"Layout for {bank} saved."; await Load(); formatIndex = formats.Count - 1; });
+    private Task Issue() => Run(async () =>
+    {
+        var allocations = billId == Guid.Empty ? new List<BillSettlement>() : [new(billId, chequeAmount)];
+        await Extras.IssueCheque(new(Guid.NewGuid(), chequeBank, payee, chequeNumber, chequeDate, chequeAmount, allocations, billId == Guid.Empty ? expense : null, narration));
+        message = $"Cheque {chequeNumber} recorded and the payment posted."; chequeNumber = payee = narration = ""; chequeAmount = 0; billId = Guid.Empty; await Load();
+    });
+    private Task Act(IssuedChequeView c, IssuedChequeState state) => Run(async () => { await Extras.ActOnIssuedCheque(new(Guid.NewGuid(), c.Id, state, actionDate, actionReason)); message = $"Cheque {c.Number} marked {state.ToString().ToLowerInvariant()}."; actionReason = ""; await Load(); });
+    private Task Assign(bool assign) => Run(async () => { await Extras.AssignDrawer(new(Guid.NewGuid(), drawer, cashier, assign)); message = assign ? $"{cashier} assigned." : $"{cashier} removed."; cashier = ""; await Load(); });
+}

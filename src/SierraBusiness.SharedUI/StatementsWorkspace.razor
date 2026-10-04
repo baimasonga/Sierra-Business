@@ -1,0 +1,85 @@
+@inject IStatementsService Statements
+@inject Microsoft.JSInterop.IJSRuntime JS
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+<div class="view-toggle report-tabs" role="tablist">
+    @foreach (var t in Tabs) { <button type="button" role="tab" class="@(tab == t ? "active" : "")" aria-selected="@(tab == t)" @onclick="() => Open(t)">@t</button> }
+</div>
+<section class="panel">
+    <div class="panel-title"><h2>@tab</h2>@if (tab != "Year-end close") { <button class="secondary" disabled="@busy" @onclick="Export">Export to Excel</button> }</div>
+    @if (tab != "Year-end close")
+    {
+        <div class="report-period">@if (tab != "Balance sheet") { <label>From<input type="date" @bind="from" @bind:after="Load" /></label> }<label>@(tab == "Balance sheet" ? "As at" : "To")<input type="date" @bind="to" @bind:after="Load" /></label></div>
+    }
+    @if (tab == "Profit and loss" && pl is { } p) { @Table(p.Rows) }
+    else if (tab == "Balance sheet" && bs is { } b)
+    {
+        @Table(b.Rows)
+        <p class="check-line">@(b.Difference == 0 ? "✓ Balanced" : $"⚠ Out of balance by {b.Difference:N2}") — assets equal liabilities plus equity.@(b.LastYearEnd is DateOnly y ? $" Last year end closed: {y:dd MMM yyyy}." : "")</p>
+    }
+    else if (tab == "Cash flow" && cf is { } c)
+    {
+        <table class="report-table"><tbody><tr><th>Opening cash and bank</th><td class="numeric">@c.OpeningCash.ToString("N2")</td></tr></tbody></table>
+        @Table(c.Rows)
+        <table class="report-table"><tbody><tr><th>Net change in cash</th><td class="numeric">@c.NetChange.ToString("N2")</td></tr><tr><th>Closing cash and bank</th><td class="numeric"><strong>@c.ClosingCash.ToString("N2")</strong></td></tr></tbody></table>
+        <p class="check-line">@(c.Reconciled ? "✓ Reconciled" : "⚠ Difference") — opening cash plus net change equals the cash and bank ledgers at the end date.</p>
+    }
+    else if (tab == "Funds flow" && ff is { } f)
+    {
+        <div class="compliance-grid"><div><h3>Sources of funds</h3>@Table(f.Sources)<p><strong>Total @f.TotalSources.ToString("N2")</strong></p></div><div><h3>Uses of funds</h3>@Table(f.Uses)<p><strong>Total @f.TotalUses.ToString("N2")</strong></p></div></div>
+        <p class="check-line">@(f.TotalSources == f.TotalUses ? "✓ Sources equal uses" : "⚠ Difference")</p>
+    }
+    else if (tab == "Year-end close")
+    {
+        <p class="hint">Closing a year locks every posting up to its last day and moves that year's profit to retained earnings in the balance sheet. Reports for the year are unchanged. Close only after the accounts are final.</p>
+        <div class="form-grid"><label>Year end<input type="date" @bind="yearEnd" /></label><label>Reason<input maxlength="200" placeholder="Accounts approved by the auditor" @bind="reason" /></label></div>
+        @if (Actor.Permissions.Contains("accounting.write")) { <button class="primary" disabled="@busy" @onclick="Close">Close the year</button> }
+        <div class="table-wrap"><table><thead><tr><th>Year end</th><th class="numeric">Profit</th><th>Closed by</th><th>Reason</th></tr></thead>
+            <tbody>@foreach (var y in years) { <tr><td>@y.YearEnd.ToString("dd MMM yyyy")</td><td class="numeric">@y.Profit.ToString("N2")</td><td>@y.ClosedBy, @y.Closed.ToLocalTime().ToString("dd MMM yyyy")</td><td>@y.Reason</td></tr> }</tbody></table></div>
+    }
+</section>
+@code {
+    [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
+    private static readonly string[] Tabs = ["Profit and loss", "Balance sheet", "Cash flow", "Funds flow", "Year-end close"];
+    private string tab = "Profit and loss", error = "", message = "", reason = "";
+    private bool busy;
+    private DateOnly from = new(DateTime.Now.Year, 1, 1), to = DateOnly.FromDateTime(DateTime.Now), yearEnd = new(DateTime.Now.Year - 1, 12, 31);
+    private ProfitAndLoss? pl; private BalanceSheet? bs; private CashFlowStatement? cf; private FundsFlowStatement? ff; private IReadOnlyList<YearEndView> years = [];
+    private Guid closeOperation = Guid.NewGuid();
+    protected override Task OnInitializedAsync() => Load();
+    private Task Open(string t) { tab = t; return Load(); }
+    private async Task Load()
+    {
+        busy = true; error = "";
+        try
+        {
+            switch (tab)
+            {
+                case "Profit and loss": pl = await Statements.ProfitAndLoss(from, to); break;
+                case "Balance sheet": bs = await Statements.BalanceSheet(to); break;
+                case "Cash flow": cf = await Statements.CashFlow(from, to); break;
+                case "Funds flow": ff = await Statements.FundsFlow(from, to); break;
+                default: years = await Statements.YearEnds(); break;
+            }
+        }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
+        finally { busy = false; }
+    }
+    private async Task Export()
+    {
+        busy = true; error = "";
+        try { var bytes = await Statements.Export(new(tab, from, to)); await Microsoft.JSInterop.JSRuntimeExtensions.InvokeVoidAsync(JS, "sierraDownload", $"{tab} {to:yyyy-MM-dd}.xlsx", Convert.ToBase64String(bytes)); }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
+        finally { busy = false; }
+    }
+    private async Task Close()
+    {
+        busy = true; error = message = "";
+        try { await Statements.CloseYear(new(closeOperation, yearEnd, reason)); closeOperation = Guid.NewGuid(); message = $"Year to {yearEnd:dd MMM yyyy} closed and locked."; years = await Statements.YearEnds(); }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
+        finally { busy = false; }
+    }
+    private static RenderFragment Table(IEnumerable<StatementRow> rows) => @<div class="table-wrap"><table class="report-table"><tbody>
+        @foreach (var g in rows.GroupBy(r => r.Section)) { @if (g.Key.Length > 0) { <tr><th colspan="2">@g.Key</th></tr> } @foreach (var r in g) { <tr class="@(r.Total ? "total-row" : "")"><td>@(r.Total ? "" : "  ")@r.Label</td><td class="numeric">@if (r.Total) { <strong>@r.Amount.ToString("N2")</strong> } else { @r.Amount.ToString("N2") }</td></tr> } }
+    </tbody></table></div>;
+}

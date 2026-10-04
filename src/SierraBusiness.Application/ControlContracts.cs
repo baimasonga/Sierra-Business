@@ -7,12 +7,13 @@ namespace SierraBusiness.Application;
 /// <param name="ReversalAbove">Reversals of documents of at least this value need approval (0 = every reversal). Null: none.</param>
 /// <param name="StockAdjustmentAbove">Direct stock count adjustments of at least this value need approval (0 = every adjustment). Null: none.</param>
 /// <param name="CreditOverride">A credit sale over the customer's limit can be approved instead of being refused.</param>
+/// <param name="RefundAbove">Sales returns and refunds of at least this value need approval (0 = every return). Null: none.</param>
 /// <param name="SelfApprovalWhenAlone">When nobody else holds the approving permission, the requester may approve their own request (recorded as self-approved).</param>
 public sealed record ControlPolicy(int Version = 0, decimal? MaxDiscountPercent = null, bool ApproveBelowCost = false, int? BackdateDays = null, decimal? ReversalAbove = null,
-    decimal? StockAdjustmentAbove = null, bool CreditOverride = false, bool SelfApprovalWhenAlone = true, string WorkStart = "07:00", string WorkEnd = "19:00")
+    decimal? StockAdjustmentAbove = null, bool CreditOverride = false, bool SelfApprovalWhenAlone = true, string WorkStart = "07:00", string WorkEnd = "19:00", decimal? RefundAbove = null)
 {
-    public bool Active => MaxDiscountPercent is not null || ApproveBelowCost || BackdateDays is not null || ReversalAbove is not null || StockAdjustmentAbove is not null || CreditOverride;
-    public static ControlPolicy Recommended => new(0, 10, true, 3, 0, 500, true, true);
+    public bool Active => MaxDiscountPercent is not null || ApproveBelowCost || BackdateDays is not null || ReversalAbove is not null || StockAdjustmentAbove is not null || CreditOverride || RefundAbove is not null;
+    public static ControlPolicy Recommended => new(0, 10, true, 3, 0, 500, true, true, RefundAbove: 500);
 }
 public sealed record SaveControlPolicy(Guid OperationId, ControlPolicy Policy);
 

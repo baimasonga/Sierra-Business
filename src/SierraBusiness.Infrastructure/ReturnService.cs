@@ -40,9 +40,9 @@ public sealed class ReturnService(IDbContextFactory<BusinessDb> factory, IActorS
         return docs.OrderByDescending(x => x.BusinessDate).Select(d => new ReturnableDocument(d.Id, d.Number, d.Party, d.Kind == DocumentKind.Sale, movements.First(x => x.DocumentId == d.Id).Location,
             movements.Where(x => x.DocumentId == d.Id).GroupBy(x => new { x.ProductId, x.Serial, x.Batch, x.Expiry }).Select(g => new ReturnableLine(g.Key.ProductId, products[g.Key.ProductId].Name, g.Key.Serial, g.Key.Batch, g.Key.Expiry, Math.Abs(g.Sum(x => x.Quantity)), returns.Where(x => x.OriginalDocumentId == d.Id && x.ProductId == g.Key.ProductId && x.Serial == g.Key.Serial && x.Batch == g.Key.Batch && x.Expiry == g.Key.Expiry).Sum(x => x.Quantity))).ToArray())).ToArray();
     }
-    public async Task<Guid> Post(ReturnCommand input)
-    {
-        var actor = await Authorize(true); var date = DateOnly.FromDateTime(DateTime.UtcNow);
+    public async Task<Guid> Post(ReturnCommand input) { var actor = await Authorize(true); return await Controls.Guard(factory, actor, () => PostCore(actor, input)); }
+    private async Task<Guid> PostCore(Actor actor, ReturnCommand input)
+    { var date = DateOnly.FromDateTime(DateTime.UtcNow);
         if (input.OperationId == Guid.Empty || input.Lines is null || input.Lines.Count is < 1 or > 200) throw new BusinessException("Return needs an operation ID and 1–200 lines.");
         var payload = JsonSerializer.Serialize(input); var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(actor.Branch + actor.Id + "document.return" + payload)));
         await using var db = await factory.CreateDbContextAsync(); await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
@@ -160,6 +160,10 @@ public sealed class ReturnService(IDbContextFactory<BusinessDb> factory, IActorS
             doc.Settlement = beforeInvoice == true ? "Returned before invoicing" : billCredit == refund ? "Purchase bill credit" : input.Disposition.ToString();
         }
         foreach (var p in AccountingEngine.Balanced(posting)) db.Journal.Add(new() { Id = Guid.NewGuid(), DocumentId = doc.Id, Branch = actor.Branch, Account = p.Account, Debit = p.Debit, Credit = p.Credit });
+        var policy = await Controls.Current(db, actor.Branch);
+        if (sale && policy.RefundAbove is decimal limit && refund >= limit)
+            await Controls.Gate(db, actor, Controls.Return, input with { ApprovalId = null }, input.ApprovalId, input.OperationId, [new("Refund", $"a return of NLe {refund:N2} on {original.Number[^Math.Min(8, original.Number.Length)..]} ({input.Disposition}) is at least NLe {limit:N2}", "accounting.write")],
+                $"Sales return · {original.Party} · NLe {refund:N2} · {input.Reason}");
         db.Operations.Add(new() { Id = input.OperationId, ResultId = doc.Id, Branch = actor.Branch, Actor = actor.Id, Action = "document.return", Time = DateTimeOffset.UtcNow, Payload = payload, Fingerprint = hash });
         await db.SaveChangesAsync(); await tx.CommitAsync(); return doc.Id;
     }

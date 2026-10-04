@@ -13,6 +13,7 @@
         <label class="check"><input type="checkbox" checked="@(backdate is not null)" @onchange="e => backdate = (bool)(e.Value ?? false) ? 3 : null" /> Postings dated more than <input class="num" type="number" min="0" max="365" disabled="@(backdate is null)" @bind="BackdateValue" /> days ago</label>
         <label class="check"><input type="checkbox" checked="@(reversal is not null)" @onchange="e => reversal = (bool)(e.Value ?? false) ? 0 : null" /> Reversals of documents worth NLe <input class="num" type="number" min="0" step="0.01" disabled="@(reversal is null)" @bind="ReversalValue" /> or more (0 = every reversal)</label>
         <label class="check"><input type="checkbox" checked="@(adjustment is not null)" @onchange="e => adjustment = (bool)(e.Value ?? false) ? 500 : null" /> Stock count adjustments of NLe <input class="num" type="number" min="0" step="0.01" disabled="@(adjustment is null)" @bind="AdjustmentValue" /> or more</label>
+        <label class="check"><input type="checkbox" checked="@(refund is not null)" @onchange="e => refund = (bool)(e.Value ?? false) ? 500 : null" /> Sales returns and refunds of NLe <input class="num" type="number" min="0" step="0.01" disabled="@(refund is null)" @bind="RefundValue" /> or more (0 = every return)</label>
         <label class="check"><input type="checkbox" @bind="creditOverride" /> Credit sales over a customer's limit can be approved (otherwise they are refused)</label>
         <label class="check"><input type="checkbox" @bind="selfApproval" /> Allow self-approval when nobody else can approve (recorded as self-approved)</label>
         <div class="form-grid compact"><label>Working hours from<input type="time" @bind="workStart" /></label><label>to<input type="time" @bind="workEnd" /></label></div>
@@ -70,7 +71,7 @@
     [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
     [Parameter] public EventCallback<Guid> OpenDocument { get; set; }
     private ControlPolicy policy = new();
-    private decimal? discount, reversal, adjustment; private int? backdate;
+    private decimal? discount, reversal, adjustment, refund; private int? backdate;
     private bool belowCost, creditOverride, selfApproval = true, busy;
     private TimeOnly workStart = new(7, 0), workEnd = new(19, 0);
     private DateOnly from = DateOnly.FromDateTime(DateTime.Now).AddDays(-29), to = DateOnly.FromDateTime(DateTime.Now);
@@ -81,12 +82,13 @@
     private decimal DiscountValue { get => discount ?? 0; set => discount = value; }
     private int BackdateValue { get => backdate ?? 0; set => backdate = value; }
     private decimal ReversalValue { get => reversal ?? 0; set => reversal = value; }
+    private decimal RefundValue { get => refund ?? 0; set => refund = value; }
     private decimal AdjustmentValue { get => adjustment ?? 0; set => adjustment = value; }
 
     protected override Task OnInitializedAsync() => Run(async () => { Apply(await Controls.Policy()); await LoadReport(); });
     private void Apply(ControlPolicy p)
     {
-        policy = p; discount = p.MaxDiscountPercent; belowCost = p.ApproveBelowCost; backdate = p.BackdateDays; reversal = p.ReversalAbove; adjustment = p.StockAdjustmentAbove;
+        policy = p; discount = p.MaxDiscountPercent; belowCost = p.ApproveBelowCost; backdate = p.BackdateDays; reversal = p.ReversalAbove; adjustment = p.StockAdjustmentAbove; refund = p.RefundAbove;
         creditOverride = p.CreditOverride; selfApproval = p.SelfApprovalWhenAlone;
         workStart = TimeOnly.TryParse(p.WorkStart, out var s) ? s : new(7, 0); workEnd = TimeOnly.TryParse(p.WorkEnd, out var e) ? e : new(19, 0);
     }
@@ -103,7 +105,7 @@
     private void Recommended() { var v = policy.Version; Apply(ControlPolicy.Recommended with { Version = v }); message = "Recommended settings filled in. Review them and select Save controls."; }
     private Task Save() => Run(async () =>
     {
-        await Controls.SavePolicy(new(Guid.NewGuid(), new ControlPolicy(policy.Version, discount, belowCost, backdate, reversal, adjustment, creditOverride, selfApproval, workStart.ToString("HH:mm"), workEnd.ToString("HH:mm"))));
+        await Controls.SavePolicy(new(Guid.NewGuid(), new ControlPolicy(policy.Version, discount, belowCost, backdate, reversal, adjustment, creditOverride, selfApproval, workStart.ToString("HH:mm"), workEnd.ToString("HH:mm"), refund)));
         Apply(await Controls.Policy()); await LoadReport();
         message = policy.Active ? "Controls saved. Postings beyond these limits now wait for approval." : "Controls saved. All limits are off.";
     });

@@ -5,9 +5,9 @@ public static class WorkspaceNavigation
 {
     public static IReadOnlyList<NavigationArea> Areas { get; } = [
         new("Overview", "◈", ["Overview", "Dashboard", "Reminders", "Reports"]),
-        new("Sales & purchases", "⇄", ["New sale", "Receive stock", "Orders & quotations", "Tenders", "Customers & suppliers", "Returns", "Sales controls", "Supplier invoices", "Imports & landed cost"]),
+        new("Sales & purchases", "⇄", ["New sale", "Receive stock", "Orders & quotations", "Tenders", "Customers & suppliers", "Returns", "Sales controls", "Price rules", "Supplier invoices", "Imports & landed cost"]),
         new("Inventory", "▦", ["Stock summary", "Catalogue", "Variants & bundles", "Product settings", "Barcodes", "Warehouse controls", "Count sessions", "Import from Excel", "Movement register", "Tracking register"]),
-        new("Finance", "=", ["Accounting", "Banking", "Tills", "Trial balance", "Periods & tax"]),
+        new("Finance", "=", ["Accounting", "Financial statements", "Banking", "Banking tools", "Tills", "Trial balance", "Periods & tax"]),
         new("After-sales", "◎", ["Equipment lookup", "Installations", "Service jobs", "Equipment setup"]),
         new("People", "♙", ["Payroll"]),
         new("Documents", "▤", ["Document library", "Documents"]),

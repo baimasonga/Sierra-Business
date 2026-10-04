@@ -26,6 +26,8 @@ public sealed class Employee
     public bool NonResident { get; set; }
     public bool NassitExempt { get; set; }
     public DateOnly? BirthDate { get; set; }
+    public string BankName { get; set; } = "";
+    public string BankAccount { get; set; } = "";
 }
 public sealed class PayrollItem
 {
@@ -38,14 +40,24 @@ public sealed class PayrollItem
 // Append-only records (database guards and integrity seals).
 public sealed class PayrollRuleVersion { public Guid Id { get; set; } public string Branch { get; set; } = ""; public int Version { get; set; } public DateOnly EffectiveFrom { get; set; } public string RulesJson { get; set; } = "{}"; public string CreatedBy { get; set; } = ""; public DateTimeOffset Time { get; set; } }
 public sealed class PayrollPaymentLine { public Guid Id { get; set; } public Guid DocumentId { get; set; } public Guid PayrollItemId { get; set; } public decimal Amount { get; set; } }
+public sealed class EmployeeLoan { public Guid Id { get; set; } public Guid DocumentId { get; set; } public Guid EmployeeId { get; set; } public decimal Principal { get; set; } public decimal Installment { get; set; } public string Reason { get; set; } = ""; }
 public sealed class StatutoryRemittance { public Guid Id { get; set; } public Guid DocumentId { get; set; } public string Branch { get; set; } = ""; public DateOnly Month { get; set; } public StatutoryKind Kind { get; set; } public decimal Amount { get; set; } public string Reference { get; set; } = ""; }
 
 /// <summary>Pay calculation: proration by calendar days, then NASSIT and PAYE from the rules in force for the month.</summary>
 public static class PayrollMath
 {
-    public const int Salaries = 5200, EmployerNassit = 5210, NetPay = 2200, OtherDeductions = 2300, PayePayable = 2310, NassitPayable = 2320;
+    public const int Salaries = 5200, EmployerNassit = 5210, NetPay = 2200, OtherDeductions = 2300, PayePayable = 2310, NassitPayable = 2320, Loans = 1310;
 
-    public static PayCalculation Calculate(EmployeeView e, PayrollRules? rules, DateOnly month, PayrollAdjustment? adjustment)
+    /// <summary>What each employee still owes on staff loans: loans given less instalments deducted in payroll (both unreversed).</summary>
+    public static async Task<Dictionary<Guid, (decimal Outstanding, decimal Installment)>> LoanBalances(BusinessDb db, string branch)
+    {
+        var loans = await db.EmployeeLoans.AsNoTracking().Where(l => db.Documents.Any(d => d.Id == l.DocumentId && d.Branch == branch) && !db.Documents.Any(r => r.Reverses == l.DocumentId)).ToListAsync();
+        var items = await db.PayrollItems.AsNoTracking().Where(i => db.Documents.Any(d => d.Id == i.DocumentId && d.Branch == branch) && !db.Documents.Any(r => r.Reverses == i.DocumentId)).ToListAsync();
+        var repaid = items.GroupBy(i => i.EmployeeId).ToDictionary(g => g.Key, g => g.Sum(i => Read(i).Calculation.LoanRepayment));
+        return loans.GroupBy(l => l.EmployeeId).ToDictionary(g => g.Key, g => (g.Sum(l => l.Principal) - repaid.GetValueOrDefault(g.Key), g.OrderBy(l => l.Id).Last().Installment));
+    }
+
+    public static PayCalculation Calculate(EmployeeView e, PayrollRules? rules, DateOnly month, PayrollAdjustment? adjustment, decimal loanInstallment = 0)
     {
         var first = new DateOnly(month.Year, month.Month, 1); var last = first.AddMonths(1).AddDays(-1);
         var daysInMonth = (decimal)DateTime.DaysInMonth(first.Year, first.Month);
@@ -53,31 +65,41 @@ public static class PayrollMath
         if (to < from) throw new BusinessException($"{e.Code} was not employed during {first:MMMM yyyy}.");
         var employed = (decimal)(to.DayNumber - from.DayNumber + 1);
         var a = adjustment ?? new(e.Id);
-        foreach (var v in new[] { a.UnpaidDays, a.Overtime, a.Bonus, a.ExtraDeduction })
+        foreach (var v in new[] { a.UnpaidDays, a.Overtime, a.Bonus, a.ExtraDeduction, a.LeaveAllowance, a.EndOfService })
             if (v < 0 || v > 1_000_000_000 || AccountingEngine.Money(v) != v) throw new BusinessException($"Check the adjustments for {e.Code}: amounts are positive with up to two decimals.");
         if (a.UnpaidDays > employed || a.UnpaidDays * 2 != Math.Floor(a.UnpaidDays * 2)) throw new BusinessException($"Unpaid days for {e.Code} must be in half days and at most the {employed:0} days employed this month.");
         var daysPaid = employed - a.UnpaidDays;
         var basic = daysPaid == daysInMonth ? e.BasicSalary : AccountingEngine.Money(e.BasicSalary * daysPaid / daysInMonth);
         var allowances = daysPaid == daysInMonth ? e.Allowances : AccountingEngine.Money(e.Allowances * daysPaid / daysInMonth);
-        var gross = basic + allowances + a.Overtime + a.Bonus;
+        var gross = basic + allowances + a.Overtime + a.Bonus + a.LeaveAllowance + a.EndOfService;
+        decimal leaveFree = 0, leaveExcessTax = 0;
         decimal taxFree = 0, nassitBase = 0, nassitEmployee = 0, nassitEmployer = 0, chargeable = 0, paye = 0;
         if (rules is not null)
         {
             var aged = rules.NassitAgeLimit > 0 && e.BirthDate is DateOnly born && born.AddYears(rules.NassitAgeLimit) < first; // stops from the month after the birthday
             if (!e.NassitExempt && !aged)
             {
-                nassitBase = rules.NassitBase == NassitBase.BasicSalary ? basic : gross;
+                nassitBase = rules.NassitBase == NassitBase.BasicSalary ? basic : gross - a.EndOfService - a.LeaveAllowance;
                 nassitEmployee = AccountingEngine.Money(nassitBase * rules.NassitEmployee);
                 nassitEmployer = AccountingEngine.Money(nassitBase * rules.NassitEmployer);
             }
             taxFree = Math.Min(allowances, rules.TaxFreeAllowances);
-            chargeable = Math.Max(0, gross - taxFree - nassitEmployee);
-            paye = e.Resident ? Paye(chargeable, rules.PayeBands) : AccountingEngine.Money(chargeable * rules.NonResidentRate);
+            var banded = gross;
+            if (rules.EndOfServiceTaxFree) banded -= a.EndOfService; // Finance Act 2026: end-of-service benefits are exempt
+            if (rules.LeaveUpToBasicTaxFree && a.LeaveAllowance > 0)
+            {
+                leaveFree = Math.Min(a.LeaveAllowance, e.BasicSalary);
+                leaveExcessTax = AccountingEngine.Money((a.LeaveAllowance - leaveFree) * rules.LeaveExcessRate);
+                banded -= a.LeaveAllowance;
+            }
+            chargeable = Math.Max(0, banded - taxFree - nassitEmployee);
+            paye = (e.Resident ? Paye(chargeable, rules.PayeBands) : AccountingEngine.Money(chargeable * rules.NonResidentRate)) + leaveExcessTax;
         }
         var other = e.Deductions + a.ExtraDeduction;
-        var net = gross - paye - nassitEmployee - other;
+        var loan = a.SkipLoan ? 0 : Math.Min(loanInstallment, Math.Max(0, gross - paye - nassitEmployee - other));
+        var net = gross - paye - nassitEmployee - other - loan;
         if (net < 0) throw new BusinessException($"Deductions for {e.Code} ({other:N2} plus statutory {paye + nassitEmployee:N2}) are more than the pay of {gross:N2} this month. Reduce the one-off deduction.");
-        return new(daysInMonth, daysPaid, basic, allowances, a.Overtime, a.Bonus, gross, taxFree, nassitBase, nassitEmployee, chargeable, paye, other, net, nassitEmployer, rules is not null, rules?.Version ?? 0, a.Note.Trim());
+        return new(daysInMonth, daysPaid, basic, allowances, a.Overtime, a.Bonus, gross, taxFree, nassitBase, nassitEmployee, chargeable, paye, other, net, nassitEmployer, rules is not null, rules?.Version ?? 0, (a.Note ?? "").Trim(), a.LeaveAllowance, leaveFree, leaveExcessTax, a.EndOfService, loan);
     }
 
     public static decimal Paye(decimal chargeable, IReadOnlyList<PayeBand> bands)
@@ -120,7 +142,7 @@ public sealed class PayrollService(IDbContextFactory<BusinessDb> factory, IActor
         if (actor.Branch != options.Value.Branch || string.IsNullOrWhiteSpace(actor.Id)) throw new UnauthorizedAccessException("Sign in to the configured branch."); return actor;
     }
     private static string Short(string? number) { var parts = (number ?? "").Split('-'); return parts.Length >= 3 && parts[^1].Length > 8 ? $"{parts[^2]}-{parts[^1][^8..].ToUpperInvariant()}" : number ?? ""; }
-    private static EmployeeView View(Employee e) => new(e.Id, e.Version, e.Code, e.Name, e.Department, e.BasicSalary, e.Allowances, e.Deductions, e.StartDate, e.EndDate, e.Tin, e.NassitNumber, !e.NonResident, e.NassitExempt, e.BirthDate);
+    private static EmployeeView View(Employee e) => new(e.Id, e.Version, e.Code, e.Name, e.Department, e.BasicSalary, e.Allowances, e.Deductions, e.StartDate, e.EndDate, e.Tin, e.NassitNumber, !e.NonResident, e.NassitExempt, e.BirthDate, e.BankName, e.BankAccount);
 
     public async Task<PayrollSnapshot> Read()
     {
@@ -141,7 +163,7 @@ public sealed class PayrollService(IDbContextFactory<BusinessDb> factory, IActor
         {
             var (e, c) = PayrollMath.Read(x); var d = byId[x.DocumentId];
             payments.TryGetValue(x.Id, out var paid); var payDoc = paid is null ? null : byId.GetValueOrDefault(paid.DocumentId);
-            return new PayslipView(d.Id, d.Number, x.Month, d.BusinessDate, e.Code, e.Name, e.Department, c.Basic, c.Allowances, c.OtherDeductions + c.Paye + c.NassitEmployee, c.Net, reversed.Contains(d.Id),
+            return new PayslipView(d.Id, d.Number, x.Month, d.BusinessDate, e.Code, e.Name, e.Department, c.Basic, c.Allowances, c.OtherDeductions + c.Paye + c.NassitEmployee + c.LoanRepayment, c.Net, reversed.Contains(d.Id),
                 x.Id, x.EmployeeId, c, e.Tin, e.NassitNumber, payDoc is null ? "" : Short(payDoc.Number), payDoc?.BusinessDate);
         }).OrderByDescending(x => x.Month).ThenBy(x => x.EmployeeCode).ToArray();
     }
@@ -163,6 +185,8 @@ public sealed class PayrollService(IDbContextFactory<BusinessDb> factory, IActor
         if (input.Resident is bool resident) employee.NonResident = !resident;
         if (input.NassitExempt is bool exempt) employee.NassitExempt = exempt;
         if (input.BirthDate is not null || input.EmployeeId is null) employee.BirthDate = input.BirthDate;
+        if (input.BankName is not null) employee.BankName = Optional(input.BankName, "Bank name", 60);
+        if (input.BankAccount is not null) employee.BankAccount = Optional(input.BankAccount, "Bank account number", 40);
         return employee.Id;
     });
     private static string Optional(string value, string field, int max) { value = value.Trim().ToUpperInvariant(); if (value.Length > max) throw new BusinessException($"{field} is limited to {max} characters."); return value; }
@@ -178,12 +202,14 @@ public sealed class PayrollService(IDbContextFactory<BusinessDb> factory, IActor
         if (adjustments.GroupBy(x => x.EmployeeId).Any(g => g.Count() > 1) || adjustments.Any(x => !input.EmployeeIds.Contains(x.EmployeeId))) throw new BusinessException("Give at most one adjustment per selected employee.");
         if (adjustments.Any(x => (x.Note ?? "").Length > 100)) throw new BusinessException("Adjustment notes are limited to 100 characters.");
         var rules = await PayrollMath.RulesFor(db, actor.Branch, first);
+        var loans = await PayrollMath.LoanBalances(db, actor.Branch);
         var lines = new List<RunLine>();
         foreach (var id in input.EmployeeIds)
         {
             var employee = await db.Employees.SingleOrDefaultAsync(x => x.Id == id && x.Branch == actor.Branch) ?? throw new BusinessException("Employee not found in this branch.");
             var adjustment = adjustments.SingleOrDefault(x => x.EmployeeId == id);
-            lines.Add(new(employee, PayrollMath.Calculate(View(employee), rules, first, adjustment is null ? null : adjustment with { Note = adjustment.Note ?? "" })));
+            var owed = loans.TryGetValue(employee.Id, out var l) && l.Outstanding > 0 ? Math.Min(l.Installment, l.Outstanding) : 0;
+            lines.Add(new(employee, PayrollMath.Calculate(View(employee), rules, first, adjustment is null ? null : adjustment with { Note = adjustment.Note ?? "" }, owed)));
         }
         return (first, rules, lines);
     }
@@ -217,6 +243,7 @@ public sealed class PayrollService(IDbContextFactory<BusinessDb> factory, IActor
         Line(db, doc, PayrollMath.PayePayable, 0, calc.Sum(x => x.Paye));
         Line(db, doc, PayrollMath.NassitPayable, 0, calc.Sum(x => x.NassitEmployee + x.NassitEmployer));
         Line(db, doc, PayrollMath.OtherDeductions, 0, calc.Sum(x => x.OtherDeductions));
+        Line(db, doc, PayrollMath.Loans, 0, calc.Sum(x => x.LoanRepayment));
         return doc.Id;
     });
     private static void Line(BusinessDb db, BusinessDocument doc, int account, decimal debit, decimal credit, string centre = "")
@@ -345,6 +372,71 @@ public sealed class PayrollService(IDbContextFactory<BusinessDb> factory, IActor
             ("Remittances", [["Date", "Kind", "Document", "Reference", "Amount"], .. s.Remittances.Select(r => (IReadOnlyList<string>)[r.Date.ToString("yyyy-MM-dd"), r.Kind == StatutoryKind.Paye ? "PAYE" : "NASSIT", r.Number, r.Reference, M(r.Amount)]),
                 ["", "PAYE outstanding", "", "", M(s.PayeOutstanding)], ["", "NASSIT outstanding", "", "", M(s.NassitOutstanding)]])
         ]);
+    }
+
+    // ---------------- staff loans and bank payment files ----------------
+
+    public async Task<IReadOnlyList<LoanView>> Loans()
+    {
+        var actor = await Authorize(); await using var db = await factory.CreateDbContextAsync();
+        var employees = await db.Employees.AsNoTracking().Where(x => x.Branch == actor.Branch).ToDictionaryAsync(x => x.Id);
+        var loans = await db.EmployeeLoans.AsNoTracking().Where(l => db.Documents.Any(d => d.Id == l.DocumentId && d.Branch == actor.Branch)).ToListAsync();
+        var docIds = loans.Select(x => x.DocumentId).ToList();
+        var docs = await db.Documents.AsNoTracking().Where(x => docIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id);
+        var reversed = (await db.Documents.AsNoTracking().Where(x => x.Reverses != null && docIds.Contains(x.Reverses.Value)).Select(x => x.Reverses!.Value).ToListAsync()).ToHashSet();
+        var balances = await PayrollMath.LoanBalances(db, actor.Branch);
+        // Repayments are applied to an employee's loans oldest first.
+        var views = new List<LoanView>();
+        foreach (var g in loans.GroupBy(x => x.EmployeeId))
+        {
+            var active = g.Where(l => !reversed.Contains(l.DocumentId)).OrderBy(l => docs[l.DocumentId].BusinessDate).ToList();
+            var repaid = active.Sum(l => l.Principal) - balances.GetValueOrDefault(g.Key).Outstanding;
+            foreach (var l in g.OrderBy(l => docs[l.DocumentId].BusinessDate))
+            {
+                var isReversed = reversed.Contains(l.DocumentId);
+                var part = isReversed ? 0 : Math.Min(l.Principal, repaid); if (!isReversed) repaid -= part;
+                var e = employees.GetValueOrDefault(l.EmployeeId);
+                views.Add(new(l.DocumentId, Short(docs[l.DocumentId].Number), l.EmployeeId, e is null ? "" : $"{e.Code} · {e.Name}", docs[l.DocumentId].BusinessDate, l.Principal, l.Installment, part, isReversed ? 0 : l.Principal - part, l.Reason, isReversed));
+            }
+        }
+        return views.OrderByDescending(x => x.Date).ToArray();
+    }
+
+    public Task<Guid> GiveLoan(LoanCommand input) => Execute(input.OperationId, "payroll.loan", input, async (db, actor) =>
+    {
+        await CheckDate(db, actor, input.Date);
+        var account = Paid(input.Method);
+        var employee = await db.Employees.SingleOrDefaultAsync(x => x.Id == input.EmployeeId && x.Branch == actor.Branch) ?? throw new BusinessException("Employee not found.");
+        SierraBusiness.Domain.Rules.Positive(input.Principal, "Loan amount"); SierraBusiness.Domain.Rules.Positive(input.Installment, "Monthly instalment");
+        if (AccountingEngine.Money(input.Principal) != input.Principal || AccountingEngine.Money(input.Installment) != input.Installment || input.Installment > input.Principal) throw new BusinessException("The instalment is at most the loan amount, both with up to two decimals.");
+        var reason = SierraBusiness.Domain.Rules.Required(input.Reason, "Reason", 200);
+        if (input.Method == PaymentMethod.BankTransfer) SierraBusiness.Domain.Rules.Required(input.Reference, "Transfer reference", 100);
+        if ((await PayrollMath.LoanBalances(db, actor.Branch)).TryGetValue(employee.Id, out var b) && b.Outstanding > 0) throw new BusinessException($"{employee.Code} still owes NLe {b.Outstanding:N2} on an earlier loan.");
+        var doc = new BusinessDocument { Id = Guid.NewGuid(), Branch = actor.Branch, Number = $"{actor.Branch}-{options.Value.Device}-LOAN-{input.OperationId:N}", Kind = DocumentKind.EmployeeLoan, Party = $"{employee.Code} {employee.Name}",
+            BusinessDate = input.Date, Total = input.Principal, Settlement = input.Method.ToString(), Detail = JsonSerializer.Serialize(input) };
+        db.Documents.Add(doc);
+        db.EmployeeLoans.Add(new() { Id = Guid.NewGuid(), DocumentId = doc.Id, EmployeeId = employee.Id, Principal = input.Principal, Installment = input.Installment, Reason = reason });
+        Line(db, doc, PayrollMath.Loans, input.Principal, 0); Line(db, doc, (int)account, 0, input.Principal);
+        return doc.Id;
+    });
+
+    public async Task<byte[]> BankFile(IReadOnlyList<Guid> payrollItemIds)
+    {
+        var actor = await Authorize(); await using var db = await factory.CreateDbContextAsync();
+        if (payrollItemIds is null || payrollItemIds.Count == 0) throw new BusinessException("Select the payslips to pay.");
+        var slips = (await Payslips(db, actor.Branch, null)).Where(x => payrollItemIds.Contains(x.ItemId)).ToList();
+        if (slips.Count != payrollItemIds.Count || slips.Any(x => x.Reversed)) throw new BusinessException("A selected payslip was not found or has been reversed.");
+        var employees = await db.Employees.AsNoTracking().Where(x => x.Branch == actor.Branch).ToDictionaryAsync(x => x.Id);
+        var missing = slips.Where(s => employees.GetValueOrDefault(s.EmployeeId) is not { } e || e.BankName.Length == 0 || e.BankAccount.Length == 0).Select(s => s.EmployeeCode).ToList();
+        if (missing.Count > 0) throw new BusinessException($"Add bank details for: {string.Join(", ", missing)}.");
+        static string C(string v) => v.Contains(',') || v.Contains('"') ? "\"" + v.Replace("\"", "\"\"") + "\"" : v;
+        var sb = new StringBuilder("Employee code,Employee name,Bank,Account number,Amount,Reference\r\n");
+        foreach (var s in slips.OrderBy(x => x.EmployeeCode))
+        {
+            var e = employees[s.EmployeeId];
+            sb.Append($"{C(s.EmployeeCode)},{C(s.EmployeeName)},{C(e.BankName)},{C(e.BankAccount)},{s.Net.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)},{C($"Salary {s.Month:yyyy-MM}")}\r\n");
+        }
+        return Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(sb.ToString())).ToArray();
     }
 
     private async Task<Guid> Execute<T>(Guid operation, string action, T input, Func<BusinessDb, Actor, Task<Guid>> work)

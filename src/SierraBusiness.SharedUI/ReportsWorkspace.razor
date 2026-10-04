@@ -1,6 +1,8 @@
 @implements IDisposable
 @inject IReportService Reports
 @inject IChangeFeed Feed
+@inject IServiceProvider Services
+@inject Microsoft.JSInterop.IJSRuntime JS
 @if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
 
 <section class="panel report-bar">
@@ -14,6 +16,7 @@
             <button type="button" @onclick='() => Preset("year")'>This year</button>
         </div>
         <button class="secondary" disabled="@busy" @onclick="Reload">Refresh</button>
+        @if (view != "Dashboard" && Services.GetService(typeof(IStatementsService)) is not null) { <button class="secondary" disabled="@busy" @onclick="ExportExcel">Export to Excel</button> }
         <span class="live @(live ? "on" : "")" title="Figures refresh by themselves when anyone posts; they are also re-read every two minutes.">@(live ? "● Live" : "○") · updated @updated.ToLocalTime().ToString("HH:mm:ss")</span>
     </div>
     @if (StartView != "Dashboard" || trail.Count > 0)
@@ -260,6 +263,7 @@ else if (busy) { <section class="panel"><p class="empty">Loading…</p></section
 
     protected override async Task OnInitializedAsync()
     {
+        money = (await PrintSetups.Load(Services)).Company;
         view = StartView == "Reports" ? SalesReport : "Dashboard";
         if (StartView == "Reports") from = Today.AddDays(-29);
         Feed.Changed += OnChanged; live = true;
@@ -364,9 +368,23 @@ else if (busy) { <section class="panel"><p class="empty">Loading…</p></section
     private Task RegisterPage(int page) { registerPage = page; return Load(); }
     private Task MovementPage(int page) { movementPage = page; return Load(); }
     private void ToggleParty(string party) { if (!expanded.Remove(party)) expanded.Add(party); }
-    private static string Money(decimal value) => $"NLe {value:N2}";
-    private static string Signed(decimal value) => value < 0 ? $"NLe {-value:N2} Cr" : $"NLe {value:N2} Dr";
+    private CompanyProfile money = new(); // the company's currency format (0.24.0)
+    private string Money(decimal value) => money.Money(value);
+    private string Signed(decimal value) => value < 0 ? $"{money.Money(-value)} Cr" : $"{money.Money(value)} Dr";
     private static string Cell(decimal value) => value == 0 ? "—" : value.ToString("N2");
     private static string Short(string number) { var parts = number.Split('-'); return parts.Length >= 3 && parts[^1].Length > 8 ? $"{parts[^2]}-{parts[^1][^8..].ToUpperInvariant()}" : number; }
     private static string KindName(DocumentKind k) => System.Text.RegularExpressions.Regex.Replace(k.ToString(), "(?<=[a-z])([A-Z])", " $1");
+    private async Task ExportExcel()
+    {
+        if (busy || Services.GetService(typeof(IStatementsService)) is not IStatementsService statements) return;
+        busy = true; error = "";
+        try
+        {
+            var bytes = await statements.Export(new(view, from, to, salesBy, accountCode == 0 ? null : accountCode, partyFilter, kindFilter, searchFilter, productId == Guid.Empty ? null : productId));
+            await Microsoft.JSInterop.JSRuntimeExtensions.InvokeVoidAsync(JS, "sierraDownload", $"{view.Replace(" & ", "-").Replace(' ', '-')}-{to:yyyy-MM-dd}.xlsx", Convert.ToBase64String(bytes));
+        }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
+        catch (Exception) { error = "The report could not be exported. Try again."; }
+        finally { busy = false; }
+    }
 }

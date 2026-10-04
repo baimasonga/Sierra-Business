@@ -384,6 +384,29 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.ToTable("ApprovalUses");
                 });
 
+            modelBuilder.Entity("SierraBusiness.Infrastructure.BankFormat", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Bank")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FormatJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Bank")
+                        .IsUnique();
+
+                    b.ToTable("BankFormats");
+                });
+
             modelBuilder.Entity("SierraBusiness.Infrastructure.BankMatch", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1097,6 +1120,16 @@ namespace SierraBusiness.Infrastructure.Migrations
                         .HasPrecision(19, 4)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("BankAccount")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("BankName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
                     b.Property<decimal>("BasicSalary")
                         .HasPrecision(19, 4)
                         .HasColumnType("TEXT");
@@ -1160,6 +1193,40 @@ namespace SierraBusiness.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("Employees");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.EmployeeLoan", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("DocumentId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("Installment")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("Principal")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DocumentId");
+
+                    b.HasIndex("EmployeeId");
+
+                    b.ToTable("EmployeeLoans");
                 });
 
             modelBuilder.Entity("SierraBusiness.Infrastructure.EquipmentTermsVersion", b =>
@@ -1864,6 +1931,90 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.ToTable("InvoiceMatches");
                 });
 
+            modelBuilder.Entity("SierraBusiness.Infrastructure.IssuedCheque", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Actor")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("BankAccount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Branch")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateOnly>("Date")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Number")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Payee")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("VoucherId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("VoucherId");
+
+                    b.HasIndex("Branch", "BankAccount", "Number")
+                        .IsUnique();
+
+                    b.ToTable("IssuedCheques");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.IssuedChequeEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Actor")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ChequeId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateOnly>("Date")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("State")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset>("Time")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ChequeId");
+
+                    b.ToTable("IssuedChequeEvents");
+                });
+
             modelBuilder.Entity("SierraBusiness.Infrastructure.JobRun", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2084,6 +2235,14 @@ namespace SierraBusiness.Infrastructure.Migrations
                             Control = true,
                             Group = 0,
                             Name = "Supplier refunds and credits"
+                        },
+                        new
+                        {
+                            Id = 1310,
+                            CashOrBank = false,
+                            Control = true,
+                            Group = 0,
+                            Name = "Employee loans and advances"
                         },
                         new
                         {
@@ -2736,6 +2895,67 @@ namespace SierraBusiness.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("PricePolicies");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.PriceRule", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Active")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Category")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CustomerCategory")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateOnly>("From")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<decimal>("MinQuantity")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("ProductId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateOnly?>("To")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("Value")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.ToTable("PriceRules");
                 });
 
             modelBuilder.Entity("SierraBusiness.Infrastructure.Product", b =>
@@ -3850,6 +4070,33 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.ToTable("TenderEvents");
                 });
 
+            modelBuilder.Entity("SierraBusiness.Infrastructure.TillAssignment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("AccountCode")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Branch")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Cashier")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Branch", "AccountCode", "Cashier")
+                        .IsUnique();
+
+                    b.ToTable("TillAssignments");
+                });
+
             modelBuilder.Entity("SierraBusiness.Infrastructure.TillClose", b =>
                 {
                     b.Property<Guid>("Id")
@@ -4198,6 +4445,45 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.ToTable("Warranties");
                 });
 
+            modelBuilder.Entity("SierraBusiness.Infrastructure.YearEndClosure", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Actor")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Branch")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("Profit")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("Time")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateOnly>("YearEnd")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Branch", "YearEnd")
+                        .IsUnique();
+
+                    b.ToTable("YearEndClosures");
+                });
+
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<string>", b =>
                 {
                     b.HasOne("Microsoft.AspNetCore.Identity.IdentityRole", null)
@@ -4412,6 +4698,15 @@ namespace SierraBusiness.Infrastructure.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("SierraBusiness.Infrastructure.EmployeeLoan", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.BusinessDocument", null)
+                        .WithMany()
+                        .HasForeignKey("DocumentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("SierraBusiness.Infrastructure.EquipmentTermsVersion", b =>
                 {
                     b.HasOne("SierraBusiness.Infrastructure.Product", null)
@@ -4530,6 +4825,24 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.HasOne("SierraBusiness.Infrastructure.Movement", null)
                         .WithMany()
                         .HasForeignKey("ReceiptMovementId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.IssuedCheque", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.BusinessDocument", null)
+                        .WithMany()
+                        .HasForeignKey("VoucherId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.IssuedChequeEvent", b =>
+                {
+                    b.HasOne("SierraBusiness.Infrastructure.IssuedCheque", null)
+                        .WithMany()
+                        .HasForeignKey("ChequeId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

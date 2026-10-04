@@ -175,3 +175,14 @@ Skill 25 is implemented:
 - **Reminders.** Shown by permission, and dismissed per user.
 
 Packaged together with 0.22.0. 260 tests pass. See [notes](background-jobs-0.23.0.md).
+
+## Smaller gaps — 0.24.0
+
+- **Pricing.** Price rules and promotions, by product, category, customer type, quantity and date.
+- **Banking.** Bank-specific statement layouts, cheques we issue (presented or cancelled) and cash drawers assigned to cashiers.
+- **Statements.** Profit and loss, balance sheet, direct cash flow, funds flow and year-end close.
+- **Reports.** Excel export on every report.
+- **Controls.** Approval for refunds and returns above a limit.
+- **Payroll.** Leave allowance and end-of-service tax treatment, staff loans and salary bank files.
+
+269 tests pass. See [notes](smaller-gaps-0.24.0.md). Next: multi-branch sync and SQL Server (0.25.0), then production readiness (0.26.0).

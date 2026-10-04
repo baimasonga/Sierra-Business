@@ -129,7 +129,9 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
                 Rules.Positive(line.Quantity, "Quantity"); Rules.Positive(line.UnitPrice, "Unit price"); Rules.Positive(line.Conversion, "Unit conversion");
                 var p = await db.Products.FindAsync([line.ProductId], cancellationToken) ?? throw new BusinessException("Product does not exist.");
                 await InventoryManagement.Active(db, actor.Branch, p.Id);
-                if (sale && !bundled.Contains(line)) await CommerceRules.Price(db, p.Id, line.UnitPrice, line.Conversion);
+                var promotion = sale && !bundled.Contains(line) ? await PriceRules.Best(db, partyMaster?.Category ?? "", p, line.Quantity * line.Conversion, input.BusinessDate) : null;
+                var promoted = promotion is { } pr && line.UnitPrice / line.Conversion >= pr.Price; // priced by an approved promotion
+                if (sale && !bundled.Contains(line) && !promoted) await CommerceRules.Price(db, p.Id, line.UnitPrice, line.Conversion);
                 var quantity = line.Quantity * line.Conversion;
                 Rules.Positive(quantity, "Base quantity");
                 var serial = string.IsNullOrWhiteSpace(line.Serial) ? null : Rules.Required(line.Serial, "Serial", 100).ToUpperInvariant();
@@ -153,7 +155,7 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
                 if (sale && delivered is null)
                 {
                     var per = line.UnitPrice / line.Conversion;
-                    if (!bundled.Contains(line) && policy.MaxDiscountPercent is decimal max && p.Price > 0 && (p.Price - per) / p.Price * 100 > max) triggers.Add(new("Discount", $"{p.Sku} at NLe {per:N2} is {(p.Price - per) / p.Price * 100:0.#}% below its list price NLe {p.Price:N2} (limit {max:0.#}%)", "pricing.manage"));
+                    if (!bundled.Contains(line) && !promoted && policy.MaxDiscountPercent is decimal max && p.Price > 0 && (p.Price - per) / p.Price * 100 > max) triggers.Add(new("Discount", $"{p.Sku} at NLe {per:N2} is {(p.Price - per) / p.Price * 100:0.#}% below its list price NLe {p.Price:N2} (limit {max:0.#}%)", "pricing.manage"));
                     if (policy.ApproveBelowCost && amount < lineCost) triggers.Add(new("BelowCost", $"{p.Sku} sold for NLe {amount:N2}, below its stock cost NLe {lineCost:N2}", "pricing.manage"));
                 }
                 var movement = new Movement { Id = Guid.NewGuid(), DocumentId = doc.Id, ProductId = p.Id, Branch = actor.Branch, Location = input.Location, Serial = serial, Batch = batch, Expiry = line.Expiry, Quantity = sale ? -quantity : quantity, Value = sale ? -lineCost : lineCost };
@@ -226,6 +228,9 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
             if (await db.ForeignSettlements.AnyAsync(x => x.BillId == original.Id && !db.Documents.Any(r => r.Reverses == x.VoucherId), cancellationToken)) throw new BusinessException("Reverse the foreign-currency payments of this bill first.");
             if (await db.Installations.AnyAsync(x => x.SaleId == original.Id && !db.InstallationCompletions.Any(c => c.InstallationId == x.Id) && !db.InstallationCancellations.Any(c => c.InstallationId == x.Id), cancellationToken)) throw new BusinessException("Cancel the scheduled installation for this sale first.");
             if (await db.InvoiceMatches.AnyAsync(x => x.ReceiptId == original.Id && !db.Documents.Any(r => r.Reverses == x.InvoiceId), cancellationToken)) throw new BusinessException("Reverse the supplier invoices matched to this receipt first.");
+            if (original.Kind == DocumentKind.EmployeeLoan && await db.EmployeeLoans.SingleOrDefaultAsync(x => x.DocumentId == original.Id, cancellationToken) is { } loan
+                && (await db.PayrollItems.Where(i => i.EmployeeId == loan.EmployeeId && db.Documents.Any(d => d.Id == i.DocumentId && d.BusinessDate >= original.BusinessDate) && !db.Documents.Any(r => r.Reverses == i.DocumentId)).ToListAsync(cancellationToken)).Any(i => PayrollMath.Read(i).Calculation.LoanRepayment > 0))
+                throw new BusinessException("Instalments of this loan have been deducted in payroll. Reverse those payrolls first, or record the correction as a new loan.");
             if (original.Kind == DocumentKind.Payroll)
             {
                 if (await db.PayrollPaymentLines.AnyAsync(x => db.PayrollItems.Any(i => i.Id == x.PayrollItemId && i.DocumentId == original.Id) && !db.Documents.Any(r => r.Reverses == x.DocumentId), cancellationToken)) throw new BusinessException("Salaries from this payroll have been paid. Reverse the salary payment first.");

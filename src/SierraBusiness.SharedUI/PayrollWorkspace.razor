@@ -5,7 +5,7 @@
 @if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
 
 <div class="view-toggle report-tabs" role="tablist">
-    @foreach (var t in new[] { "Employees", "Run payroll", "Payslips & payments", "PAYE & NASSIT" }) { <button type="button" role="tab" class="@(tab == t ? "active" : "")" aria-selected="@(tab == t)" @onclick="() => Open(t)">@t</button> }
+    @foreach (var t in new[] { "Employees", "Run payroll", "Payslips & payments", "Loans", "PAYE & NASSIT" }) { <button type="button" role="tab" class="@(tab == t ? "active" : "")" aria-selected="@(tab == t)" @onclick="() => Open(t)">@t</button> }
 </div>
 @if (rules is null && tab != "PAYE & NASSIT") { <div class="notice" role="note">Statutory deductions are off. Set the PAYE and NASSIT rules on the <button class="text-button" @onclick='() => Open("PAYE & NASSIT")'>PAYE &amp; NASSIT</button> tab to calculate them automatically.</div> }
 
@@ -17,6 +17,7 @@
             <label>Basic monthly salary (NLe)<input type="number" min="0" step="0.01" @bind="basic" /></label><label>Monthly allowances<input type="number" min="0" step="0.01" @bind="allowances" /></label><label>Other monthly deductions (after tax)<input type="number" min="0" step="0.01" @bind="deductions" /></label>
             <label>Employment start<input type="date" @bind="start" /></label><label>Employment end (optional)<input type="date" @bind="end" /></label>
             <label>TIN<input @bind="tin" maxlength="30" /></label><label>NASSIT number<input @bind="nassitNumber" maxlength="30" /></label><label>Date of birth (optional)<input type="date" @bind="birthDate" /></label>
+            <label>Bank (for salary transfers)<input @bind="bankName" maxlength="80" /></label><label>Bank account number<input @bind="bankAccount" maxlength="40" /></label>
             <label class="check"><input type="checkbox" @bind="resident" /> Resident for tax</label><label class="check"><input type="checkbox" @bind="nassitExempt" /> Not a NASSIT contributor</label>
         </div>
         <button class="primary" disabled="@busy" @onclick="Save">Save employee</button> <button class="secondary" disabled="@busy" @onclick="New">New employee</button>
@@ -31,20 +32,23 @@ else if (tab == "Run payroll")
     <section class="panel"><h2>Run payroll</h2>
         <div class="form-grid"><label>Payroll month<input type="month" @bind="MonthText" /></label><label>Posting date (month-end or later)<input type="date" @bind="postingDate" /></label></div>
         <p class="hint">Employees who joined or left during the month are paid for the days employed. Enter unpaid days, overtime, bonus or a one-off deduction for this month only. Editing an employee never changes payslips already posted.</p>
-        <div class="table-wrap"><table><thead><tr><th><input type="checkbox" aria-label="Select all employees" checked="@(data.Employees.Count > 0 && selected.Count == Eligible.Count())" @onchange="ChooseAll" /></th><th>Employee</th><th>Unpaid days</th><th>Overtime</th><th>Bonus</th><th>One-off deduction</th><th>Note</th></tr></thead>
+        <div class="table-wrap"><table><thead><tr><th><input type="checkbox" aria-label="Select all employees" checked="@(data.Employees.Count > 0 && selected.Count == Eligible.Count())" @onchange="ChooseAll" /></th><th>Employee</th><th>Unpaid days</th><th>Overtime</th><th>Bonus</th><th>One-off deduction</th><th>Leave allowance</th><th>End of service</th><th>Skip loan</th><th>Note</th></tr></thead>
         <tbody>@foreach (var e in Eligible) { var adj = Adjustment(e.Id); <tr><td><input type="checkbox" aria-label="Select @e.Name for payroll" checked="@selected.Contains(e.Id)" @onchange="args => Choose(e.Id, args)" /></td><td>@e.Code · @e.Name</td>
             <td><input class="num" type="number" min="0" step="0.5" value="@adj.UnpaidDays" @onchange="v => Adjust(e.Id, a => a with { UnpaidDays = Num(v) })" /></td>
             <td><input class="num" type="number" min="0" step="0.01" value="@adj.Overtime" @onchange="v => Adjust(e.Id, a => a with { Overtime = Num(v) })" /></td>
             <td><input class="num" type="number" min="0" step="0.01" value="@adj.Bonus" @onchange="v => Adjust(e.Id, a => a with { Bonus = Num(v) })" /></td>
             <td><input class="num" type="number" min="0" step="0.01" value="@adj.ExtraDeduction" @onchange="v => Adjust(e.Id, a => a with { ExtraDeduction = Num(v) })" /></td>
+            <td><input class="num" type="number" min="0" step="0.01" value="@adj.LeaveAllowance" @onchange="v => Adjust(e.Id, a => a with { LeaveAllowance = Num(v) })" /></td>
+            <td><input class="num" type="number" min="0" step="0.01" value="@adj.EndOfService" @onchange="v => Adjust(e.Id, a => a with { EndOfService = Num(v) })" /></td>
+            <td><input type="checkbox" aria-label="Skip loan instalment for @e.Name" checked="@adj.SkipLoan" @onchange="v => Adjust(e.Id, a => a with { SkipLoan = v.Value is true })" /></td>
             <td><input maxlength="100" value="@adj.Note" @onchange="v => Adjust(e.Id, a => a with { Note = v.Value?.ToString() ?? string.Empty })" /></td></tr> }</tbody></table></div>
         <button class="secondary" disabled="@(busy || selected.Count == 0)" @onclick="PreviewRun">Calculate</button>
         @if (preview is { } p)
         {
             <p class="hint">@p.RulesNote</p>
-            <div class="table-wrap"><table class="report-table"><thead><tr><th>Employee</th><th class="numeric">Days</th><th class="numeric">Gross</th><th class="numeric">NASSIT 5%</th><th class="numeric">Chargeable</th><th class="numeric">PAYE</th><th class="numeric">Other</th><th class="numeric">Net pay</th><th class="numeric">Employer NASSIT</th></tr></thead>
-                <tbody>@foreach (var l in p.Lines) { var c = l.Calculation; <tr><td>@l.Code · @l.Name</td><td class="numeric">@c.DaysPaid.ToString("0.#")/@c.DaysInMonth</td><td class="numeric">@c.Gross.ToString("N2")</td><td class="numeric">@c.NassitEmployee.ToString("N2")</td><td class="numeric">@c.Chargeable.ToString("N2")</td><td class="numeric">@c.Paye.ToString("N2")</td><td class="numeric">@c.OtherDeductions.ToString("N2")</td><td class="numeric"><strong>@c.Net.ToString("N2")</strong></td><td class="numeric">@c.NassitEmployer.ToString("N2")</td></tr> }</tbody>
-                <tfoot><tr><th>Total</th><td></td><td class="numeric">@p.Gross.ToString("N2")</td><td class="numeric">@p.NassitEmployee.ToString("N2")</td><td></td><td class="numeric">@p.Paye.ToString("N2")</td><td class="numeric">@p.OtherDeductions.ToString("N2")</td><td class="numeric"><strong>@p.Net.ToString("N2")</strong></td><td class="numeric">@p.NassitEmployer.ToString("N2")</td></tr></tfoot></table></div>
+            <div class="table-wrap"><table class="report-table"><thead><tr><th>Employee</th><th class="numeric">Days</th><th class="numeric">Gross</th><th class="numeric">NASSIT 5%</th><th class="numeric">Chargeable</th><th class="numeric">PAYE</th><th class="numeric">Other</th><th class="numeric">Loan</th><th class="numeric">Net pay</th><th class="numeric">Employer NASSIT</th></tr></thead>
+                <tbody>@foreach (var l in p.Lines) { var c = l.Calculation; <tr><td>@l.Code · @l.Name</td><td class="numeric">@c.DaysPaid.ToString("0.#")/@c.DaysInMonth</td><td class="numeric">@c.Gross.ToString("N2")</td><td class="numeric">@c.NassitEmployee.ToString("N2")</td><td class="numeric">@c.Chargeable.ToString("N2")</td><td class="numeric">@c.Paye.ToString("N2")</td><td class="numeric">@c.OtherDeductions.ToString("N2")</td><td class="numeric">@c.LoanRepayment.ToString("N2")</td><td class="numeric"><strong>@c.Net.ToString("N2")</strong></td><td class="numeric">@c.NassitEmployer.ToString("N2")</td></tr> }</tbody>
+                <tfoot><tr><th>Total</th><td></td><td class="numeric">@p.Gross.ToString("N2")</td><td class="numeric">@p.NassitEmployee.ToString("N2")</td><td></td><td class="numeric">@p.Paye.ToString("N2")</td><td class="numeric">@p.OtherDeductions.ToString("N2")</td><td class="numeric">@p.Lines.Sum(x => x.Calculation.LoanRepayment).ToString("N2")</td><td class="numeric"><strong>@p.Net.ToString("N2")</strong></td><td class="numeric">@p.NassitEmployer.ToString("N2")</td></tr></tfoot></table></div>
             <button class="primary" disabled="@busy" @onclick="Post">Post payroll for @p.Month.ToString("MMMM yyyy")</button>
         }
     </section>
@@ -59,7 +63,7 @@ else if (tab == "Payslips & payments")
         {
             <h3>Pay selected salaries</h3>
             <div class="form-grid"><label>Payment date<input type="date" @bind="payDate" /></label><label>Paid by<select @bind="payMethod"><option value="@PaymentMethod.BankTransfer">Bank transfer</option><option value="@PaymentMethod.Cash">Cash</option></select></label><label>Transfer reference<input maxlength="100" @bind="payReference" /></label></div>
-            <button class="primary" disabled="@(busy || toPay.Count == 0)" @onclick="PaySelected">Pay @toPay.Count salar@(toPay.Count == 1 ? "y" : "ies") · NLe @MonthSlips.Where(x => toPay.Contains(x.ItemId)).Sum(x => x.Net).ToString("N2")</button>
+            <button class="secondary" disabled="@(busy || toPay.Count == 0)" @onclick="DownloadBankFile">Bank transfer file</button> <button class="primary" disabled="@(busy || toPay.Count == 0)" @onclick="PaySelected">Pay @toPay.Count salar@(toPay.Count == 1 ? "y" : "ies") · NLe @MonthSlips.Where(x => toPay.Contains(x.ItemId)).Sum(x => x.Net).ToString("N2")</button>
         }
     </section>
     @if (payslip is { } ps && ps.Calculation is { } pc)
@@ -73,15 +77,35 @@ else if (tab == "Payslips & payments")
                     <tr><td>Basic salary</td><td class="numeric">@pc.Basic.ToString("N2")</td><td>PAYE</td><td class="numeric">@pc.Paye.ToString("N2")</td></tr>
                     <tr><td>Allowances</td><td class="numeric">@pc.Allowances.ToString("N2")</td><td>NASSIT (employee)</td><td class="numeric">@pc.NassitEmployee.ToString("N2")</td></tr>
                     <tr><td>Overtime</td><td class="numeric">@pc.Overtime.ToString("N2")</td><td>Other deductions@(pc.Note.Length > 0 ? $" ({pc.Note})" : "")</td><td class="numeric">@pc.OtherDeductions.ToString("N2")</td></tr>
-                    <tr><td>Bonus</td><td class="numeric">@pc.Bonus.ToString("N2")</td><td></td><td></td></tr>
+                    <tr><td>Bonus</td><td class="numeric">@pc.Bonus.ToString("N2")</td><td>@(pc.LoanRepayment > 0 ? "Loan repayment" : "")</td><td class="numeric">@(pc.LoanRepayment > 0 ? pc.LoanRepayment.ToString("N2") : "")</td></tr>
+                    @if (pc.LeaveAllowance > 0) { <tr><td>Leave allowance</td><td class="numeric">@pc.LeaveAllowance.ToString("N2")</td><td></td><td></td></tr> }
+                    @if (pc.EndOfService > 0) { <tr><td>End-of-service benefit</td><td class="numeric">@pc.EndOfService.ToString("N2")</td><td></td><td></td></tr> }
                 </tbody>
-                <tfoot><tr><th>Gross pay</th><td class="numeric">@pc.Gross.ToString("N2")</td><th>Total deductions</th><td class="numeric">@((pc.Paye + pc.NassitEmployee + pc.OtherDeductions).ToString("N2"))</td></tr>
+                <tfoot><tr><th>Gross pay</th><td class="numeric">@pc.Gross.ToString("N2")</td><th>Total deductions</th><td class="numeric">@((pc.Paye + pc.NassitEmployee + pc.OtherDeductions + pc.LoanRepayment).ToString("N2"))</td></tr>
                     <tr><th colspan="3">Net pay</th><td class="numeric"><strong>@printSetup.Company.Money(pc.Net)</strong></td></tr></tfoot></table>
             @if (pc.Statutory) { <p class="hint">Tax-free allowances @pc.TaxFreeAllowances.ToString("N2") · chargeable income @pc.Chargeable.ToString("N2") · employer NASSIT @pc.NassitEmployer.ToString("N2")</p> }
             <p>@(ps.Reversed ? "REVERSED — not a current payroll entitlement" : ps.Paid ? $"Paid on {ps.PaidOn:dd MMM yyyy} ({ps.PaymentNumber})." : "Posted payroll entitlement; not yet paid.")</p>
             <DocumentFooter Setup="printSetup" Kind="other" Total="pc.Net" />
         </section>
     }
+}
+else if (tab == "Loans")
+{
+    <section class="panel"><h2>Staff loans and salary advances</h2>
+        <p class="hint">A loan is paid out now and recovered from salary each month by the instalment, until repaid. Skip an instalment in a payroll run when agreed.</p>
+        <div class="table-wrap"><table><thead><tr><th>Loan</th><th>Employee</th><th>Date</th><th class="numeric">Amount</th><th class="numeric">Monthly</th><th class="numeric">Repaid</th><th class="numeric">Outstanding</th><th>Reason</th></tr></thead>
+            <tbody>@foreach (var l in loans) { <tr><td>@l.Number@(l.Reversed ? " (reversed)" : "")</td><td>@l.Employee</td><td>@l.Date.ToString("dd MMM yyyy")</td><td class="numeric">@l.Principal.ToString("N2")</td><td class="numeric">@l.Installment.ToString("N2")</td><td class="numeric">@l.Repaid.ToString("N2")</td><td class="numeric"><strong>@l.Outstanding.ToString("N2")</strong></td><td>@l.Reason</td></tr> }</tbody></table></div>
+        @if (loans.Count == 0) { <p class="hint">No loans recorded.</p> }
+    </section>
+    <section class="panel"><h2>Give a loan or advance</h2>
+        <div class="form-grid">
+            <label>Employee<select @bind="loanEmployee"><option value="@Guid.Empty">Choose…</option>@foreach (var e in data.Employees.Where(x => x.EndDate is null || x.EndDate >= Today)) { <option value="@e.Id">@e.Code · @e.Name</option> }</select></label>
+            <label>Amount (NLe)<input type="number" min="0.01" step="0.01" @bind="loanPrincipal" /></label><label>Monthly instalment<input type="number" min="0.01" step="0.01" @bind="loanInstallment" /></label>
+            <label>Date<input type="date" @bind="loanDate" /></label><label>Paid by<select @bind="loanMethod"><option value="@PaymentMethod.Cash">Cash</option><option value="@PaymentMethod.BankTransfer">Bank transfer</option></select></label>
+            <label>Reference<input maxlength="100" @bind="loanReference" /></label><label>Reason<input maxlength="160" @bind="loanReason" /></label>
+        </div>
+        <button class="primary" disabled="@(busy || loanEmployee == Guid.Empty)" @onclick="GiveLoan">Record loan</button>
+    </section>
 }
 else if (tab == "PAYE & NASSIT")
 {
@@ -103,6 +127,9 @@ else if (tab == "PAYE & NASSIT")
             <label>NASSIT employer %<input type="number" min="0" max="100" step="0.01" @bind="nassitEmployer" /></label>
             <label>NASSIT calculated on<select @bind="nassitBase"><option value="@NassitBase.BasicSalary">Basic salary</option><option value="@NassitBase.GrossPay">Gross pay</option></select></label>
             <label>NASSIT stops after age (0 = never)<input type="number" min="0" max="100" @bind="ageLimit" /></label>
+            <label class="check"><input type="checkbox" @bind="leaveTaxFree" /> Leave allowance up to one month's basic is tax-free</label>
+            <label>Tax rate on leave allowance above that %<input type="number" min="0" max="100" step="0.01" @bind="leaveExcessRate" /></label>
+            <label class="check"><input type="checkbox" @bind="eosTaxFree" /> End-of-service benefits are tax-free</label>
         </div>
         <button class="primary" disabled="@busy" @onclick="SaveRules">Save rules</button> <button class="secondary" disabled="@busy" @onclick="UseRecommended">Fill in current Sierra Leone rates</button>
         @if (history.Count > 0) { <details><summary>@history.Count saved version@(history.Count == 1 ? "" : "s")</summary><ul>@foreach (var h in history) { <li>Version @h.Version from @h.EffectiveFrom.ToString("MMMM yyyy") — @h.Source (@h.SavedBy, @h.Saved?.ToLocalTime().ToString("dd MMM yyyy"))</li> }</ul></details> }
@@ -140,7 +167,7 @@ else if (tab == "PAYE & NASSIT")
     private PayrollRules? rules; private List<PayrollRules> history = [];
 
     // employees
-    private string code = "", name = "", department = "", tin = "", nassitNumber = "";
+    private string code = "", name = "", department = "", tin = "", nassitNumber = "", bankName = "", bankAccount = "";
     private Guid? employeeId; private int version; private decimal basic, allowances, deductions; private bool resident = true, nassitExempt;
     private DateOnly start = DateOnly.FromDateTime(DateTime.Now); private DateOnly? end, birthDate;
     private Guid employeeOperation = Guid.NewGuid();
@@ -171,17 +198,32 @@ else if (tab == "PAYE & NASSIT")
     private DateOnly rulesFrom = new DateOnly(DateTime.Now.Year, DateTime.Now.Month, 1);
     private DateTime RulesFromText { get => rulesFrom.ToDateTime(TimeOnly.MinValue); set => rulesFrom = new DateOnly(value.Year, value.Month, 1); }
     private List<PayeBand> bands = [new(null, 0)];
-    private decimal taxFree, nonResident, nassitEmployee, nassitEmployer; private int ageLimit; private NassitBase nassitBase; private string source = "";
+    private decimal taxFree, nonResident, nassitEmployee, nassitEmployer, leaveExcessRate = 30; private bool leaveTaxFree = true, eosTaxFree = true; private int ageLimit; private NassitBase nassitBase; private string source = "";
     private Guid rulesOperation = Guid.NewGuid();
     private DateOnly scheduleMonth = new DateOnly(DateTime.Now.Year, DateTime.Now.Month, 1).AddMonths(-1);
     private DateTime ScheduleMonthText { get => scheduleMonth.ToDateTime(TimeOnly.MinValue); set => scheduleMonth = new DateOnly(value.Year, value.Month, 1); }
     private StatutorySchedule? schedule;
     private StatutoryKind remitKind; private DateOnly remitDate = DateOnly.FromDateTime(DateTime.Now); private PaymentMethod remitMethod = PaymentMethod.BankTransfer; private string remitReference = ""; private Guid remitOperation = Guid.NewGuid();
 
+    // loans
+    private IReadOnlyList<LoanView> loans = []; private Guid loanEmployee; private decimal loanPrincipal, loanInstallment; private DateOnly loanDate = DateOnly.FromDateTime(DateTime.Now);
+    private PaymentMethod loanMethod = PaymentMethod.Cash; private string loanReference = "", loanReason = ""; private Guid loanOperation = Guid.NewGuid();
+    private Task GiveLoan() => Run(async () =>
+    {
+        await Payroll.GiveLoan(new(loanOperation, loanEmployee, loanPrincipal, loanInstallment, loanDate, loanMethod, loanReference, loanReason));
+        loanOperation = Guid.NewGuid(); loanEmployee = Guid.Empty; loanPrincipal = loanInstallment = 0; loanReference = loanReason = ""; await Load(); message = "Loan recorded and paid out.";
+    });
+    private Task DownloadBankFile() => Run(async () =>
+    {
+        var bytes = await Payroll.BankFile(toPay.ToList());
+        await Microsoft.JSInterop.JSRuntimeExtensions.InvokeVoidAsync(JS, "sierraDownload", $"salaries-{slipMonth}.csv", Convert.ToBase64String(bytes));
+    });
+
     protected override async Task OnInitializedAsync() { printSetup = await PrintSetups.Load(Services); await Run(Load); }
     private async Task Load()
     {
         data = await Payroll.Read();
+        loans = await Payroll.Loans();
         var view = await Payroll.Rules(); rules = view.Current; history = view.History.ToList();
         if (slipMonth.Length == 0 || !Months.Any(m => m.ToString("yyyy-MM") == slipMonth)) slipMonth = Months.FirstOrDefault().ToString("yyyy-MM");
         ApplyRules(view.History.FirstOrDefault());
@@ -195,11 +237,11 @@ else if (tab == "PAYE & NASSIT")
     {
         if (code.Length > 0 && !await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", "Discard unsaved employee changes?")) return;
         employeeId = e.Id; version = e.Version; code = e.Code; name = e.Name; department = e.Department; basic = e.BasicSalary; allowances = e.Allowances; deductions = e.Deductions; start = e.StartDate; end = e.EndDate;
-        tin = e.Tin; nassitNumber = e.NassitNumber; resident = e.Resident; nassitExempt = e.NassitExempt; birthDate = e.BirthDate; employeeOperation = Guid.NewGuid();
+        tin = e.Tin; nassitNumber = e.NassitNumber; resident = e.Resident; nassitExempt = e.NassitExempt; birthDate = e.BirthDate; bankName = e.BankName; bankAccount = e.BankAccount; employeeOperation = Guid.NewGuid();
     }
-    private void Clear() { employeeId = null; version = 0; code = name = department = tin = nassitNumber = ""; basic = allowances = deductions = 0; end = birthDate = null; resident = true; nassitExempt = false; employeeOperation = Guid.NewGuid(); }
+    private void Clear() { employeeId = null; version = 0; code = name = department = tin = nassitNumber = bankName = bankAccount = ""; basic = allowances = deductions = 0; end = birthDate = null; resident = true; nassitExempt = false; employeeOperation = Guid.NewGuid(); }
     private async Task New() { if (code.Length == 0 || await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", "Discard unsaved employee changes?")) Clear(); }
-    private Task Save() => Run(async () => { await Payroll.SaveEmployee(new(employeeOperation, employeeId, version, code, name, department, basic, allowances, deductions, start, end, tin, nassitNumber, resident, nassitExempt, birthDate)); Clear(); data = await Payroll.Read(); message = "Employee saved. Earlier payslips are unchanged."; });
+    private Task Save() => Run(async () => { await Payroll.SaveEmployee(new(employeeOperation, employeeId, version, code, name, department, basic, allowances, deductions, start, end, tin, nassitNumber, resident, nassitExempt, birthDate, bankName, bankAccount)); Clear(); data = await Payroll.Read(); message = "Employee saved. Earlier payslips are unchanged."; });
 
     private Task PreviewRun() => Run(async () => preview = await Payroll.Preview(Command()));
     private Task Post() => Run(async () =>
@@ -221,7 +263,7 @@ else if (tab == "PAYE & NASSIT")
     {
         if (r is null) return;
         bands = r.PayeBands.ToList(); taxFree = r.TaxFreeAllowances; nonResident = r.NonResidentRate * 100; nassitEmployee = r.NassitEmployee * 100; nassitEmployer = r.NassitEmployer * 100;
-        nassitBase = r.NassitBase; ageLimit = r.NassitAgeLimit; source = r.Source;
+        nassitBase = r.NassitBase; ageLimit = r.NassitAgeLimit; source = r.Source; leaveTaxFree = r.LeaveUpToBasicTaxFree; leaveExcessRate = r.LeaveExcessRate * 100; eosTaxFree = r.EndOfServiceTaxFree;
     }
     private void UseRecommended() { ApplyRules(PayrollRules.Recommended(rulesFrom)); message = "Current Sierra Leone rates filled in. Check them, then save."; }
     private void AddBand() => bands.Insert(bands.Count - 1, new(bands.Count > 1 ? (bands[^2].UpTo ?? 0) + 600 : 600, bands[^1].Rate));
@@ -232,7 +274,7 @@ else if (tab == "PAYE & NASSIT")
     }
     private Task SaveRules() => Run(async () =>
     {
-        await Payroll.SaveRules(new(rulesOperation, new PayrollRules(history.FirstOrDefault()?.Version ?? 0, rulesFrom, bands.ToList(), taxFree, Math.Round(nonResident / 100, 4), Math.Round(nassitEmployee / 100, 4), Math.Round(nassitEmployer / 100, 4), nassitBase, ageLimit, source)));
+        await Payroll.SaveRules(new(rulesOperation, new PayrollRules(history.FirstOrDefault()?.Version ?? 0, rulesFrom, bands.ToList(), taxFree, Math.Round(nonResident / 100, 4), Math.Round(nassitEmployee / 100, 4), Math.Round(nassitEmployer / 100, 4), nassitBase, ageLimit, source, LeaveUpToBasicTaxFree: leaveTaxFree, LeaveExcessRate: Math.Round(leaveExcessRate / 100, 4), EndOfServiceTaxFree: eosTaxFree)));
         rulesOperation = Guid.NewGuid(); await Load(); message = $"Payroll rules saved from {rulesFrom:MMMM yyyy}.";
     });
     private async Task LoadScheduleCore() => schedule = await Payroll.Schedule(scheduleMonth);

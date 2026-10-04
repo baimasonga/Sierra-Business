@@ -39,7 +39,7 @@ public sealed class BankingService(IDbContextFactory<BusinessDb> factory, IActor
         return new(statements.Select(x => new StatementView(x.Id, x.Reference, x.AccountCode, x.Opening, x.Closing, voids.Contains(x.Id))).ToArray(), rowViews, chequeViews, credits.Select(c => new CreditView(c.Id, docs[c.ReturnId].Number, docs[c.ReturnId].Party, c.Amount, c.Amount - uses.Where(x => x.CreditId == c.Id).Sum(x => x.Amount))).ToArray());
     }
     public Task<Guid> Import(ImportStatementCommand input) => Execute(input.OperationId, "accounting.write", "bank.statement.import", input, async (db, actor) => {
-        await Funds(db, input.AccountCode); var rows = BankStatementCsv.Parse(input.Csv); var reference = Rules.Required(input.Reference, "Statement identifier", 100).ToUpperInvariant();
+        await Funds(db, input.AccountCode); var rows = input.Format is null ? BankStatementCsv.Parse(input.Csv) : BankStatementFormats.Parse(input.Csv, input.Format); var reference = Rules.Required(input.Reference, "Statement identifier", 100).ToUpperInvariant();
         Amount(Math.Abs(input.OpeningBalance), true); Amount(Math.Abs(input.ClosingBalance), true);
         if (rows.Any(x => x.Date > DateOnly.FromDateTime(DateTime.UtcNow)) || input.OpeningBalance + rows.Sum(x => x.Amount) != input.ClosingBalance) throw new BusinessException("Check the statement dates and opening + transactions = closing balance.");
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(rows))));
@@ -139,6 +139,8 @@ public sealed class BankingService(IDbContextFactory<BusinessDb> factory, IActor
     }
     public Task<Guid> OpenTill(OpenTillCommand input) => Execute(input.OperationId, "tills.use", "till.open", input, async (db, actor) => {
         Amount(input.OpeningCount, true); await Funds(db, input.AccountCode);
+        var assigned = await db.TillAssignments.Where(x => x.Branch == actor.Branch && x.AccountCode == input.AccountCode).Select(x => x.Cashier).ToListAsync();
+        if (assigned.Count > 0 && !assigned.Contains(actor.Id)) throw new BusinessException("This cash drawer is assigned to other cashiers. Ask a manager to assign it to you under Banking → Cash drawers.");
         if (await db.TillShifts.AnyAsync(x => x.Branch == actor.Branch && (x.AccountCode == input.AccountCode || x.Cashier == actor.Id) && !db.TillCloses.Any(c => c.ShiftId == x.Id))) throw new BusinessException("This cashier or cash ledger already has an open shift.");
         var balance = (await db.Journal.Where(x => x.Branch == actor.Branch && (int)x.Account == input.AccountCode).ToListAsync()).Sum(x => x.Debit - x.Credit);
         var shift = new TillShift { Id = Guid.NewGuid(), Branch = actor.Branch, Cashier = actor.Id, AccountCode = input.AccountCode, Opened = DateTimeOffset.UtcNow, OpeningCount = input.OpeningCount, OpeningBook = balance }; db.TillShifts.Add(shift); return shift.Id;

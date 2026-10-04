@@ -23,7 +23,7 @@ public sealed class ApprovalNote { public Guid Id { get; set; } public Guid Requ
 /// <summary>Business controls applied inside posting transactions. A posting that trips a control is refused and an approval request is saved; once approved, the identical posting goes through once.</summary>
 public static class Controls
 {
-    public const string Trade = "trade.post", Reverse = "document.reverse", Count = "stock.count", Voucher = "voucher.post";
+    public const string Trade = "trade.post", Reverse = "document.reverse", Count = "stock.count", Voucher = "voucher.post", Return = "return.post";
     internal static DateOnly Today => DateOnly.FromDateTime(DateTime.UtcNow);
     private static readonly JsonSerializerOptions Json = new();
 
@@ -120,7 +120,7 @@ public sealed class ControlService(IDbContextFactory<BusinessDb> factory, IActor
             var p = input.Policy ?? throw new BusinessException("Enter the control settings.");
             if (p.MaxDiscountPercent is < 0 or > 100) throw new BusinessException("The discount limit is a percentage from 0 to 100.");
             if (p.BackdateDays is < 0 or > 365) throw new BusinessException("The back-dating limit is 0 to 365 days.");
-            if (p.ReversalAbove < 0 || p.StockAdjustmentAbove < 0) throw new BusinessException("Approval thresholds cannot be negative.");
+            if (p.ReversalAbove < 0 || p.StockAdjustmentAbove < 0 || p.RefundAbove < 0) throw new BusinessException("Approval thresholds cannot be negative.");
             if (!TimeOnly.TryParseExact(p.WorkStart, "HH:mm", out var start) || !TimeOnly.TryParseExact(p.WorkEnd, "HH:mm", out var end) || end <= start) throw new BusinessException("Enter working hours as HH:mm, with the end after the start.");
             var current = await db.ControlPolicies.Where(x => x.Branch == actor.Branch).MaxAsync(x => (int?)x.Version) ?? 0;
             if (current != p.Version) throw new BusinessException("The controls were changed by someone else. Refresh before saving.");
@@ -237,6 +237,7 @@ public sealed class ControlService(IDbContextFactory<BusinessDb> factory, IActor
             case Controls.Reverse: return await new BusinessService(factory, o).Reverse(actor, JsonSerializer.Deserialize<ReverseCommand>(request.PayloadJson)! with { ApprovalId = request.Id });
             case Controls.Count: return await new InventoryService(factory, session, o).Count(JsonSerializer.Deserialize<StockCountCommand>(request.PayloadJson)! with { ApprovalId = request.Id });
             case Controls.Voucher: return await new FinanceService(factory, session, o).PostVoucher(JsonSerializer.Deserialize<VoucherCommand>(request.PayloadJson)! with { ApprovalId = request.Id });
+            case Controls.Return: return await new ReturnService(factory, session, o).Post(JsonSerializer.Deserialize<ReturnCommand>(request.PayloadJson)! with { ApprovalId = request.Id });
             default: throw new BusinessException("This kind of request cannot be posted from here.");
         }
     }
@@ -282,6 +283,7 @@ public sealed class ControlService(IDbContextFactory<BusinessDb> factory, IActor
             var days = DateOnly.FromDateTime(op.Time.UtcDateTime).DayNumber - doc.BusinessDate.DayNumber;
             if (days > backdate) rows.Add(new(op.Time, who, "Back-dated", reference, doc.Id, $"{doc.Kind} dated {doc.BusinessDate:dd MMM yyyy}, posted {days} days later", doc.Total, Approval(op.Id)));
             if (doc.Kind == DocumentKind.StockCount && doc.Total != 0) rows.Add(new(op.Time, who, "Stock adjustment", reference, doc.Id, $"Count adjustment: {doc.Party}", doc.Total, Approval(op.Id)));
+            if (doc.Kind == DocumentKind.SalesReturn) rows.Add(new(op.Time, who, "Refund", reference, doc.Id, $"Sales return for {doc.Party} ({doc.Settlement}){(TryReason(op.Payload) is { Length: > 0 } why ? $": {why}" : "")}", Math.Abs(doc.Total), Approval(op.Id)));
             if (doc.Kind is DocumentKind.Sale or DocumentKind.Delivery)
             {
                 try
