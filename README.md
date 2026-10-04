@@ -2,6 +2,13 @@
 
 A Microsoft .NET implementation based on [the supplied engineering specification](docs/engineering-specification.md). This repository contains an initial working vertical slice, not the full production system described in that specification.
 
+**Fix 0.26.1:**
+- updates and uninstall no longer fail when Sierra Business is still running;
+- a second copy no longer looks frozen;
+- the browser cache moves out of the program folder.
+
+See [notes](docs/fixes-0.26.1.md).
+
 **Production readiness 0.26.0:**
 - upgrade and rollback rehearsal;
 - daily update check against a validated release feed;
@@ -74,7 +81,7 @@ See [notes](docs/production-readiness-0.26.0.md) and the [acceptance checklists]
 
 ### Windows desktop package
 
-The **Windows installer is ready** at `artifacts\windows\0.26.0\SierraBusiness-Setup-x64.exe`. Double-click it to install, open Sierra Business from the Start menu, and create your owner account on first use. Existing users should back up and close the app before updating. The package includes the application runtimes, offline WebView2 prerequisite and English OCR dependencies. It is an unsigned development preview; full clean-machine installation and UI acceptance testing are still outstanding. See [Windows package instructions and status](docs/windows-package.md).
+The **Windows installer is ready** at `artifacts\windows\0.26.1\SierraBusiness-Setup-x64.exe`. Double-click it to install, open Sierra Business from the Start menu, and create your owner account on first use. Existing users should back up and close the app before updating. The package includes the application runtimes, offline WebView2 prerequisite and English OCR dependencies. It is an unsigned development preview; full clean-machine installation and UI acceptance testing are still outstanding. See [Windows package instructions and status](docs/windows-package.md).
 
 Desktop owners can create integrity-checked backups from the workspace sidebar, including captured originals and review revisions. Backup restoration and permission checks pass in the primary .NET 10 suite (126 tests total). A Windows CI workflow is also prepared to build the native app and installer once this project is hosted in a GitHub repository; it has not yet been run.
 

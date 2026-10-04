@@ -46,10 +46,56 @@ Name: "{group}\Sierra Business"; Filename: "{app}\SierraBusiness.Maui.exe"; Work
 Name: "{group}\Uninstall Sierra Business"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\Sierra Business"; Filename: "{app}\SierraBusiness.Maui.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
+[UninstallDelete]
+; The embedded browser's cache that versions before 0.26.1 kept beside the program. Business data and backups live elsewhere and are kept.
+Type: filesandordirs; Name: "{app}\SierraBusiness.Maui.exe.WebView2"
+
 [Run]
 Filename: "{app}\SierraBusiness.Maui.exe"; Description: "Open Sierra Business"; Flags: nowait postinstall skipifsilent
 
 [Code]
+// 0.26.1: Setup and uninstall cannot replace or remove program files while Sierra Business is still running, including a copy that has
+// stopped responding (Windows' own close request does not reach a frozen window). Find it and, with the user's agreement, end it.
+function AppRunning(): Boolean;
+var Code: Integer;
+begin
+  Result := Exec(ExpandConstant('{cmd}'), '/C tasklist /FI "IMAGENAME eq SierraBusiness.Maui.exe" /NH | find /I "SierraBusiness.Maui.exe" >nul', '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
+end;
+
+function EnsureAppClosed(): Boolean;
+var Code: Integer;
+begin
+  Result := True;
+  while AppRunning() do
+  begin
+    case MsgBox('Sierra Business is still running.' + #13#10#13#10 +
+                'Yes: close it yourself first, then continue.' + #13#10 +
+                'No: end it now (use this if it is not responding; posted records are safe, unsaved typing is lost).' + #13#10 +
+                'Cancel: stop.', mbConfirmation, MB_YESNOCANCEL) of
+      IDNO:
+        begin
+          Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM SierraBusiness.Maui.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
+          Sleep(2000);
+        end;
+      IDCANCEL:
+        begin
+          Result := False;
+          exit;
+        end;
+    end;
+  end;
+end;
+
+function InitializeSetup(): Boolean;
+begin
+  Result := EnsureAppClosed();
+end;
+
+function InitializeUninstall(): Boolean;
+begin
+  Result := EnsureAppClosed();
+end;
+
 function HasWebView2(): Boolean;
 var Version: String;
 begin
@@ -72,4 +118,4 @@ begin
   end;
 end;
 
-// No UninstallDelete section: business data and backups intentionally survive uninstall.
+// Business data and backups live in the user's data folder, outside {app}, and intentionally survive uninstall.

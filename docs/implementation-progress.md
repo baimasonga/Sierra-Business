@@ -209,3 +209,14 @@ Packaged together with 0.22.0. 260 tests pass. See [notes](background-jobs-0.23.
 - **Windows.** The dashboard test runs on Windows again.
 
 What remains needs the owner: see the [acceptance checklists](acceptance-checklists.md). 280 tests pass. See [notes](production-readiness-0.26.0.md).
+
+## Fix — 0.26.1
+
+- **Lingering app process.** A copy left running (or one that stopped responding) blocked updates and left files behind on uninstall.
+- **Fixes.**
+  - One copy per company.
+  - The process ends when the window closes.
+  - The browser cache moves to the user's data folder.
+  - Setup and uninstall find a running copy and offer to end it.
+
+See [notes](fixes-0.26.1.md).
