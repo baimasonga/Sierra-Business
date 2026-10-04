@@ -2,6 +2,16 @@
 
 A Microsoft .NET implementation based on [the supplied engineering specification](docs/engineering-specification.md). This repository contains an initial working vertical slice, not the full production system described in that specification.
 
+**Production readiness 0.26.0:**
+- upgrade and rollback rehearsal;
+- daily update check against a validated release feed;
+- code signing in the Windows build;
+- performance tests on six months of busy trading, with a much faster first sync;
+- a security review with browser hardening headers and rate limits;
+- the Windows dashboard test fixed.
+
+See [notes](docs/production-readiness-0.26.0.md) and the [acceptance checklists](docs/acceptance-checklists.md) for what needs a certificate, real hardware and a clean machine.
+
 **Multi-branch sync & SQL Server 0.25.0:** branches work offline and sync with head office every few minutes — shared catalogue and settings flow down, each branch's records flow up, with retries, conflict review and per-branch keys; head office can run on SQL Server with database-level protection of posted history. See [notes](docs/branch-sync-sqlserver-0.25.0.md).
 
 **Price rules, banking tools, financial statements & payroll extras 0.24.0:** promotions by product, category, customer type, quantity and date; bank-specific statement layouts, cheques you issue, cash drawers per cashier; profit and loss, balance sheet, cash flow, funds flow and year-end close; Excel export on every report; refund approvals; leave allowance, end-of-service benefits, staff loans and salary bank files. See [notes](docs/smaller-gaps-0.24.0.md).
@@ -64,7 +74,7 @@ A Microsoft .NET implementation based on [the supplied engineering specification
 
 ### Windows desktop package
 
-The **Windows installer is ready** at `artifacts\windows\0.25.0\SierraBusiness-Setup-x64.exe`. Double-click it to install, open Sierra Business from the Start menu, and create your owner account on first use. Existing users should back up and close the app before updating. The package includes the application runtimes, offline WebView2 prerequisite and English OCR dependencies. It is an unsigned development preview; full clean-machine installation and UI acceptance testing are still outstanding. See [Windows package instructions and status](docs/windows-package.md).
+The **Windows installer is ready** at `artifacts\windows\0.26.0\SierraBusiness-Setup-x64.exe`. Double-click it to install, open Sierra Business from the Start menu, and create your owner account on first use. Existing users should back up and close the app before updating. The package includes the application runtimes, offline WebView2 prerequisite and English OCR dependencies. It is an unsigned development preview; full clean-machine installation and UI acceptance testing are still outstanding. See [Windows package instructions and status](docs/windows-package.md).
 
 Desktop owners can create integrity-checked backups from the workspace sidebar, including captured originals and review revisions. Backup restoration and permission checks pass in the primary .NET 10 suite (126 tests total). A Windows CI workflow is also prepared to build the native app and installer once this project is hosted in a GitHub repository; it has not yet been run.
 

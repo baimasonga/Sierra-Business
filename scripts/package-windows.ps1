@@ -31,6 +31,28 @@ if (!$WebView2Installer -or !(Test-Path -LiteralPath $WebView2Installer)) {
     if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { $problems.Add('The WebView2 installer must have a valid Microsoft Corporation signature.') }
     if ((Get-Item -LiteralPath $WebView2Installer).Length -lt 10MB) { $problems.Add('Use the full standalone WebView2 installer, not the small online bootstrapper.') }
 }
+# Optional code signing (0.26.0). Set SIERRA_SIGN_THUMBPRINT (a certificate in the current user's or machine's store)
+# or SIERRA_SIGN_PFX with SIERRA_SIGN_PFX_PASSWORD. SIERRA_SIGN_TIMESTAMP overrides the RFC 3161 timestamp server.
+$signing = [bool]($env:SIERRA_SIGN_THUMBPRINT -or $env:SIERRA_SIGN_PFX)
+$signTool = $null
+if ($signing) {
+    $signTool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+    if (!$signTool) { $problems.Add('Code signing was requested but signtool.exe was not found. Install the Windows SDK signing tools.') }
+    if ($env:SIERRA_SIGN_PFX -and !(Test-Path -LiteralPath $env:SIERRA_SIGN_PFX)) { $problems.Add('SIERRA_SIGN_PFX does not point to a certificate file.') }
+}
+function Invoke-Signing([string[]]$Files) {
+    if (!$signing) { return }
+    $timestamp = if ($env:SIERRA_SIGN_TIMESTAMP) { $env:SIERRA_SIGN_TIMESTAMP } else { 'http://timestamp.digicert.com' }
+    foreach ($file in $Files) {
+        $arguments = @('sign', '/fd', 'SHA256', '/tr', $timestamp, '/td', 'SHA256', '/d', 'Sierra Business')
+        if ($env:SIERRA_SIGN_THUMBPRINT) { $arguments += @('/sha1', $env:SIERRA_SIGN_THUMBPRINT) } else { $arguments += @('/f', $env:SIERRA_SIGN_PFX, '/p', $env:SIERRA_SIGN_PFX_PASSWORD) }
+        & $signTool @arguments $file | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Code signing failed for $(Split-Path -Leaf $file)." }
+        $result = Get-AuthenticodeSignature -LiteralPath $file
+        if ($result.Status -ne 'Valid') { throw "Signature verification failed for $(Split-Path -Leaf $file): $($result.StatusMessage)" }
+        Write-Output "Signed: $(Split-Path -Leaf $file) by $($result.SignerCertificate.Subject)"
+    }
+}
 if ($problems.Count -gt 0) {
     Write-Output 'Windows packaging is blocked by these prerequisites:'
     $problems | ForEach-Object { Write-Output " - $_" }
@@ -50,9 +72,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Integration tests failed; no installer will be produced.' }
     & $dotnet run --project tests\SierraBusiness.WindowsCaptureSmoke -c Release
     if ($LASTEXITCODE -ne 0) { throw 'Offline OCR smoke checks failed; no installer will be produced.' }
-    & $dotnet publish src\SierraBusiness.Maui\SierraBusiness.Maui.csproj -c Release -f net10.0-windows10.0.19041.0 -p:RuntimeIdentifierOverride=win-x64 -p:WindowsPackageType=None -p:WindowsAppSDKSelfContained=true --self-contained true -p:PublishTrimmed=false "-p:ApplicationDisplayVersion=$Version" -o $staging
+    & $dotnet publish src\SierraBusiness.Maui\SierraBusiness.Maui.csproj -c Release -f net10.0-windows10.0.19041.0 -p:RuntimeIdentifierOverride=win-x64 -p:WindowsPackageType=None -p:WindowsAppSDKSelfContained=true --self-contained true -p:PublishTrimmed=false "-p:ApplicationDisplayVersion=$Version" "-p:Version=$Version" -o $staging
     if ($LASTEXITCODE -ne 0) { throw 'Native Windows publish failed; no installer will be produced.' }
     if (!(Test-Path -LiteralPath (Join-Path $staging 'SierraBusiness.Maui.exe'))) { throw 'Native application executable missing from publish output.' }
+    Invoke-Signing @((Join-Path $staging 'SierraBusiness.Maui.exe'))
     foreach ($runtime in (Get-ChildItem -LiteralPath $VisualCppRuntimeDirectory -Filter '*.dll' -File)) {
         $signature = Get-AuthenticodeSignature -LiteralPath $runtime.FullName
         if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { throw 'Visual C++ runtime signature verification failed.' }
@@ -67,6 +90,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed.' }
     $installer = Join-Path $output 'SierraBusiness-Setup-x64.exe'
     if (!(Test-Path -LiteralPath $installer)) { throw 'Installer output not found.' }
+    Invoke-Signing @($installer)
+    if (!$signing) { Write-Output 'Unsigned build: set SIERRA_SIGN_THUMBPRINT or SIERRA_SIGN_PFX to sign the application and installer.' }
     $hash = Get-FileHash -LiteralPath $installer -Algorithm SHA256
     "$($hash.Hash)  SierraBusiness-Setup-x64.exe" | Set-Content -LiteralPath (Join-Path $output 'SHA256SUMS.txt')
     Write-Output "Created: $installer"

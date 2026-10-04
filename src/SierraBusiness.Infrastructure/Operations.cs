@@ -362,9 +362,11 @@ public static class OperationsRegistration
         services.AddSingleton<IBackgroundJob, RemindersJob>();
         services.AddSingleton<IBackgroundJob, FiscalRetryJob>();
         services.AddSingleton<IBackgroundJob, IntegrityJob>();
+        services.AddSingleton<IBackgroundJob>(_ => new UpdateCheckJob());
         services.AddSingleton<JobRunner>();
         services.AddSingleton<JobScheduler>();
         services.AddTransient<IOperationsService, OperationsService>();
+        services.AddTransient<IUpdateService, UpdateService>();
         return services;
     }
 }

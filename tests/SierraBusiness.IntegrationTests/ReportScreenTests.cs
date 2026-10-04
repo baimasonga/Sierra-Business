@@ -38,19 +38,26 @@ public sealed class ReportScreenTests : IAsyncLifetime
             catch (IOException) when (attempt < 20) { await Task.Delay(250); Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); }
     }
 
-    /// <summary>Background refreshes render from the change-feed thread; poll the markup rather than relying on render notifications.</summary>
+    /// <summary>Background refreshes render from the change-feed thread. The markup is read on the renderer's dispatcher, so the test never reads
+    /// the render tree while a background render is writing it (that race stalled the Windows test host before 0.26.0).</summary>
     private static async Task Eventually(IRenderedComponent<ReportsWorkspace> screen, Func<bool> condition, string what)
     {
         var until = DateTime.UtcNow.AddSeconds(90);
         while (true)
         {
-            try { if (condition()) return; } catch (Bunit.ElementNotFoundException) { }
-            if (DateTime.UtcNow > until) throw new Xunit.Sdk.XunitException($"Timed out waiting for {what}. Markup: {screen.Markup[..Math.Min(3000, screen.Markup.Length)]}");
+            var met = false;
+            await screen.InvokeAsync(() => { try { met = condition(); } catch (Bunit.ElementNotFoundException) { } });
+            if (met) return;
+            if (DateTime.UtcNow > until)
+            {
+                var markup = ""; await screen.InvokeAsync(() => markup = screen.Markup);
+                throw new Xunit.Sdk.XunitException($"Timed out waiting for {what}. Markup: {markup[..Math.Min(3000, markup.Length)]}");
+            }
             await Task.Delay(250);
         }
     }
 
-    [NotOnWindowsFact] public async Task DashboardDrillsToDocumentsAndRefreshesWhenSomeonePosts()
+    [Fact] public async Task DashboardDrillsToDocumentsAndRefreshesWhenSomeonePosts()
     {
         Guid? opened = null;
         var screen = context.Render<ReportsWorkspace>(p => p.Add(x => x.Actor, session.Actor).Add(x => x.OpenDocument, (Guid id) => { opened = id; }));
@@ -90,8 +97,6 @@ public sealed class ReportScreenTests : IAsyncLifetime
         Assert.Equal(2, screen.FindAll(".report-table tbody tr").Count);
     }
 
-    /// <summary>On Windows the bUnit renderer can stall while this screen refreshes in the background, so this one screen test is skipped there (0.19.0); it runs on every other platform.</summary>
-    private sealed class NotOnWindowsFactAttribute : FactAttribute { public NotOnWindowsFactAttribute() { if (OperatingSystem.IsWindows()) Skip = "Renderer stalls under Windows test hosts; tracked for the next release."; } }
     private sealed class TestFeed : IChangeFeed { public event Action? Changed; public void Raise() => Changed?.Invoke(); }
     private sealed class Session : IActorSession { public Actor Actor = new("owner", "FREETOWN", BusinessPermissions.All.ToHashSet()); public Task<Actor> CurrentActor() => Task.FromResult(Actor); }
     private sealed class Factory(DbContextOptions<BusinessDb> options) : IDbContextFactory<BusinessDb> { public BusinessDb CreateDbContext() => new(options); }

@@ -8,7 +8,7 @@ public static class SyncEndpoints
 {
     public static void MapSyncEndpoints(this WebApplication app)
     {
-        var group = app.MapGroup("/api/sync").DisableAntiforgery();
+        var group = app.MapGroup("/api/sync").DisableAntiforgery().RequireRateLimiting("sync");
         group.MapPost("/push", async (HttpContext context, SyncServer server, SyncPushRequest body, CancellationToken ct) =>
         {
             var branch = Branch(context);
@@ -30,10 +30,18 @@ public static class SyncEndpoints
         return header is not null && header.StartsWith("Bearer ", StringComparison.Ordinal) ? header[7..].Trim() : null;
     }
 
+    /// <summary>At most 240 sync calls a minute per branch and address; a normal branch makes a handful every five minutes.</summary>
+    public static void AddSyncRateLimiting(IServiceCollection services) => services.AddRateLimiter(o =>
+    {
+        o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+        o.AddPolicy("sync", context => System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(context.Request.Headers["X-Sierra-Branch"].ToString() + "|" + context.Connection.RemoteIpAddress, _ => new() { PermitLimit = 240, Window = TimeSpan.FromMinutes(1) }));
+    });
+
     public static IServiceCollection AddSierraSync(this IServiceCollection services, IConfiguration configuration)
     {
         services.Configure<SyncOptions>(configuration.GetSection("Sync"));
         services.AddSingleton<SyncServer>();
+        AddSyncRateLimiting(services);
         services.AddScoped<ISyncService, SyncService>();
         services.AddSingleton<ISyncSettings, ConfiguredSyncSettings>();
         if (configuration.GetValue<SyncRole>("Sync:Role") == SyncRole.Branch) services.AddSingleton<IBackgroundJob, SyncJob>();

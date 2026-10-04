@@ -25,6 +25,11 @@ public static class DesktopRegistration
         var sync = syncSettings.Load();
         var branch = DesktopTradingConfiguration.Load(dataDirectory).Branch;
         services.AddSingleton<ISyncSettings>(syncSettings);
+        services.AddOptions<UpdateOptions>().Configure(o =>
+        {
+            var file = Path.Combine(dataDirectory, "update-settings.json"); // {"Feed": "https://…/sierra-business/latest.json"}
+            try { if (File.Exists(file)) o.Feed = System.Text.Json.JsonSerializer.Deserialize<UpdateOptions>(File.ReadAllText(file))?.Feed ?? ""; } catch (System.Text.Json.JsonException) { }
+        });
         services.AddSingleton(Microsoft.Extensions.Options.Options.Create(sync));
         services.AddDbContextFactory<BusinessDb>(o =>
         {

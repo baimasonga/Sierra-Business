@@ -4453,6 +4453,44 @@ namespace SierraBusiness.Infrastructure.SqlServer.Migrations
                     b.ToTable("UnitProfiles");
                 });
 
+            modelBuilder.Entity("SierraBusiness.Infrastructure.UpdateStatus", b =>
+                {
+                    b.Property<string>("Branch")
+                        .HasMaxLength(60)
+                        .HasColumnType("nvarchar(60)");
+
+                    b.Property<DateTimeOffset>("Checked")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("Latest")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("NotesJson")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("Problem")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Url")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.HasKey("Branch");
+
+                    b.ToTable("UpdateStatuses");
+                });
+
             modelBuilder.Entity("SierraBusiness.Infrastructure.VariantGroup", b =>
                 {
                     b.Property<Guid>("Id")

@@ -78,7 +78,7 @@ public sealed class SyncCaptureInterceptor(SyncRole role, string branch) : SaveC
 public static class SyncEngine
 {
     public const string CentralPeer = "central", BackfillMarker = "(backfill)";
-    private static readonly HashSet<Type> Excluded = [typeof(IntegritySeal), typeof(SyncChange), typeof(SyncPeer), typeof(SyncConflict), typeof(JobState), typeof(JobRun), typeof(Reminder), typeof(ReminderDismissal)];
+    private static readonly HashSet<Type> Excluded = [typeof(IntegritySeal), typeof(SyncChange), typeof(SyncPeer), typeof(SyncConflict), typeof(JobState), typeof(JobRun), typeof(Reminder), typeof(ReminderDismissal), typeof(UpdateStatus)];
     /// <summary>Records without a branch column that still belong to the branch that made them (file contents are not copied to every branch).</summary>
     private static readonly HashSet<Type> BranchPrivate = [typeof(FileBlob)];
     private static readonly JsonSerializerOptions Json = new() { IncludeFields = false };
@@ -113,53 +113,109 @@ public static class SyncEngine
     public static SyncChangeDto Dto(SyncChange c, string centralName) => new(c.Seq, c.Commit, c.Entity, c.Key, c.Operation, c.Payload, c.Scope, c.Origin.Length == 0 ? centralName : c.Origin);
     internal static string Clean(string message) { message = Regex.Replace(message ?? "", "(?i)(key|token|password|bearer)[=: ]+\\S+", "$1=***"); return message.Length > 200 ? message[..200] : message; }
 
-    /// <summary>Applies changes commit by commit. A commit that cannot be applied is recorded as a conflict and the rest carry on.</summary>
+    /// <summary>Applies changes. The whole batch is tried in one transaction first (fast); if anything in it cannot be saved, it is applied
+    /// commit by commit so that a commit that cannot be applied is recorded as a conflict and the rest carry on.</summary>
     internal static async Task<(int Applied, int Skipped, int Conflicts)> Apply(IDbContextFactory<BusinessDb> factory, IReadOnlyList<SyncChangeDto> changes, string origin, bool atCentral, ISet<string>? pendingLocal, CancellationToken ct)
     {
-        int applied = 0, skipped = 0; var conflicts = new List<SyncConflict>();
-        void Conflict(SyncChangeDto c, string reason) => conflicts.Add(new() { Id = Guid.NewGuid(), Time = DateTimeOffset.UtcNow, Origin = origin, Entity = c.Entity, Key = c.Key.Length > 200 ? c.Key[..200] : c.Key, Reason = reason.Length > 200 ? reason[..200] : reason, IncomingJson = c.Data });
-        foreach (var commit in changes.GroupBy(x => x.Commit).OrderBy(g => g.Min(x => x.Seq)))
+        var commits = changes.GroupBy(x => x.Commit).OrderBy(g => g.Min(x => x.Seq)).ToList();
+        if (commits.Count == 0) return (0, 0, 0);
+        if (commits.Count > 1)
         {
             await using var db = await factory.CreateDbContextAsync(ct);
             db.SyncApplyingOrigin = origin;
-            var types = db.Model.GetEntityTypes().Where(Replicated).ToDictionary(x => x.ClrType.Name);
-            int commitApplied = 0, commitSkipped = 0; var commitConflicts = new List<SyncConflict>();
-            var before = conflicts.Count;
-            foreach (var c in commit.OrderBy(x => x.Seq))
+            var conflicts = new List<SyncConflict>(); int applied = 0, skipped = 0;
+            var known = await Prefetch(db, changes, ct);
+            foreach (var commit in commits) { var r = await Stage(db, commit, origin, atCentral, pendingLocal, conflicts, known, ct); applied += r.Applied; skipped += r.Skipped; }
+            try
             {
-                if (!types.TryGetValue(c.Entity, out var type)) { Conflict(c, "Unknown record type: update this installation."); continue; }
-                if (atCentral && c.Scope.Length > 0 && !string.Equals(c.Scope, origin, StringComparison.OrdinalIgnoreCase)) { Conflict(c, $"A branch may only send its own records (this one belongs to {c.Scope})."); continue; }
-                object?[] key; try { key = ParseKey(type, c.Key); } catch (Exception) { Conflict(c, "Unreadable record key."); continue; }
-                var existing = await db.FindAsync(type.ClrType, key, ct);
-                if (c.Operation == SyncOperation.Delete)
-                {
-                    if (existing is null) commitSkipped++;
-                    else if (Protected(type)) Conflict(c, "Posted history cannot be deleted; kept this copy.");
-                    else { db.Remove(existing); commitApplied++; }
-                    continue;
-                }
-                object incoming;
-                try { incoming = JsonSerializer.Deserialize(c.Data, type.ClrType, Json)!; } catch (Exception) { Conflict(c, "Unreadable record data."); continue; }
-                if (existing is null) { db.Add(incoming); commitApplied++; continue; }
-                var same = HistoryProtection.RowFingerprint(type, existing) == HistoryProtection.RowFingerprint(type, incoming);
-                if (same) { commitSkipped++; continue; }
-                if (Protected(type)) { Conflict(c, "Posted record differs from the copy here; kept this copy."); continue; }
-                if (atCentral && VersionOf(type, existing) is int mine && VersionOf(type, incoming) is int theirs && theirs <= mine)
-                { Conflict(c, $"Changed at head office too (version {mine}); kept head office's. The branch receives it on its next sync."); continue; }
-                if (!atCentral && pendingLocal?.Contains(c.Entity + c.Key) == true) Conflict(c, "Changed here and at head office; head office's version replaced the change made here.");
-                db.Entry(existing).CurrentValues.SetValues(incoming); commitApplied++;
+                db.SyncConflicts.AddRange(conflicts);
+                await db.SaveChangesAsync(ct);
+                return (applied, skipped, conflicts.Count);
             }
-            try { await db.SaveChangesAsync(ct); applied += commitApplied; skipped += commitSkipped; }
+            catch (Exception ex) when (ex is DbUpdateException or BusinessException or InvalidOperationException) { } // fall back to one commit at a time
+        }
+        int total = 0, skippedTotal = 0; var recorded = new List<SyncConflict>();
+        foreach (var commit in commits)
+        {
+            await using var db = await factory.CreateDbContextAsync(ct);
+            db.SyncApplyingOrigin = origin;
+            var conflicts = new List<SyncConflict>();
+            var r = await Stage(db, commit, origin, atCentral, pendingLocal, conflicts, await Prefetch(db, commit.ToList(), ct), ct);
+            try { await db.SaveChangesAsync(ct); total += r.Applied; skippedTotal += r.Skipped; recorded.AddRange(conflicts); }
             catch (Exception ex) when (ex is DbUpdateException or BusinessException or InvalidOperationException)
             {
-                conflicts.RemoveRange(before, conflicts.Count - before); // the whole commit is reported once
                 var first = commit.OrderBy(x => x.Seq).First();
-                Conflict(first with { Data = JsonSerializer.Serialize(commit.Select(x => new { x.Entity, x.Key })) }, "Could not be applied: " + Clean((ex.InnerException ?? ex).Message));
+                recorded.Add(NewConflict(first with { Data = JsonSerializer.Serialize(commit.Select(x => new { x.Entity, x.Key })) }, origin, "Could not be applied: " + Clean((ex.InnerException ?? ex).Message)));
             }
         }
-        if (conflicts.Count > 0) { await using var db = await factory.CreateDbContextAsync(ct); db.SyncConflicts.AddRange(conflicts); await db.SaveChangesAsync(ct); }
-        return (applied, skipped, conflicts.Count);
+        if (recorded.Count > 0) { await using var db = await factory.CreateDbContextAsync(ct); db.SyncConflicts.AddRange(recorded); await db.SaveChangesAsync(ct); }
+        return (total, skippedTotal, recorded.Count);
     }
+
+    private static SyncConflict NewConflict(SyncChangeDto c, string origin, string reason) => new() { Id = Guid.NewGuid(), Time = DateTimeOffset.UtcNow, Origin = origin, Entity = c.Entity, Key = c.Key.Length > 200 ? c.Key[..200] : c.Key, Reason = reason.Length > 200 ? reason[..200] : reason, IncomingJson = c.Data };
+
+    /// <summary>Stages one commit's changes in the context; conflicts that need no save are added to <paramref name="conflicts"/>.</summary>
+    private static async Task<(int Applied, int Skipped)> Stage(BusinessDb db, IGrouping<Guid, SyncChangeDto> commit, string origin, bool atCentral, ISet<string>? pendingLocal, List<SyncConflict> conflicts, Dictionary<string, HashSet<string>> known, CancellationToken ct)
+    {
+        int applied = 0, skipped = 0;
+        void Conflict(SyncChangeDto c, string reason) => conflicts.Add(NewConflict(c, origin, reason));
+        var types = TypesFor(db);
+        foreach (var c in commit.OrderBy(x => x.Seq))
+        {
+            if (!types.TryGetValue(c.Entity, out var type)) { Conflict(c, "Unknown record type: update this installation."); continue; }
+            if (atCentral && c.Scope.Length > 0 && !string.Equals(c.Scope, origin, StringComparison.OrdinalIgnoreCase)) { Conflict(c, $"A branch may only send its own records (this one belongs to {c.Scope})."); continue; }
+            object?[] key; try { key = ParseKey(type, c.Key); } catch (Exception) { Conflict(c, "Unreadable record key."); continue; }
+            // Rows already loaded by Prefetch are found in memory; keys it proved absent need no query.
+            var existing = known.TryGetValue(c.Entity, out var present) && !present.Contains(c.Key) ? db.ChangeTracker.Entries().FirstOrDefault(e => e.Metadata == type && KeyOf(type, e.Entity) == c.Key)?.Entity : await db.FindAsync(type.ClrType, key, ct);
+            if (c.Operation == SyncOperation.Delete)
+            {
+                if (existing is null) skipped++;
+                else if (Protected(type)) Conflict(c, "Posted history cannot be deleted; kept this copy.");
+                else { db.Remove(existing); applied++; }
+                continue;
+            }
+            object incoming;
+            try { incoming = JsonSerializer.Deserialize(c.Data, type.ClrType, Json)!; } catch (Exception) { Conflict(c, "Unreadable record data."); continue; }
+            if (existing is null) { db.Add(incoming); applied++; continue; }
+            if (HistoryProtection.RowFingerprint(type, existing) == HistoryProtection.RowFingerprint(type, incoming)) { skipped++; continue; }
+            if (Protected(type)) { Conflict(c, "Posted record differs from the copy here; kept this copy."); continue; }
+            if (atCentral && VersionOf(type, existing) is int mine && VersionOf(type, incoming) is int theirs && theirs <= mine)
+            { Conflict(c, $"Changed at head office too (version {mine}); kept head office's. The branch receives it on its next sync."); continue; }
+            if (!atCentral && pendingLocal?.Contains(c.Entity + c.Key) == true) Conflict(c, "Changed here and at head office; head office's version replaced the change made here.");
+            db.Entry(existing).CurrentValues.SetValues(incoming); applied++;
+        }
+        return (applied, skipped);
+    }
+    /// <summary>Loads, in a few queries, the rows a batch touches that already exist (single-column keys), so applying needs no query per row.</summary>
+    private static async Task<Dictionary<string, HashSet<string>>> Prefetch(BusinessDb db, IReadOnlyList<SyncChangeDto> changes, CancellationToken ct)
+    {
+        var result = new Dictionary<string, HashSet<string>>();
+        var types = TypesFor(db);
+        foreach (var group in changes.GroupBy(x => x.Entity))
+        {
+            if (!types.TryGetValue(group.Key, out var type) || type.FindPrimaryKey()!.Properties is not [var pk] || pk.PropertyInfo is null) continue;
+            var present = new HashSet<string>(StringComparer.Ordinal);
+            var keys = new List<object?>();
+            foreach (var c in group) { try { keys.Add(ParseKey(type, c.Key)[0]); } catch (Exception) { } }
+            foreach (var chunk in keys.Distinct().Chunk(400))
+            {
+                var list = (System.Collections.IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(pk.ClrType))!;
+                foreach (var k in chunk) list.Add(k);
+                var row = System.Linq.Expressions.Expression.Parameter(type.ClrType, "x");
+                var body = System.Linq.Expressions.Expression.Call(System.Linq.Expressions.Expression.Constant(list), list.GetType().GetMethod("Contains")!, System.Linq.Expressions.Expression.Property(row, pk.PropertyInfo));
+                var set = typeof(DbContext).GetMethod(nameof(DbContext.Set), Type.EmptyTypes)!.MakeGenericMethod(type.ClrType).Invoke(db, null)!;
+                var where = typeof(Queryable).GetMethods().First(m => m.Name == nameof(Queryable.Where) && m.GetParameters()[1].ParameterType.GetGenericArguments()[0].GetGenericArguments().Length == 2)
+                    .MakeGenericMethod(type.ClrType).Invoke(null, [set, System.Linq.Expressions.Expression.Lambda(body, row)])!;
+                var task = (Task)typeof(EntityFrameworkQueryableExtensions).GetMethod(nameof(EntityFrameworkQueryableExtensions.ToListAsync))!.MakeGenericMethod(type.ClrType).Invoke(null, [where, ct])!;
+                await task;
+                foreach (var found in (System.Collections.IEnumerable)task.GetType().GetProperty("Result")!.GetValue(task)!) present.Add(KeyOf(type, found));
+            }
+            result[group.Key] = present;
+        }
+        return result;
+    }
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IModel, Dictionary<string, IEntityType>> TypeCache = new();
+    private static Dictionary<string, IEntityType> TypesFor(BusinessDb db) => TypeCache.GetValue(db.Model, m => m.GetEntityTypes().Where(Replicated).ToDictionary(x => x.ClrType.Name));
 
     /// <summary>Puts every existing replicated record in the outbox once, parents before children, so records made before sync was switched on travel too.</summary>
     public static async Task<int> Backfill(IDbContextFactory<BusinessDb> factory, string branch, CancellationToken ct = default)

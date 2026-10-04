@@ -197,4 +197,15 @@ Packaged together with 0.22.0. 260 tests pass. See [notes](background-jobs-0.23.
 - **Monitoring.** A Branch sync screen and a background job.
 - **SQL Server.** A separate migrations assembly and SQL Server history guards (triggers), verified against SQL Server 2022.
 
-277 tests pass. See [notes](branch-sync-sqlserver-0.25.0.md). Next: production readiness (0.26.0).
+277 tests pass. See [notes](branch-sync-sqlserver-0.25.0.md). Released with Windows SHA256 D736EC9861E788CBF3A37FF26C840F85CDCD6EA3B2E8E90FCD127C0ADCEEA4DD.
+
+## Production readiness — 0.26.0
+
+- **Upgrade and rollback.** Rehearsal test and a documented procedure.
+- **Update check.** Validated https feed, shown on System health; nothing installs by itself.
+- **Release builds.** Version numbers stamped into the build, and an optional signing hook.
+- **Performance.** Tests on six months of busy trading, and sync apply about six times faster.
+- **Security.** Review completed: CSP and other headers, sign-in and sync rate limits.
+- **Windows.** The dashboard test runs on Windows again.
+
+What remains needs the owner: see the [acceptance checklists](acceptance-checklists.md). 280 tests pass. See [notes](production-readiness-0.26.0.md).

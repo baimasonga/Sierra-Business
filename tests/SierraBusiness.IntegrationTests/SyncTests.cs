@@ -170,7 +170,9 @@ public sealed class SyncTests : IAsyncLifetime
         var builder = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         builder.Services.AddSingleton(server);
+        SierraBusiness.Web.SyncEndpoints.AddSyncRateLimiting(builder.Services);
         await using var app = builder.Build();
+        Microsoft.AspNetCore.Builder.RateLimiterApplicationBuilderExtensions.UseRateLimiter(app);
         SierraBusiness.Web.SyncEndpoints.MapSyncEndpoints(app);
         await app.StartAsync();
         var address = app.Urls.First();

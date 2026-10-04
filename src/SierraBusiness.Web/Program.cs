@@ -62,15 +62,33 @@ builder.Services.AddScoped<IBankingExtras, BankingExtrasService>();
 builder.Services.AddScoped<IStatementsService, StatementsService>();
 builder.Services.AddSierraOperations();
 builder.Services.AddSierraSync(builder.Configuration);
+builder.Services.Configure<UpdateOptions>(builder.Configuration.GetSection("Updates"));
 builder.Services.AddHostedService<JobHostedService>();
 builder.Services.TryAddSingleton<IFiscalIntegration, NoFiscalDevice>();
 builder.Services.AddSingleton<IChangeFeed, ChangeFeed>();
 builder.Services.AddSingleton<IFileStore, DatabaseFileStore>();
 builder.Services.AddScoped<IDocumentLibrary, DocumentLibrary>();
 builder.Services.AddProblemDetails();
+// 0.26.0 security review: throttle password guessing and sync abuse per client address.
+builder.Services.AddRateLimiter(o =>
+{
+    o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    o.AddPolicy("login", context => System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(context.Connection.RemoteIpAddress?.ToString() ?? "unknown", _ => new() { PermitLimit = 10, Window = TimeSpan.FromMinutes(1) }));
+});
 builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database").AddCheck<JobsHealthCheck>("jobs");
 var app = builder.Build();
 app.UseExceptionHandler();
+if (!app.Environment.IsDevelopment()) app.UseHsts();
+app.Use(async (context, next) =>
+{
+    var headers = context.Response.Headers;
+    headers.XContentTypeOptions = "nosniff";
+    headers.XFrameOptions = "DENY";
+    headers["Referrer-Policy"] = "no-referrer";
+    headers["Permissions-Policy"] = "camera=(self), microphone=(), geolocation=()";
+    headers.ContentSecurityPolicy = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' data:; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss:; frame-src 'self' blob: data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
+    await next(context);
+});
 app.Use(async (context, next) =>
 {
     try { await next(context); }
@@ -85,6 +103,7 @@ app.UseStaticFiles();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseAntiforgery();
+app.UseRateLimiter();
 app.MapHealthChecks("/health");
 app.MapBusinessEndpoints();
 app.MapSyncEndpoints();
@@ -132,7 +151,7 @@ app.MapPost("/account/login", async (HttpContext context, IAntiforgery antiforge
         await signIn.SignInWithClaimsAsync(user!, false, [new Claim("session.expires", DateTimeOffset.UtcNow.AddHours(8).ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture))]);
     }
     return Results.LocalRedirect(result.Succeeded ? "/" : "/account/login?failed=1");
-});
+}).RequireRateLimiting("login");
 app.MapGet("/account/logout", (HttpContext context, IAntiforgery antiforgery) =>
 {
     var token = antiforgery.GetAndStoreTokens(context);

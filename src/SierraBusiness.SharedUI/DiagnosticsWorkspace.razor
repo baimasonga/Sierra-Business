@@ -1,4 +1,5 @@
 @inject IOperationsService Operations
+@inject IServiceProvider Services
 @if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
 @if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
 @if (view is { } v)
@@ -14,6 +15,19 @@
         <p><strong>Backups:</strong> @v.Backup<br /><strong>Integrity:</strong> @v.Integrity<br /><strong>Computer:</strong> @v.OperatingSystem · checked @v.ServerTime.ToLocalTime().ToString("dd MMM yyyy HH:mm")</p>
         <p class="hint">@string.Join(" · ", v.Counts.Select(c => $"{c.Key}: {c.Value:N0}"))</p>
     </section>
+    @if (update is { } u)
+    {
+        <section class="panel"><div class="panel-title"><h2>Updates</h2>@if (u.Enabled) { <button class="secondary" disabled="@busy" @onclick="CheckUpdates">Check now</button> }</div>
+            @if (!u.Enabled) { <p class="hint">Update checks are off. Set the update feed address (Updates:Feed on the server; update-settings.json on a computer) to be told about new versions.</p> }
+            else if (u.Available)
+            {
+                <div class="notice" role="note"><strong>Version @u.Latest is available</strong> (this is @u.Current). Download it from <a href="@u.Url" target="_blank" rel="noopener noreferrer">@u.Url</a> and check that its SHA-256 is <code>@u.Sha256</code> before installing. Back up first; the installer keeps your data.</div>
+                @if (u.Notes.Length > 0) { <p class="hint">@u.Notes</p> }
+            }
+            else { <p>@(u.Checked is null ? "Not checked yet." : $"Up to date ({u.Current}), checked {u.Checked.Value.ToLocalTime():dd MMM yyyy HH:mm}.")</p> }
+            @if (u.Problem.Length > 0 && u.Enabled) { <p class="hint">Last check: @u.Problem</p> }
+        </section>
+    }
     <section class="panel"><div class="panel-title"><h2>Background tasks</h2><button class="secondary" disabled="@busy" @onclick="Load">Refresh</button></div>
         <div class="table-wrap"><table><thead><tr><th>Task</th><th>Every</th><th>Last run</th><th>Last success</th><th>Next</th><th>Status</th><th></th></tr></thead>
             <tbody>@foreach (var j in v.Jobs) { <tr><td>@j.Description</td><td>@Every(j.Interval)</td><td>@When(j.LastRun)</td><td>@When(j.LastSuccess)</td><td>@When(j.NextDue)</td>
@@ -27,9 +41,10 @@
     </section>
 }
 @code {
-    private DiagnosticsView? view; private bool busy; private string error = "", message = "";
+    private DiagnosticsView? view; private UpdateInfo? update; private bool busy; private string error = "", message = "";
+    private IUpdateService? Updates => Services.GetService(typeof(IUpdateService)) as IUpdateService;
     protected override Task OnInitializedAsync() => Load();
-    private async Task Load() { busy = true; error = ""; try { view = await Operations.Diagnostics(); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; } finally { busy = false; } }
+    private async Task Load() { busy = true; error = ""; try { view = await Operations.Diagnostics(); if (Updates is { } up) update = await up.Status(); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; } finally { busy = false; } }
     private async Task RunNow(string job)
     {
         busy = true; error = message = "";
@@ -37,6 +52,13 @@
         catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
         finally { busy = false; }
         await Load();
+    }
+    private async Task CheckUpdates()
+    {
+        busy = true; error = message = "";
+        try { update = await Updates!.CheckNow(); message = update.Available ? $"Version {update.Latest} is available." : update.Problem.Length > 0 ? "" : "This is the latest version."; if (update.Problem.Length > 0) error = update.Problem; }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
+        finally { busy = false; }
     }
     private static string When(DateTimeOffset? t) => t?.ToLocalTime().ToString("dd MMM HH:mm") ?? "—";
     private static string Every(TimeSpan t) => t.TotalHours >= 1 ? $"{t.TotalHours:0} h" : $"{t.TotalMinutes:0} min";

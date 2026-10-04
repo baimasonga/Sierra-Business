@@ -75,6 +75,7 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
     public DbSet<JournalLine> Journal => Set<JournalLine>();
     public DbSet<Operation> Operations => Set<Operation>();
     public DbSet<SyncChange> SyncChanges => Set<SyncChange>();
+    public DbSet<UpdateStatus> UpdateStatuses => Set<UpdateStatus>();
     public DbSet<SyncPeer> SyncPeers => Set<SyncPeer>();
     public DbSet<SyncConflict> SyncConflicts => Set<SyncConflict>();
     /// <summary>Set while applying changes received from another installation: those are not captured again at a branch, and derived rows are not re-created.</summary>
@@ -251,6 +252,9 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
         builder.Entity<SyncPeer>().HasKey(x => x.Name);
         builder.Entity<SyncPeer>().Property(x => x.Name).HasMaxLength(60);
         builder.Entity<SyncConflict>().HasIndex(x => x.Time);
+        builder.Entity<UpdateStatus>().HasKey(x => x.Branch);
+        builder.Entity<UpdateStatus>().Property(x => x.Branch).HasMaxLength(60);
+        builder.Entity<UpdateStatus>().Property(x => x.Url).HasMaxLength(500);
         builder.Entity<EmployeeLoan>().HasIndex(x => x.EmployeeId);
         builder.Entity<EmployeeLoan>().HasOne<BusinessDocument>().WithMany().HasForeignKey(x => x.DocumentId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<PriceRule>().Property(x => x.Version).IsConcurrencyToken();
