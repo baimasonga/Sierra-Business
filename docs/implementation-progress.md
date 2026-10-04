@@ -120,3 +120,20 @@ Phase 7, first release: Specification Skill 21. Owner dashboard (net sales, gros
 ## Approvals and business controls — 0.19.0
 
 Specification Skill 22: versioned control policy (discount limit, below-cost sales, back-dating, credit-limit override, reversal and stock-adjustment thresholds, self-approval rule, working hours); postings that trip a control are held as approval requests outside the rolled-back transaction, decided by a different person with the required permission (self-approval only when no other approver exists and the policy allows), and posted exactly once with the identical payload; append-only, sealed requests, decisions, uses and notes; exception review (reversals, back-dating, discounts, below cost, adjustments, after-hours work, approval decisions) with per-user review flags and Excel export of exceptions, approvals and the audit trail. Packaged together with 0.18.0. 238 tests pass. See [approval notes](approvals-controls-0.19.0.md). Next: Sierra Leone tax compliance (Skill 23) or payroll statutory deductions.
+
+## Sierra Leone compliance and document templates — 0.20.0
+
+This release implements Specification Skill 23 and the production templates from Skill 24.
+
+- **Tax categories.** Products are standard-rated, zero-rated or exempt from effective dates. Invoices store their rate and categories, so posted tax never changes. Service parts follow their product's category. Returns refund only the tax charged.
+- **Tax return.** A summary by category, reconciled to tax payable.
+- **Company profile.** Versioned: identifiers, tax registration and invoice title, currency formatting and amount in words.
+- **Document templates.** Versioned: logo, accent colour, terms, payment details, signature lines, footer, and A4 or 80 mm receipts. They apply to every printed document.
+- **Fiscal registration.** Goes through the `IFiscalIntegration` connection point. Pending, registered and rejected invoices are tracked, and sales are never blocked.
+
+244 tests pass. See [compliance notes](compliance-documents-0.20.0.md). Phase 7 features are complete except load/performance testing and the security review.
+
+Next:
+- payroll statutory deductions;
+- background jobs and diagnostics (Skill 25);
+- multi-branch synchronization (Phase 5), when SQL Server work resumes.

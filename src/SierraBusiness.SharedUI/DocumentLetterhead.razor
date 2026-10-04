@@ -1,0 +1,31 @@
+@* Letterhead for every printed document: logo, legal name, identifiers, and the document's title and number. *@
+<header class="letterhead" style="--accent:@Template.AccentColor">
+    @if (Template.Logo.Length > 0) { <img class="letterhead-logo" src="@Template.Logo" alt="@Name logo" /> }
+    <div class="lh-company">
+        <h1>@Name</h1>
+        @if (Company.TradingName.Length > 0 && Company.LegalName.Length > 0 && Company.TradingName != Company.LegalName) { <p>Trading as @Company.TradingName</p> }
+        @if (Template.Tagline.Length > 0) { <p class="lh-tagline">@Template.Tagline</p> }
+        @if (Contact.Length > 0) { <p>@Contact</p> }
+        @if (Identifiers.Length > 0) { <p class="lh-ids">@Identifiers</p> }
+    </div>
+    <div class="lh-doc">
+        <h2>@DocumentTitle</h2>
+        @if (Number.Length > 0) { <p class="code">@Number</p> }
+        @if (Branch.Length > 0) { <p>@Branch · @Company.CurrencySymbol (@Company.CurrencyCode)</p> }
+    </div>
+</header>
+@code {
+    [Parameter] public PrintSetup Setup { get; set; } = PrintSetups.Default;
+    [Parameter] public string CompanyName { get; set; } = "";
+    [Parameter] public string Branch { get; set; } = "";
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string Number { get; set; } = "";
+    /// <summary>A sales or service invoice: titled as a tax invoice when the business is registered for tax.</summary>
+    [Parameter] public bool TaxInvoice { get; set; }
+    private CompanyProfile Company => Setup.Company;
+    private DocumentTemplate Template => Setup.Template;
+    private string Name => Company.LegalName.Length > 0 ? Company.LegalName : CompanyName.Length > 0 ? CompanyName : "Sierra Business";
+    private string DocumentTitle => TaxInvoice && Company.TaxRegistered ? Company.TaxInvoiceTitle : Title;
+    private string Contact => string.Join(" · ", new[] { Company.Address, Company.Phone, Company.Email }.Where(x => x.Length > 0));
+    private string Identifiers => string.Join(" · ", Company.Ids.Where(x => x.OnInvoices).Select(x => $"{x.Label}: {x.Value}"));
+}

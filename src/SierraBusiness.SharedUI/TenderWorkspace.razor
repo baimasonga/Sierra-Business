@@ -116,8 +116,7 @@
             @if (bid is not null)
             {
                 <div id="tender-print" class="price-schedule">
-                    <h1>@(CompanyName.Length == 0 ? "Sierra Business" : CompanyName)</h1>
-                    <h2>Price schedule · @t.Reference</h2>
+                    <DocumentLetterhead Setup="printSetup" CompanyName="@CompanyName" Branch="@Actor.Branch" Title="@($"Price schedule · {t.Reference}")" />
                     <p>@t.Institution · @t.Title<br />Bid version @bid.Version · prepared @bid.Created.ToLocalTime().ToString("dd MMM yyyy")</p>
                     <table><thead><tr><th>#</th><th>Description</th><th class="numeric">Quantity</th><th>Unit</th><th class="numeric">Unit price (NLe)</th><th class="numeric">Total (NLe)</th></tr></thead><tbody>
                     @foreach (var l in bid.Lines.Where(x => x.AlternativeTo is null)) { <tr><td>@l.Line</td><td>@l.Description@(l.Sku.Length > 0 ? $" ({l.Sku})" : "")</td><td class="numeric">@l.Quantity.ToString("0.####")</td><td>@l.Unit</td><td class="numeric">@l.UnitPrice.ToString("N2")</td><td class="numeric">@l.LineTotal.ToString("N2")</td></tr> }
@@ -131,8 +130,9 @@
                         <h3>Alternative offers (not included in the total)</h3>
                         <table><tbody>@foreach (var l in bid.Lines.Where(x => x.AlternativeTo is not null)) { <tr><td>Alternative to line @l.AlternativeTo</td><td>@l.Description</td><td class="numeric">@l.Quantity.ToString("0.####") @l.Unit</td><td class="numeric">@l.UnitPrice.ToString("N2")</td><td class="numeric">@l.LineTotal.ToString("N2")</td></tr> }</tbody></table>
                     }
-                    <p>Prices are in Sierra Leonean Leones (NLe).</p>
+                    <p>Prices are in @printSetup.Company.CurrencyName (@printSetup.Company.CurrencySymbol).</p>
                     <p>Authorised signature: ____________________ &nbsp; Date: ______________</p>
+                    <DocumentFooter Setup="printSetup" Kind="quotation" />
                 </div>
                 <PrintButton Target="tender-print" />
                 @if (t.CostsVisible)
@@ -238,8 +238,10 @@
     private decimal DraftSubtotal => draft.Where(x => x.AlternativeTo == 0).Sum(x => Math.Round(x.Quantity * x.UnitPrice, 2, MidpointRounding.AwayFromZero));
     private decimal DraftCost => draft.Where(x => x.AlternativeTo == 0).Sum(x => Math.Round(x.Quantity * Local(x), 2, MidpointRounding.AwayFromZero));
 
+    private PrintSetup printSetup = PrintSetups.Default;
     protected override Task OnInitializedAsync() => Run(async () =>
     {
+        printSetup = await PrintSetups.Load(Services);
         await Load();
         products = (await Business.Read(Actor)).Products;
         if (Services.GetService(typeof(IPartyService)) is IPartyService partyService) parties = (await partyService.Read()).Where(x => x.Type != PartyType.Supplier).Select(x => x.Name).ToArray();

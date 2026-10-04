@@ -140,6 +140,10 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
     public DbSet<MaintenancePlan> MaintenancePlans => Set<MaintenancePlan>();
     public DbSet<MaintenancePlanEnd> MaintenancePlanEnds => Set<MaintenancePlanEnd>();
     public DbSet<ControlPolicyVersion> ControlPolicies => Set<ControlPolicyVersion>();
+    public DbSet<CompanyProfileVersion> CompanyProfiles => Set<CompanyProfileVersion>();
+    public DbSet<DocumentTemplateVersion> DocumentTemplates => Set<DocumentTemplateVersion>();
+    public DbSet<TaxAssignment> TaxAssignments => Set<TaxAssignment>();
+    public DbSet<FiscalSubmission> FiscalSubmissions => Set<FiscalSubmission>();
     public DbSet<ApprovalRequest> ApprovalRequests => Set<ApprovalRequest>();
     public DbSet<ApprovalDecision> ApprovalDecisions => Set<ApprovalDecision>();
     public DbSet<ApprovalUse> ApprovalUses => Set<ApprovalUse>();
@@ -276,6 +280,13 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
         builder.Entity<MaintenancePlanEnd>().HasIndex(x => x.PlanId).IsUnique();
         builder.Entity<MaintenancePlanEnd>().HasOne<MaintenancePlan>().WithMany().HasForeignKey(x => x.PlanId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<ControlPolicyVersion>().HasIndex(x => new { x.Branch, x.Version }).IsUnique();
+        builder.Entity<CompanyProfileVersion>().HasIndex(x => new { x.Branch, x.Version }).IsUnique();
+        builder.Entity<DocumentTemplateVersion>().HasIndex(x => new { x.Branch, x.Version }).IsUnique();
+        builder.Entity<TaxAssignment>().HasIndex(x => new { x.ProductId, x.From }).IsUnique();
+        builder.Entity<FiscalSubmission>().HasIndex(x => x.DocumentId);
+        builder.Entity<TaxAssignment>().HasOne<Product>().WithMany().HasForeignKey(x => x.ProductId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<FiscalSubmission>().HasOne<BusinessDocument>().WithMany().HasForeignKey(x => x.DocumentId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<FiscalSubmission>().HasIndex(x => new { x.Branch, x.Outcome });
         builder.Entity<ApprovalRequest>().HasIndex(x => x.Number).IsUnique();
         builder.Entity<ApprovalRequest>().HasIndex(x => new { x.Branch, x.PayloadHash });
         builder.Entity<ApprovalDecision>().HasIndex(x => x.RequestId).IsUnique();

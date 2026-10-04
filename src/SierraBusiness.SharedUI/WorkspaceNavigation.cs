@@ -11,7 +11,7 @@ public static class WorkspaceNavigation
         new("After-sales", "◎", ["Equipment lookup", "Installations", "Service jobs", "Equipment setup"]),
         new("People", "♙", ["Payroll"]),
         new("Documents", "▤", ["Document library", "Documents"]),
-        new("Administration", "⚙", ["Users & permissions", "Approvals", "Controls & exceptions", "Backups & integrity", "Audit & sync"])
+        new("Administration", "⚙", ["Users & permissions", "Approvals", "Controls & exceptions", "Company & tax", "Backups & integrity", "Audit & sync"])
     ];
     public static NavigationArea AreaFor(string page) => Areas.FirstOrDefault(x => x.Pages.Contains(page)) ?? Areas[0];
     public static IReadOnlyList<NavigationArea> Visible(IEnumerable<string> pages)

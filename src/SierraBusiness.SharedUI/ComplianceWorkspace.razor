@@ -1,0 +1,313 @@
+@inject IComplianceService Compliance
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+
+<div class="view-toggle report-tabs" role="tablist">
+    @foreach (var t in Tabs) { <button type="button" role="tab" class="@(tab == t ? "active" : "")" aria-selected="@(tab == t)" @onclick="() => Open(t)">@t</button> }
+</div>
+
+@if (tab == "Company")
+{
+    <section class="panel">
+        <div class="panel-title"><h2>Company details</h2>@if (profile.Version > 0) { <span class="status-badge a-Approved">Version @profile.Version</span> }</div>
+        <p class="hint">Printed on every invoice, receipt, quotation and certificate. Every saved change is kept.</p>
+        <fieldset disabled="@(!CanManage || busy)">
+            <div class="form-grid">
+                <label>Legal name<input maxlength="160" @bind="legalName" /></label>
+                <label>Trading name (if different)<input maxlength="160" @bind="tradingName" /></label>
+                <label>Address<input maxlength="300" @bind="address" /></label>
+                <label>Phone<input maxlength="60" @bind="phone" /></label>
+                <label>Email<input maxlength="120" @bind="email" /></label>
+            </div>
+            <h3>Identifiers</h3>
+            <p class="hint">For example TIN, GST registration number or business registration number. Ticked identifiers print on documents.</p>
+            @for (var i = 0; i < identifiers.Count; i++)
+            {
+                var index = i;
+                <div class="identifier-row">
+                    <label>Name<input maxlength="30" value="@identifiers[index].Label" @onchange="e => SetLabel(index, e.Value)" /></label>
+                    <label>Number<input maxlength="60" value="@identifiers[index].Value" @onchange="e => SetValue(index, e.Value)" /></label>
+                    <label class="check"><input type="checkbox" checked="@identifiers[index].OnInvoices" @onchange="e => SetShown(index, e.Value)" /> On documents</label>
+                    <button type="button" class="text-button" @onclick="() => identifiers.RemoveAt(index)">Remove</button>
+                </div>
+            }
+            @if (identifiers.Count < 8) { <button type="button" class="secondary" @onclick="AddIdentifier">Add identifier</button> }
+            <h3>Tax</h3>
+            <div class="form-grid">
+                <label class="check"><input type="checkbox" @bind="taxRegistered" /> Registered for tax (sales invoices are titled as tax invoices)</label>
+                <label>Tax name<input maxlength="20" @bind="taxName" /></label>
+                <label>Tax invoice title<input maxlength="40" @bind="taxInvoiceTitle" /></label>
+            </div>
+            <p class="hint">Tax rates are set with their start dates under Finance → Periods &amp; tax. Product categories (standard-rated, zero-rated, exempt) are on the Tax categories tab.</p>
+            <h3>Currency</h3>
+            <div class="form-grid">
+                <label>Currency code<input maxlength="3" @bind="currencyCode" /></label>
+                <label>Symbol<input maxlength="6" @bind="currencySymbol" /></label>
+                <label>Decimal places<input type="number" min="0" max="4" @bind="decimals" /></label>
+                <label class="check"><input type="checkbox" @bind="symbolAfter" /> Symbol after the amount</label>
+                <label>Currency in words<input maxlength="30" @bind="currencyName" /></label>
+                <label>Minor unit in words<input maxlength="30" @bind="minorName" /></label>
+                <label class="check"><input type="checkbox" @bind="amountInWords" /> Print the amount in words on documents</label>
+            </div>
+            <p class="hint">Example: @Preview.Money(1234567.5m)@(amountInWords ? " — " + Words : "")</p>
+            <h3>Fiscal registration</h3>
+            <div class="form-grid">
+                <label class="check"><input type="checkbox" checked="@(fiscalFrom is not null)" @onchange="e => fiscalFrom = (bool)(e.Value ?? false) ? Today : null" /> Register sales and service invoices with a fiscal device or service</label>
+                @if (fiscalFrom is not null) { <label>For invoices dated from<input type="date" @bind="FiscalFromValue" /></label> }
+            </div>
+            <p class="hint">Sales never wait for the fiscal device. Invoices that cannot be registered are kept as pending and can be sent later from the Fiscal tab.</p>
+        </fieldset>
+        @if (CanManage) { <button class="primary" disabled="@busy" @onclick="SaveProfile">Save company details</button> }
+        else { <p class="hint">Only users who manage users and permissions can change company details.</p> }
+    </section>
+}
+else if (tab == "Tax categories")
+{
+    <section class="panel">
+        <div class="panel-title"><h2>Product tax categories</h2></div>
+        <p class="hint">Products are standard-rated unless changed here. A change takes effect from the date you choose; invoices already posted keep the category they were issued with.</p>
+        <div class="report-period"><label>Find<input placeholder="SKU or name" @bind="taxSearch" @bind:event="oninput" /></label>
+            <label>Show<select @bind="taxFilter"><option>All</option><option>Standard</option><option>ZeroRated</option><option>Exempt</option><option>Changing</option></select></label></div>
+        <div class="table-wrap"><table>
+            <thead><tr><th>Product</th><th>Category</th><th>Now</th><th>Scheduled change</th><th>History</th></tr></thead>
+            <tbody>
+            @foreach (var p in FilteredProducts.Take(300))
+            {
+                <tr class="@(selectedProduct == p.ProductId ? "selected" : "")">
+                    <td><button class="text-button" @onclick="() => Choose(p)">@p.Sku · @p.Name</button></td><td>@p.Category</td>
+                    <td>@CategoryName(p.Current)</td>
+                    <td>@(p.Next is TaxCategory n ? $"{CategoryName(n)} from {p.NextFrom:dd MMM yyyy}" : "—")</td>
+                    <td>@string.Join("; ", p.History.Select(h => $"{h.From:dd MMM yyyy}: {CategoryName(h.Category)} ({h.Reason}, {h.By})"))</td>
+                </tr>
+            }
+            </tbody>
+        </table></div>
+        @if (FilteredProducts.Count() > 300) { <p class="hint">Showing the first 300. Narrow the search to see more.</p> }
+        @if (Chosen is { } c)
+        {
+            <h3>Change @c.Sku · @c.Name</h3>
+            <fieldset disabled="@(!CanTax || busy)" class="form-grid">
+                <label>New category<select @bind="newCategory"><option value="@TaxCategory.Standard">Standard-rated</option><option value="@TaxCategory.ZeroRated">Zero-rated</option><option value="@TaxCategory.Exempt">Exempt</option></select></label>
+                <label>From<input type="date" min="@Today.ToString("yyyy-MM-dd")" @bind="categoryFrom" /></label>
+                <label>Reason (law, notice or ruling)<input maxlength="200" @bind="categoryReason" /></label>
+            </fieldset>
+            @if (CanTax) { <button class="primary" disabled="@busy" @onclick="SetCategory">Schedule change</button> }
+            else { <p class="hint">Changing tax categories needs accounting.write.</p> }
+        }
+    </section>
+}
+else if (tab == "Tax return")
+{
+    <section class="panel">
+        <div class="panel-title"><h2>@profile.TaxName summary</h2></div>
+        <div class="report-period">
+            <label>From<input type="date" @bind="returnFrom" @bind:after="LoadReturn" /></label>
+            <label>To<input type="date" @bind="returnTo" @bind:after="LoadReturn" /></label>
+        </div>
+        <p class="hint">Sales, service invoices and sales returns in the period, split by tax category, to help prepare the return. Check figures against the current NRA return form before filing.</p>
+        @if (taxReturn is { } r)
+        {
+            <div class="table-wrap"><table class="report-table">
+                <thead><tr><th></th><th class="numeric">Standard-rated</th><th class="numeric">Zero-rated</th><th class="numeric">Exempt</th><th class="numeric">@r.TaxName</th><th class="numeric">Documents</th></tr></thead>
+                <tbody>@foreach (var l in r.Lines) { <tr><td>@l.Section</td><td class="numeric">@Fmt(l.Standard)</td><td class="numeric">@Fmt(l.ZeroRated)</td><td class="numeric">@Fmt(l.Exempt)</td><td class="numeric">@Fmt(l.Tax)</td><td class="numeric">@l.Documents</td></tr> }</tbody>
+            </table></div>
+            <p class="check-line">@(r.Check.Ok ? "✓ Reconciled" : "⚠ Difference") — @r.Check.Name @Fmt(r.Check.Report) against @r.Check.SourceName @Fmt(r.Check.Source)</p>
+            <details><summary>@r.Documents.Count documents</summary>
+                <div class="table-wrap"><table class="report-table">
+                    <thead><tr><th>Date</th><th>Document</th><th>Type</th><th>Party</th><th class="numeric">Standard</th><th class="numeric">Zero</th><th class="numeric">Exempt</th><th class="numeric">Tax</th><th>Fiscal</th></tr></thead>
+                    <tbody>@foreach (var d in r.Documents) { <tr><td>@d.Date.ToString("dd MMM")</td><td>@d.Number</td><td>@d.Kind</td><td>@d.Party</td><td class="numeric">@Fmt(d.Standard)</td><td class="numeric">@Fmt(d.ZeroRated)</td><td class="numeric">@Fmt(d.Exempt)</td><td class="numeric">@Fmt(d.Tax)</td><td>@d.Fiscal</td></tr> }</tbody>
+                </table></div>
+            </details>
+        }
+    </section>
+}
+else if (tab == "Documents")
+{
+    <section class="panel">
+        <div class="panel-title"><h2>Document templates</h2>@if (template.Version > 0) { <span class="status-badge a-Approved">Version @template.Version</span> }</div>
+        <p class="hint">Applies to invoices, receipts, quotations, orders, delivery notes, service reports, installation certificates and tender price schedules.</p>
+        <fieldset disabled="@(!CanManage || busy)">
+            <div class="form-grid">
+                <label>Logo (PNG, JPEG or SVG, under 200 KB)<InputFile accept="image/png,image/jpeg,image/svg+xml" OnChange="LogoChosen" /></label>
+                @if (logo.Length > 0) { <div><img class="logo-preview" src="@logo" alt="Logo preview" /><br /><button type="button" class="text-button" @onclick="() => logo = string.Empty">Remove logo</button></div> }
+                <label>Accent colour<input type="color" @bind="accent" /></label>
+                <label>Tagline<input maxlength="120" @bind="tagline" /></label>
+                <label>Receipts<select @bind="receiptWidth"><option value="A4">A4 page</option><option value="80mm">80 mm till roll</option></select></label>
+                <label class="check"><input type="checkbox" @bind="signatureLines" /> Signature lines on invoices, delivery notes and certificates</label>
+            </div>
+            <div class="form-grid">
+                <label>Invoice terms<textarea rows="3" maxlength="1000" @bind="invoiceTerms"></textarea></label>
+                <label>Quotation terms<textarea rows="3" maxlength="1000" @bind="quotationTerms"></textarea></label>
+                <label>Payment details (bank, account name and number)<textarea rows="3" maxlength="400" @bind="bankDetails"></textarea></label>
+                <label>Receipt note<input maxlength="200" @bind="receiptNote" /></label>
+                <label>Delivery note wording<textarea rows="2" maxlength="400" @bind="deliveryWording"></textarea></label>
+                <label>Footer<input maxlength="300" @bind="footer" /></label>
+            </div>
+        </fieldset>
+        @if (CanManage) { <button class="primary" disabled="@busy" @onclick="SaveTemplate">Save document settings</button> }
+        else { <p class="hint">Only users who manage users and permissions can change document settings.</p> }
+    </section>
+    <section class="panel">
+        <h2>Preview</h2>
+        <div class="printable sample-document">
+            <DocumentLetterhead Setup="PreviewSetup" Branch="@Actor.Branch" Title="Sales invoice" Number="SAMPLE-0001" TaxInvoice="true" />
+            <p>Date: @Today.ToString("dd MMM yyyy") · Sample customer</p>
+            <table><thead><tr><th>Item</th><th class="numeric">Amount</th></tr></thead><tbody><tr><td>Sample item</td><td class="numeric">1,000.00</td></tr></tbody>
+                <tfoot><tr><th>@PreviewSetup.Company.TaxName</th><td class="numeric">150.00</td></tr><tr><th>Total</th><td class="numeric"><strong>@PreviewSetup.Company.Money(1150)</strong></td></tr></tfoot></table>
+            <DocumentFooter Setup="PreviewSetup" Kind="invoice" Total="1150" />
+        </div>
+    </section>
+}
+else if (tab == "Fiscal")
+{
+    <section class="panel">
+        <div class="panel-title"><h2>Fiscal registration</h2>
+            @if (fiscal is { } f) { <span class="status-badge @(f.Enabled ? "a-Approved" : "a-Rejected")">@(f.Enabled ? $"On from {f.From:dd MMM yyyy}" : "Off")</span> }</div>
+        @if (fiscal is { } s)
+        {
+            <p>Connector: <strong>@s.Connector</strong> · @(s.ConnectorAvailable ? "available" : "not available")</p>
+            <div class="metrics"><section><small>PENDING</small><strong>@s.Pending</strong></section><section><small>REGISTERED</small><strong>@s.Registered</strong></section><section><small>REJECTED</small><strong>@s.Rejected</strong></section></div>
+            @if (!s.Enabled) { <p class="hint">Fiscal registration is off. Switch it on under the Company tab when your fiscal device or NRA service is installed.</p> }
+            else if (!s.ConnectorAvailable) { <p class="hint">No fiscal device or service is connected to this installation. Sales continue normally; invoices wait here as pending until a connector is installed.</p> }
+            @if (CanRegister && s.Pending > 0) { <button class="primary" disabled="@busy" @onclick="RegisterPending">Send pending invoices now</button> }
+            @if (s.Documents.Count > 0)
+            {
+                <div class="table-wrap"><table class="report-table">
+                    <thead><tr><th>Date</th><th>Invoice</th><th>Customer</th><th class="numeric">Total</th><th>Status</th><th>Code / message</th><th class="numeric">Attempts</th></tr></thead>
+                    <tbody>@foreach (var d in s.Documents) { <tr><td>@d.Date.ToString("dd MMM yyyy")</td><td>@d.Number</td><td>@d.Party</td><td class="numeric">@Fmt(d.Total)</td><td><span class="fiscal-state @d.State">@d.State</span></td><td>@(d.Code.Length > 0 ? d.Code : d.LastMessage)</td><td class="numeric">@d.Attempts</td></tr> }</tbody>
+                </table></div>
+            }
+        }
+    </section>
+}
+
+@code {
+    [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
+    private static DateOnly Today => DateOnly.FromDateTime(DateTime.Now);
+    private string tab = "Company", error = "", message = "";
+    private bool busy;
+    private bool CanManage => Actor.Permissions.Contains("users.manage");
+    private bool CanTax => Actor.Permissions.Contains("accounting.write");
+    private bool CanReturn => Actor.Permissions.Contains("accounting.read");
+    private bool CanRegister => Actor.Permissions.Contains("sales.create") || Actor.Permissions.Contains("accounting.write");
+    private IEnumerable<string> Tabs => new[] { "Company", "Tax categories", CanReturn ? "Tax return" : "", "Documents", "Fiscal" }.Where(x => x.Length > 0);
+
+    // company
+    private CompanyProfile profile = new();
+    private string legalName = "", tradingName = "", address = "", phone = "", email = "", taxName = "GST", taxInvoiceTitle = "Tax invoice", currencyCode = "SLE", currencySymbol = "NLe", currencyName = "Leones", minorName = "cents";
+    private bool taxRegistered, symbolAfter, amountInWords = true; private int decimals = 2; private DateOnly? fiscalFrom;
+    private List<CompanyIdentifier> identifiers = [];
+    private Guid profileOperation = Guid.NewGuid();
+    private DateOnly FiscalFromValue { get => fiscalFrom ?? Today; set => fiscalFrom = value; }
+    private CompanyProfile Preview => new(Decimals: decimals, CurrencySymbol: currencySymbol, SymbolAfter: symbolAfter, CurrencyName: currencyName, MinorUnitName: minorName);
+    private string Words { get { try { return AmountWords.Write(1234567.5m, currencyName, minorName, decimals); } catch (ArgumentException) { return ""; } } }
+
+    // documents
+    private DocumentTemplate template = new();
+    private string logo = "", accent = "#1f4e79", tagline = "", footer = "", bankDetails = "", invoiceTerms = "", receiptNote = "", quotationTerms = "", deliveryWording = "", receiptWidth = "A4";
+    private bool signatureLines = true;
+    private Guid templateOperation = Guid.NewGuid();
+    private PrintSetup PreviewSetup => new(CurrentProfile(), CurrentTemplate());
+
+    // tax categories
+    private IReadOnlyList<ProductTaxView> products = [];
+    private string taxSearch = "", taxFilter = "All", categoryReason = "";
+    private Guid? selectedProduct; private TaxCategory newCategory; private DateOnly categoryFrom = Today; private Guid categoryOperation = Guid.NewGuid();
+    private ProductTaxView? Chosen => products.FirstOrDefault(x => x.ProductId == selectedProduct);
+    private IEnumerable<ProductTaxView> FilteredProducts => products.Where(p => (p.Sku + " " + p.Name).Contains(taxSearch, StringComparison.OrdinalIgnoreCase)
+        && (taxFilter == "All" || taxFilter == "Changing" && p.Next is not null || taxFilter == p.Current.ToString()));
+
+    // tax return and fiscal
+    private DateOnly returnFrom = new(DateTime.Now.Year, DateTime.Now.Month, 1), returnTo = Today;
+    private TaxReturnReport? taxReturn;
+    private FiscalStatus? fiscal;
+
+    private static string CategoryName(TaxCategory c) => c switch { TaxCategory.ZeroRated => "Zero-rated", TaxCategory.Exempt => "Exempt", _ => "Standard-rated" };
+    private string Fmt(decimal amount) => amount.ToString("N" + Math.Clamp(profile.Decimals, 0, 4));
+
+    protected override Task OnInitializedAsync() => Run(async () => { ApplyProfile(await Compliance.Profile()); ApplyTemplate(await Compliance.Template()); });
+    private Task Open(string t) { tab = t; error = message = ""; return Run(LoadTab); }
+    private async Task LoadTab()
+    {
+        if (tab == "Tax categories") products = await Compliance.ProductTax();
+        else if (tab == "Tax return") taxReturn = await Compliance.TaxReturn(returnFrom, returnTo);
+        else if (tab == "Fiscal") fiscal = await Compliance.Fiscal();
+    }
+    private Task LoadReturn() => Run(async () => taxReturn = await Compliance.TaxReturn(returnFrom, returnTo));
+    private async Task Run(Func<Task> action)
+    {
+        if (busy) return; busy = true; error = message = "";
+        try { await action(); }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
+        catch (Exception) { error = "The operation could not complete. Refresh and try again."; }
+        finally { busy = false; }
+    }
+
+    private void ApplyProfile(CompanyProfile p)
+    {
+        profile = p; legalName = p.LegalName; tradingName = p.TradingName; address = p.Address; phone = p.Phone; email = p.Email; identifiers = p.Ids.ToList();
+        taxRegistered = p.TaxRegistered; taxName = p.TaxName; taxInvoiceTitle = p.TaxInvoiceTitle; currencyCode = p.CurrencyCode; currencySymbol = p.CurrencySymbol; decimals = p.Decimals;
+        symbolAfter = p.SymbolAfter; currencyName = p.CurrencyName; minorName = p.MinorUnitName; amountInWords = p.AmountInWords; fiscalFrom = p.FiscalFrom;
+        if (identifiers.Count == 0) identifiers = [new("TIN", ""), new("GST No.", "")];
+    }
+    private CompanyProfile CurrentProfile() => profile with
+    {
+        LegalName = legalName, TradingName = tradingName, Address = address, Phone = phone, Email = email, Identifiers = identifiers.ToList(), TaxRegistered = taxRegistered, TaxName = taxName, TaxInvoiceTitle = taxInvoiceTitle,
+        CurrencyCode = currencyCode, CurrencySymbol = currencySymbol, Decimals = decimals, SymbolAfter = symbolAfter, CurrencyName = currencyName, MinorUnitName = minorName, AmountInWords = amountInWords, FiscalFrom = fiscalFrom
+    };
+    private void AddIdentifier() => identifiers.Add(new("", ""));
+    private void SetLabel(int i, object? v) => identifiers[i] = identifiers[i] with { Label = v?.ToString() ?? "" };
+    private void SetValue(int i, object? v) => identifiers[i] = identifiers[i] with { Value = v?.ToString() ?? "" };
+    private void SetShown(int i, object? v) => identifiers[i] = identifiers[i] with { OnInvoices = v is true };
+    private Task SaveProfile() => Run(async () =>
+    {
+        await Compliance.SaveProfile(new(profileOperation, CurrentProfile()));
+        profileOperation = Guid.NewGuid(); ApplyProfile(await Compliance.Profile()); message = "Company details saved.";
+    });
+
+    private void ApplyTemplate(DocumentTemplate t)
+    {
+        template = t; logo = t.Logo; accent = t.AccentColor; tagline = t.Tagline; footer = t.FooterText; bankDetails = t.BankDetails; invoiceTerms = t.InvoiceTerms; receiptNote = t.ReceiptNote;
+        quotationTerms = t.QuotationTerms; deliveryWording = t.DeliveryNote; receiptWidth = t.ReceiptWidth; signatureLines = t.SignatureLines;
+    }
+    private DocumentTemplate CurrentTemplate() => template with
+    {
+        Logo = logo, AccentColor = accent, Tagline = tagline, FooterText = footer, BankDetails = bankDetails, InvoiceTerms = invoiceTerms, ReceiptNote = receiptNote, QuotationTerms = quotationTerms,
+        DeliveryNote = deliveryWording, ReceiptWidth = receiptWidth, SignatureLines = signatureLines
+    };
+    private async Task LogoChosen(InputFileChangeEventArgs e)
+    {
+        error = "";
+        var file = e.File;
+        if (file.ContentType is not ("image/png" or "image/jpeg" or "image/svg+xml")) { error = "Choose a PNG, JPEG or SVG image."; return; }
+        if (file.Size > 200 * 1024) { error = "The logo must be under 200 KB. Save a smaller version and try again."; return; }
+        try
+        {
+            await using var stream = file.OpenReadStream(200 * 1024);
+            using var memory = new MemoryStream(); await stream.CopyToAsync(memory);
+            logo = $"data:{file.ContentType};base64,{Convert.ToBase64String(memory.ToArray())}";
+        }
+        catch (IOException) { error = "The logo could not be read."; }
+    }
+    private Task SaveTemplate() => Run(async () =>
+    {
+        await Compliance.SaveTemplate(new(templateOperation, CurrentTemplate()));
+        templateOperation = Guid.NewGuid(); ApplyTemplate(await Compliance.Template()); message = "Document settings saved. New prints use them straight away.";
+    });
+
+    private void Choose(ProductTaxView p) { selectedProduct = p.ProductId; newCategory = p.Current == TaxCategory.Standard ? TaxCategory.Exempt : TaxCategory.Standard; categoryFrom = Today; categoryReason = ""; categoryOperation = Guid.NewGuid(); }
+    private Task SetCategory() => Run(async () =>
+    {
+        var c = Chosen!;
+        await Compliance.SetTaxCategory(new(categoryOperation, c.ProductId, newCategory, categoryFrom, categoryReason));
+        categoryOperation = Guid.NewGuid(); products = await Compliance.ProductTax();
+        message = $"{c.Sku} is {CategoryName(newCategory).ToLowerInvariant()} from {categoryFrom:dd MMM yyyy}.";
+    });
+
+    private Task RegisterPending() => Run(async () =>
+    {
+        var result = await Compliance.RegisterPending();
+        fiscal = await Compliance.Fiscal();
+        if (result.Registered == 0 && result.StillPending > 0) error = result.Message; else message = result.Message;
+    });
+}

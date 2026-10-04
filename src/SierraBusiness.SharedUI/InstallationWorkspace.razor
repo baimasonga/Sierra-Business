@@ -1,3 +1,4 @@
+@inject IServiceProvider Services
 @inject IEquipmentService Equipment
 @inject Microsoft.JSInterop.IJSRuntime JS
 @if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
@@ -42,9 +43,7 @@
 {
     <section class="panel">
         <div id="installation-print">
-            <h1>@(CompanyName.Length == 0 ? "Sierra Business" : CompanyName)</h1>
-            <h2>@(selected.Status == "Completed" ? "Installation and commissioning certificate" : "Installation job sheet")</h2>
-            <p class="code">@selected.Number</p>
+            <DocumentLetterhead Setup="printSetup" CompanyName="@CompanyName" Branch="@Actor.Branch" Title="@(selected.Status == "Completed" ? "Installation and commissioning certificate" : "Installation job sheet")" Number="@selected.Number" />
             <p>Customer: @selected.Customer<br />Site: @selected.Site<br />Sale document: @selected.SaleNumber (@selected.SaleDate.ToString("dd MMM yyyy"))<br />Engineer: @selected.Engineer<br />Planned: @selected.Scheduled.ToString("dd MMM yyyy")@(selected.Completed is not null ? $" · Completed: {selected.Completed:dd MMM yyyy}" : "")</p>
             <table><thead><tr><th>Equipment</th><th>Serial number</th></tr></thead><tbody>@foreach (var u in selected.Units) { <tr><td>@u.Sku · @u.Name</td><td>@u.Serial</td></tr> }</tbody></table>
             @if (selected.Checklist.Count > 0)
@@ -59,7 +58,8 @@
                 @if (selected.CompletionNotes.Length > 0) { <p>Completion notes: @selected.CompletionNotes</p> }
             }
             @if (selected.Status == "Cancelled") { <p><strong>CANCELLED</strong> — @selected.CancelReason</p> }
-            <p>Engineer signature: ____________________ &nbsp; Customer signature: ____________________</p>
+            @if (!printSetup.Template.SignatureLines) { <p>Engineer signature: ____________________ &nbsp; Customer signature: ____________________</p> }
+            <DocumentFooter Setup="printSetup" Kind="certificate" />
         </div>
         <PrintButton Target="installation-print" />
         <AttachedDocuments Actor="Actor" Target="DocumentLinkTarget.Installation" Key="@selected.Id.ToString()" DefaultType="LibraryDocumentType.DeliveryNote" DefaultTitle="@($"Signed certificate {selected.Customer}")" Heading="Signed sheets, photos and evidence" />
@@ -100,7 +100,8 @@
     private InstallableSale? Sale => installable.FirstOrDefault(x => x.SaleId == saleId);
     public bool HasDraft => chosen.Count > 0 && site.Length > 0 || done.Count > 0 || acceptedBy.Length > 0;
 
-    protected override Task OnInitializedAsync() => Run(Load);
+    private PrintSetup printSetup = PrintSetups.Default;
+    protected override async Task OnInitializedAsync() { printSetup = await PrintSetups.Load(Services); await Run(Load); }
     private async Task Load() { installable = await Equipment.Installable(); jobs = await Equipment.Installations(); if (selected is not null) selected = jobs.FirstOrDefault(x => x.Id == selected.Id); }
     private Task Refresh() => Run(Load);
     private async Task Run(Func<Task> action)

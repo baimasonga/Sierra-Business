@@ -1,0 +1,25 @@
+@* Closing section of a printed document: amount in words, standard wording, payment details, signatures, fiscal status and footer. *@
+<footer class="doc-footer">
+    @if (Total is decimal total && Company.AmountInWords && total != 0) { <p class="words">Amount in words: @AmountWords.Write(total, Company.CurrencyName, Company.MinorUnitName, Company.Decimals)</p> }
+    @if (Fiscal is not null)
+    {
+        <p class="fiscal">@(Fiscal.State switch { FiscalState.Registered => "Fiscal code: " + Fiscal.Code, FiscalState.Rejected => "Fiscal registration rejected: " + Fiscal.LastMessage, _ => "Fiscal registration pending" })</p>
+    }
+    @if (Wording.Length > 0) { <p class="terms">@Wording</p> }
+    @if (Template.BankDetails.Length > 0 && Kind is "invoice" or "quotation" or "statement") { <p class="terms"><strong>Payment details</strong><br />@Template.BankDetails</p> }
+    @if (Template.SignatureLines && Kind is "invoice" or "delivery" or "service" or "certificate")
+    {
+        <div class="sign"><span>@(Kind == "delivery" ? "Received by (name and signature)" : "Customer signature")</span><span>Authorised signature</span></div>
+    }
+    @if (Template.FooterText.Length > 0) { <p class="lh-footer">@Template.FooterText</p> }
+</footer>
+@code {
+    [Parameter] public PrintSetup Setup { get; set; } = PrintSetups.Default;
+    /// <summary>invoice, receipt, quotation, delivery, statement, service, certificate or other.</summary>
+    [Parameter, EditorRequired] public string Kind { get; set; } = "other";
+    [Parameter] public decimal? Total { get; set; }
+    [Parameter] public FiscalDocumentView? Fiscal { get; set; }
+    private CompanyProfile Company => Setup.Company;
+    private DocumentTemplate Template => Setup.Template;
+    private string Wording => Kind switch { "invoice" or "service" => Template.InvoiceTerms, "receipt" => Template.ReceiptNote, "quotation" => Template.QuotationTerms, "delivery" => Template.DeliveryNote, _ => "" };
+}

@@ -57,6 +57,10 @@ public sealed class ReturnService(IDbContextFactory<BusinessDb> factory, IActorS
         using var detail = JsonDocument.Parse(original.Detail); var originalRequest = detail.RootElement.GetProperty("Request").Deserialize<TradeCommand>()!;
         var exchangeRate = detail.RootElement.TryGetProperty("ExchangeRate", out var storedRate) && storedRate.ValueKind == JsonValueKind.Number ? storedRate.GetDecimal() : 1m;
         var taxTotal = detail.RootElement.GetProperty("Tax").GetDecimal(); var originalNet = detail.RootElement.GetProperty("Net").GetDecimal();
+        // Only standard-rated lines carried tax; sales from before 0.20.0 have no categories and were wholly standard-rated.
+        var categories = sale && detail.RootElement.TryGetProperty("Categories", out var storedCategories) ? storedCategories.Deserialize<Dictionary<Guid, TaxCategory>>()! : null;
+        var originalTaxable = categories is null ? originalNet : TaxRules.Value(detail.RootElement, "Taxable");
+        bool Taxed(Guid product) => categories is null || categories.GetValueOrDefault(product, TaxCategory.Standard) == TaxCategory.Standard;
         var movements = await db.Movements.Where(x => x.Branch == actor.Branch).ToListAsync();
         var source = movements.Where(x => x.DocumentId == (originalRequest.DeliveryId ?? original.Id)).ToList();
         var returned = await db.ReturnAllocations.Where(x => x.OriginalDocumentId == original.Id && !db.Documents.Any(r => r.Reverses == x.ReturnDocumentId)).ToListAsync();
@@ -101,17 +105,20 @@ public sealed class ReturnService(IDbContextFactory<BusinessDb> factory, IActorS
                 returnCost = available == line.Quantity ? stock.Sum(x => x.Value) : AccountingEngine.Money(stock.Sum(x => x.Value) / available * line.Quantity);
             }
             // Tax is allocated across all returns at invoice level, with full-return residual correction below.
-            var refundTax = sale ? AccountingEngine.Money(taxTotal * refundNet / originalNet) : 0;
+            var refundTax = sale && Taxed(line.ProductId) && originalTaxable != 0 ? AccountingEngine.Money(taxTotal * refundNet / originalTaxable) : 0;
             var allocation = new ReturnAllocation { Id = Guid.NewGuid(), OriginalDocumentId = original.Id, ReturnDocumentId = doc.Id, ProductId = line.ProductId, Serial = serial, Batch = batch, Expiry = line.Expiry, Quantity = line.Quantity, Net = refundNet, Tax = refundTax, Cost = returnCost };
             if (beforeInvoice == true) allocation.BillCredit = refundNet; // clears goods received not invoiced line by line
             returned.Add(allocation); db.ReturnAllocations.Add(allocation);
             var movement = new Movement { Id = Guid.NewGuid(), DocumentId = doc.Id, Branch = actor.Branch, ProductId = line.ProductId, Location = matching[0].Location, Serial = serial, Batch = batch, Expiry = line.Expiry, Quantity = sale ? line.Quantity : -line.Quantity, Value = sale ? returnCost : -returnCost };
             movements.Add(movement); db.Movements.Add(movement); net += refundNet; tax += refundTax; cost += returnCost;
         }
-        var alreadyNet = returned.Where(x => x.ReturnDocumentId != doc.Id).Sum(x => x.Net);
+        var alreadyTaxable = returned.Where(x => x.ReturnDocumentId != doc.Id && Taxed(x.ProductId)).Sum(x => x.Net);
+        var thisTaxable = returned.Where(x => x.ReturnDocumentId == doc.Id && Taxed(x.ProductId)).Sum(x => x.Net);
         var alreadyTax = returned.Where(x => x.ReturnDocumentId != doc.Id).Sum(x => x.Tax);
-        var correctedTax = sale ? AccountingEngine.Money(taxTotal * (alreadyNet + net) / originalNet) - alreadyTax : 0;
-        returned.Last().Tax += correctedTax - tax; tax = correctedTax;
+        var lastTaxed = returned.LastOrDefault(x => x.ReturnDocumentId == doc.Id && Taxed(x.ProductId));
+        var correctedTax = sale && lastTaxed is not null && originalTaxable != 0 ? AccountingEngine.Money(taxTotal * (alreadyTaxable + thisTaxable) / originalTaxable) - alreadyTax : tax;
+        if (lastTaxed is not null) lastTaxed.Tax += correctedTax - tax;
+        tax = correctedTax;
         var refund = net + tax;
         decimal billCredit = 0;
         if (beforeInvoice == true && input.Disposition != ReturnDisposition.Original) throw new BusinessException("These goods are not yet invoiced, so nothing has been paid: choose 'Original settlement'. The return reduces goods received not invoiced.");
@@ -127,7 +134,10 @@ public sealed class ReturnService(IDbContextFactory<BusinessDb> factory, IActorS
         }
         if (beforeInvoice is null) returned.Last().BillCredit = billCredit;
         doc.Total = -refund;
-        doc.Detail = JsonSerializer.Serialize(new { Request = input, Net = net, Tax = tax, BillCredit = billCredit, RefundOrCredit = refund - billCredit });
+        doc.Detail = sale && categories is not null
+            ? JsonSerializer.Serialize(new { Request = input, Net = net, Tax = tax, BillCredit = billCredit, RefundOrCredit = refund - billCredit, Taxable = thisTaxable,
+                ZeroRated = returned.Where(x => x.ReturnDocumentId == doc.Id && categories.GetValueOrDefault(x.ProductId) == TaxCategory.ZeroRated).Sum(x => x.Net), Exempt = returned.Where(x => x.ReturnDocumentId == doc.Id && categories.GetValueOrDefault(x.ProductId) == TaxCategory.Exempt).Sum(x => x.Net) })
+            : JsonSerializer.Serialize(new { Request = input, Net = net, Tax = tax, BillCredit = billCredit, RefundOrCredit = refund - billCredit });
         db.Documents.Add(doc);
         var posting = new List<Posting>();
         if (sale)

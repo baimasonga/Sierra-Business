@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Identity;
@@ -48,6 +49,8 @@ builder.Services.AddScoped<ITenderService, TenderService>();
 builder.Services.AddScoped<IServiceDesk, ServiceDesk>();
 builder.Services.AddScoped<IReportService, ReportService>();
 builder.Services.AddScoped<IControlService, ControlService>();
+builder.Services.AddScoped<IComplianceService, ComplianceService>();
+builder.Services.TryAddSingleton<IFiscalIntegration, NoFiscalDevice>();
 builder.Services.AddSingleton<IChangeFeed, ChangeFeed>();
 builder.Services.AddSingleton<IFileStore, DatabaseFileStore>();
 builder.Services.AddScoped<IDocumentLibrary, DocumentLibrary>();

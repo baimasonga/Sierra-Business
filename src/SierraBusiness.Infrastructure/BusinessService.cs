@@ -119,8 +119,9 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
                     db.OrderFulfillments.Add(new() { Id = Guid.NewGuid(), OrderId = order.Id, ProductId = group.Key, DocumentId = doc.Id, Quantity = requested });
                 }
             }
-            decimal net = 0, cost = 0;
+            decimal net = 0, cost = 0, taxable = 0, zeroRated = 0, exempt = 0;
             var receiptLines = new List<object>();
+            var categories = new Dictionary<Guid, TaxCategory>();
             foreach (var line in input.Lines)
             {
                 if (line is null) throw new BusinessException("Document lines cannot be empty.");
@@ -158,11 +159,16 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
                 if (!sale) receiptLines.Add(new { Movement = movement.Id, Source = lineSource });
                 if (delivered is null) { db.Movements.Add(movement); movements.Add(movement); if (sale) await CommerceRules.Consume(db, input.OrderId, p.Id, input.Location, serial, batch, line.Expiry, quantity); }
                 net += amount; cost += lineCost;
+                if (sale)
+                {
+                    if (!categories.TryGetValue(p.Id, out var category)) categories[p.Id] = category = await TaxRules.Category(db, p.Id, input.BusinessDate);
+                    if (category == TaxCategory.ZeroRated) zeroRated += amount; else if (category == TaxCategory.Exempt) exempt += amount; else taxable += amount;
+                }
             }
             var configuredRate = await db.SalesTaxRates.Where(x => x.Branch == actor.Branch && x.From <= input.BusinessDate).OrderByDescending(x => x.From).Select(x => (decimal?)x.Rate).FirstOrDefaultAsync(cancellationToken) ?? settings.TaxRate;
             if (configuredRate is < 0 or > 1) throw new BusinessException("Tax configuration is invalid.");
             if (delivered is not null) cost = -movements.Where(x => x.DocumentId == delivered.Id).Sum(x => x.Value);
-            var tax = sale && !delivery ? AccountingEngine.Money(net * configuredRate) : 0;
+            var tax = sale && !delivery ? AccountingEngine.Money(taxable * configuredRate) : 0; // zero-rated and exempt lines carry no tax
             doc.Total = delivery ? 0 : net + tax; if (delivery) doc.Settlement = "Delivered; awaiting invoice";
             if (sale && !delivery && input.Payment is null && partyMaster is not null)
             {
@@ -175,7 +181,7 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
                 if (outstanding + doc.Total > partyMaster.CreditLimit && policy.CreditOverride) triggers.Add(new("CreditLimit", $"{party} would owe NLe {outstanding + doc.Total:N2} against a credit limit of NLe {partyMaster.CreditLimit:N2}", "accounting.write"));
                 else if (outstanding + doc.Total > partyMaster.CreditLimit) throw new BusinessException("This sale exceeds the customer's credit limit. Record payment or update the approved limit before posting.");
             }
-            doc.Detail = currency is null ? JsonSerializer.Serialize(new { Request = input, TaxRate = sale ? configuredRate : 0, Net = net, Tax = tax, Cost = cost })
+            doc.Detail = currency is null ? (sale ? JsonSerializer.Serialize(new { Request = input, TaxRate = configuredRate, Net = net, Tax = tax, Cost = cost, Taxable = taxable, ZeroRated = zeroRated, Exempt = exempt, Categories = categories }) : JsonSerializer.Serialize(new { Request = input, TaxRate = 0m, Net = net, Tax = tax, Cost = cost }))
                 : JsonSerializer.Serialize(new { Request = input, TaxRate = 0m, Net = net, Tax = tax, Cost = cost, Currency = currency, ExchangeRate = exchangeRate, SourceTotal = sourceTotal });
             if (input.InvoiceLater)
             {

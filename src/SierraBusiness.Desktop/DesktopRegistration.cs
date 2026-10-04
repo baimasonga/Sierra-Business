@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -53,6 +54,8 @@ public static class DesktopRegistration
         services.AddTransient<IServiceDesk, ServiceDesk>();
         services.AddTransient<IReportService, ReportService>();
         services.AddTransient<IControlService, ControlService>();
+        services.AddTransient<IComplianceService, ComplianceService>();
+        services.TryAddSingleton<IFiscalIntegration, NoFiscalDevice>();
         services.AddSingleton<IChangeFeed, ChangeFeed>();
         services.AddSingleton<IFileStore, DatabaseFileStore>();
         services.AddTransient<IDocumentLibrary, DocumentLibrary>();

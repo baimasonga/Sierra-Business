@@ -1,3 +1,4 @@
+@inject IServiceProvider Services
 @inject IServiceDesk Desk
 @inject Microsoft.JSInterop.IJSRuntime JS
 @if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
@@ -262,9 +263,9 @@
 
             <section class="panel">
                 <div id="service-print" class="price-schedule service-report">
-                    <h1>@(CompanyName.Length == 0 ? "Sierra Business" : CompanyName)</h1>
-                    <h2>@(j.CloseNumber.Length > 0 && j.Invoiced > 0 ? "Service report and invoice" : j.Source == "Preventive" ? "Preventive maintenance report" : "Service report")</h2>
-                    <p class="code">Job @j.Number@(j.CloseNumber.Length > 0 ? $" · {(j.Invoiced > 0 ? "Invoice" : "Closing")} {j.CloseNumber}" : "")</p>
+                    <DocumentLetterhead Setup="printSetup" CompanyName="@CompanyName" Branch="@Actor.Branch" TaxInvoice="@(j.CloseNumber.Length > 0 && j.Invoiced > 0)"
+                                        Title="@(j.CloseNumber.Length > 0 && j.Invoiced > 0 ? "Service report and invoice" : j.Source == "Preventive" ? "Preventive maintenance report" : "Service report")"
+                                        Number="@($"Job {j.Number}{(j.CloseNumber.Length > 0 ? $" · {(j.Invoiced > 0 ? "Invoice" : "Closing")} {j.CloseNumber}" : "")}")" />
                     <p>Customer: @j.Customer@(j.Site.Length > 0 ? $" · {j.Site}" : "")<br />Equipment: @j.Equipment@(j.Serial.Length > 0 ? $" · serial {j.Serial}" : "")<br />Reported: @j.ReportedOn.ToString("dd MMM yyyy") · Engineer: @(j.Engineer.Length > 0 ? j.Engineer : "—")</p>
                     <p><strong>Problem reported:</strong> @j.Problem</p>
                     @if (j.Diagnosis.Length > 0) { <p><strong>Diagnosis:</strong> @j.Diagnosis</p> }
@@ -277,14 +278,15 @@
                         @foreach (var l in j.Labour) { <tr><td>Labour @l.Date.ToString("dd MMM"), @l.Engineer@(l.Description.Length > 0 ? $": {l.Description}" : "")</td><td class="numeric">@l.Hours.ToString("0.##") h</td><td class="numeric">@l.Rate.ToString("N2")</td><td class="numeric">@(l.Chargeable ? (l.Hours * l.Rate).ToString("N2") : "No charge")</td></tr> }
                         </tbody><tfoot>
                             <tr><td colspan="3">Subtotal</td><td class="numeric">@((j.PartsCharge + j.LabourCharge).ToString("N2"))</td></tr>
-                            <tr><td colspan="3">Tax</td><td class="numeric">@Tax(j).ToString("N2")</td></tr>
-                            <tr><td colspan="3"><strong>Total NLe</strong></td><td class="numeric"><strong>@((j.PartsCharge + j.LabourCharge + Tax(j)).ToString("N2"))</strong></td></tr>
+                            <tr><td colspan="3">@printSetup.Company.TaxName</td><td class="numeric">@Tax(j).ToString("N2")</td></tr>
+                            <tr><td colspan="3"><strong>Total @printSetup.Company.CurrencySymbol</strong></td><td class="numeric"><strong>@((j.PartsCharge + j.LabourCharge + Tax(j)).ToString("N2"))</strong></td></tr>
                         </tfoot></table>
                     }
                     @if (j.Coverage is { } cov) { <p>Billing: @BillingName(cov.Billing)@CoverageScope(cov)@(cov.Billing == ServiceBilling.Warranty && j.WarrantyHint.Length > 0 ? $". {j.WarrantyHint}" : ".")</p> }
                     @if (j.Settlement.Length > 0) { <p>Settlement: @SettlementName(j.Settlement)</p> }
                     @if (j.AcceptedBy.Length > 0) { <p>Work accepted by: <strong>@j.AcceptedBy</strong> on @j.CompletedOn?.ToString("dd MMM yyyy")</p> }
-                    <p>Engineer signature: ____________________ &nbsp; Customer signature: ____________________</p>
+                    @if (!printSetup.Template.SignatureLines) { <p>Engineer signature: ____________________ &nbsp; Customer signature: ____________________</p> }
+                    <DocumentFooter Setup="printSetup" Kind="service" Total="@(j.Invoiced > 0 ? j.Invoiced : null)" Fiscal="@(j.Invoiced > 0 ? serviceFiscal : null)" />
                 </div>
                 <PrintButton Target="service-print" />
                 <AttachedDocuments Actor="Actor" Target="DocumentLinkTarget.ServiceJob" Key="@j.Id.ToString()" DefaultType="LibraryDocumentType.Other" DefaultTitle="@($"Service report {j.Customer}")" Heading="Signed reports, photos and evidence" />
@@ -436,7 +438,9 @@
     private static string BillingName(ServiceBilling b) => b switch { ServiceBilling.Warranty => "Warranty claim", ServiceBilling.Contract => "Maintenance contract", ServiceBilling.Goodwill => "Goodwill (no charge)", _ => "Chargeable" };
     private static string CoverageScope(ServiceCoverageView c) => c.Billing != ServiceBilling.Warranty ? "" : c.CoversParts && c.CoversLabour ? " (parts and labour)" : c.CoversParts ? " (parts only; labour charged)" : " (labour only; parts charged)";
     private static string SettlementName(string s) => s switch { "Credit" => "On account", "BankTransfer" => "Bank transfer", _ => s };
-    private decimal Tax(ServiceJobView j) => Math.Round((j.PartsCharge + j.LabourCharge) * (data?.TaxRate ?? 0), 2, MidpointRounding.AwayFromZero);
+    // Invoiced jobs show the tax actually charged (zero-rated and exempt parts carry none); open jobs show an estimate at the current rate.
+    private decimal Tax(ServiceJobView j) => j.Invoiced > 0 ? j.Invoiced - (j.PartsCharge + j.LabourCharge) : Math.Round((j.PartsCharge + j.LabourCharge) * (data?.TaxRate ?? 0), 2, MidpointRounding.AwayFromZero);
+    private PrintSetup printSetup = PrintSetups.Default; private FiscalDocumentView? serviceFiscal;
     private IEnumerable<ServiceJobView> Filtered(string f, string text)
     {
         var jobs = (data?.Jobs ?? []).Where(x => f switch { "Open" => Working(x.Status), "Awaiting billing" => x.Status == ServiceStatus.Completed, "Closed" => !Open(x.Status), _ => true });
@@ -450,8 +454,13 @@
         return (int)step < (int)j.Status ? "done" : "";
     }
 
-    protected override Task OnInitializedAsync() => Run(Load);
+    protected override async Task OnInitializedAsync() { printSetup = await PrintSetups.Load(Services); await Run(Load); }
     private async Task Load() { data = await Desk.Read(); }
+    private async Task LoadFiscal(ServiceJobView j)
+    {
+        try { serviceFiscal = j.CloseDocumentId is Guid d && j.Invoiced > 0 ? await PrintSetups.Fiscal(Services, d) : null; StateHasChanged(); }
+        catch (Exception) { serviceFiscal = null; }
+    }
     private Task Refresh() => Run(Load);
     private async Task Run(Func<Task> action)
     {
@@ -469,11 +478,12 @@
         labourEngineer = j.Engineer; labourDate = completed = closeDate = paymentDate = Today; dueDate = null; settlement = "Cash"; paymentReference = bank = "";
         partId = returnIssue = Guid.Empty; partQuantity = returnQuantity = 1; partPrice = 0;
         completeOperation = Guid.NewGuid(); closeOperation = Guid.NewGuid(); issueOperation = Guid.NewGuid();
+        serviceFiscal = null; _ = LoadFiscal(j);
     }
     private void ChooseUnit() { if (Unit is { } u) customer = u.Customer; }
     private void ChoosePart() { partPrice = Part?.Price ?? 0; partSerial = partBatch = ""; partExpiry = null; issueOperation = Guid.NewGuid(); }
     private void Tick(string check, bool on) { if (on) done.Add(check); else done.Remove(check); }
-    private async Task After(string text) { await Load(); message = text; }
+    private async Task After(string text) { await Load(); message = text; if (Selected is { } j) await LoadFiscal(j); }
 
     private Task Log() => Run(async () =>
     {

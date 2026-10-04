@@ -82,7 +82,7 @@ public static class ServiceRules
     internal sealed record IssueData(Guid ProductId, decimal Quantity, decimal UnitPrice);
     internal sealed record ReturnData(Guid IssueDocumentId, decimal Quantity);
     internal sealed record ClaimData(string Supplier, string Reference);
-    internal sealed record InvoiceLine(string Description, decimal Quantity, decimal UnitPrice, decimal Amount);
+    internal sealed record InvoiceLine(string Description, decimal Quantity, decimal UnitPrice, decimal Amount, TaxCategory Category = TaxCategory.Standard);
 }
 
 public sealed class ServiceDesk(IDbContextFactory<BusinessDb> factory, IActorSession session, IOptions<TradingOptions> options) : IServiceDesk
@@ -551,7 +551,7 @@ public sealed class ServiceDesk(IDbContextFactory<BusinessDb> factory, IActorSes
                 if (!chargeParts || quantity == 0) continue;
                 if (data.UnitPrice <= 0) throw new BusinessException($"Set a charge price for {products[data.ProductId].Name} before billing; issue it again with a price.");
                 await CommerceRules.Price(db, data.ProductId, data.UnitPrice, 1);
-                lines.Add(new($"{products[data.ProductId].Sku} {products[data.ProductId].Name}", quantity, data.UnitPrice, AccountingEngine.Money(quantity * data.UnitPrice)));
+                lines.Add(new($"{products[data.ProductId].Sku} {products[data.ProductId].Name}", quantity, data.UnitPrice, AccountingEngine.Money(quantity * data.UnitPrice), await TaxRules.Category(db, data.ProductId, input.Date)));
             }
             if (chargeLabour)
                 foreach (var l in job.Labour.Where(l => l.Rate > 0))
@@ -564,7 +564,8 @@ public sealed class ServiceDesk(IDbContextFactory<BusinessDb> factory, IActorSes
             {
                 var rate = await db.SalesTaxRates.Where(x => x.Branch == actor.Branch && x.From <= input.Date).OrderByDescending(x => x.From).Select(x => (decimal?)x.Rate).FirstOrDefaultAsync() ?? Settings.TaxRate;
                 if (rate is < 0 or > 1) throw new BusinessException("Tax configuration is invalid.");
-                var tax = AccountingEngine.Money(net * rate);
+                var taxable = lines.Where(x => x.Category == TaxCategory.Standard).Sum(x => x.Amount); // labour is standard-rated; parts follow their product's category
+                var tax = AccountingEngine.Money(taxable * rate);
                 var party = await db.Parties.SingleOrDefaultAsync(x => x.Branch == actor.Branch && x.NormalizedName == job.Row.Customer.ToUpperInvariant());
                 if (party is not null && party.Type == PartyType.Supplier) throw new BusinessException("The customer on this job is registered as a supplier only.");
                 if (input.Payment is not null && !Enum.IsDefined(input.Payment.Value)) throw new BusinessException("Unsupported payment method.");
@@ -577,7 +578,7 @@ public sealed class ServiceDesk(IDbContextFactory<BusinessDb> factory, IActorSes
                 if (input.Payment is null) await ServiceRules.CheckCredit(db, actor.Branch, party, job.Row.Customer, net + tax);
                 var doc = new BusinessDocument { Id = Guid.NewGuid(), Number = $"{actor.Branch}-{Settings.Device}-SIN-{input.OperationId:N}", Branch = actor.Branch, Kind = DocumentKind.ServiceInvoice,
                     Party = party?.Name ?? job.Row.Customer, BusinessDate = input.Date, DueDate = input.DueDate ?? input.Date.AddDays(party?.PaymentDays ?? 0), Total = net + tax, Settlement = input.Payment?.ToString() ?? "Credit",
-                    Detail = JsonSerializer.Serialize(new { JobId = job.Row.Id, Request = input, coverage.Billing, Lines = lines, Net = net, TaxRate = rate, Tax = tax, PartsCost = partsCost }) };
+                    Detail = JsonSerializer.Serialize(new { JobId = job.Row.Id, Request = input, coverage.Billing, Lines = lines, Net = net, TaxRate = rate, Tax = tax, PartsCost = partsCost, Taxable = taxable, ZeroRated = lines.Where(x => x.Category == TaxCategory.ZeroRated).Sum(x => x.Amount), Exempt = lines.Where(x => x.Category == TaxCategory.Exempt).Sum(x => x.Amount) }) };
                 db.Documents.Add(doc);
                 var debit = input.Payment switch { PaymentMethod.Cash => Account.Cash, PaymentMethod.BankTransfer => Account.Bank, PaymentMethod.Cheque => Account.ChequesInHand, _ => Account.Receivables };
                 Journal(db, doc, new(debit, net + tax, 0), new(ServiceRules.Income, 0, net), new(Account.TaxPayable, 0, tax),

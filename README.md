@@ -2,6 +2,8 @@
 
 A Microsoft .NET implementation based on [the supplied engineering specification](docs/engineering-specification.md). This repository contains an initial working vertical slice, not the full production system described in that specification.
 
+**Compliance & documents 0.20.0:** products are standard-rated, zero-rated or exempt from dated settings, and only taxed lines carry GST; posted invoices keep their tax. Returns refund only the tax charged. A tax return summary reconciles to the ledger. Company identifiers (TIN, GST No.) and versioned letterheads appear on every printed document, with logo, terms, payment details, amount in words and 80 mm receipts. Fiscal registration goes through a connection point that never blocks a sale. See [compliance notes](docs/compliance-documents-0.20.0.md).
+
 **Approvals & controls 0.19.0:** configurable business controls hold large discounts, below-cost and back-dated postings, credit-limit overrides, reversals and big stock adjustments for a second person's approval (no self-approval while another approver exists); approved postings go through exactly once; exception review by user with Excel export of exceptions, approvals and the audit trail. See [approval notes](docs/approvals-controls-0.19.0.md).
 
 **Dashboard & reports 0.18.0:** owner dashboard (sales, gross profit, cash and bank, receivables and payables with overdue amounts, stock value, operations) refreshing live as anyone posts; drill-down from every figure to its documents; sales analysis, day book and ledgers, stock valuation and movements, receivables and payables ageing — each reconciled to the ledger or stock movements and paged for large data. See [report notes](docs/dashboard-reports-0.18.0.md).
@@ -52,7 +54,7 @@ A Microsoft .NET implementation based on [the supplied engineering specification
 
 ### Windows desktop package
 
-The **Windows installer is ready** at `artifacts\windows\0.19.0\SierraBusiness-Setup-x64.exe`. Double-click it to install, open Sierra Business from the Start menu, and create your owner account on first use. Existing users should back up and close the app before updating. The package includes the application runtimes, offline WebView2 prerequisite and English OCR dependencies. It is an unsigned development preview; full clean-machine installation and UI acceptance testing are still outstanding. See [Windows package instructions and status](docs/windows-package.md).
+The **Windows installer is ready** at `artifacts\windows\0.20.0\SierraBusiness-Setup-x64.exe`. Double-click it to install, open Sierra Business from the Start menu, and create your owner account on first use. Existing users should back up and close the app before updating. The package includes the application runtimes, offline WebView2 prerequisite and English OCR dependencies. It is an unsigned development preview; full clean-machine installation and UI acceptance testing are still outstanding. See [Windows package instructions and status](docs/windows-package.md).
 
 Desktop owners can create integrity-checked backups from the workspace sidebar, including captured originals and review revisions. Backup restoration and permission checks pass in the primary .NET 10 suite (126 tests total). A Windows CI workflow is also prepared to build the native app and installer once this project is hosted in a GitHub repository; it has not yet been run.
 
