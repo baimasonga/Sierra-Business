@@ -21,7 +21,16 @@ public static class DesktopRegistration
             options.TaxRate = configured.TaxRate;
             options.ClosedThrough = configured.ClosedThrough;
         });
-        services.AddDbContextFactory<BusinessDb>(o => o.UseSqlite(store.ConnectionString));
+        var syncSettings = new DesktopSyncConfiguration(dataDirectory);
+        var sync = syncSettings.Load();
+        var branch = DesktopTradingConfiguration.Load(dataDirectory).Branch;
+        services.AddSingleton<ISyncSettings>(syncSettings);
+        services.AddSingleton(Microsoft.Extensions.Options.Options.Create(sync));
+        services.AddDbContextFactory<BusinessDb>(o =>
+        {
+            o.UseSqlite(store.ConnectionString);
+            if (sync.Role == SyncRole.Branch) o.AddInterceptors(new SyncCaptureInterceptor(SyncRole.Branch, branch)); // changes queue for head office in the same save
+        });
         services.AddIdentityCore<IdentityUser>(o =>
         {
             o.Password.RequiredLength = 12;
@@ -60,6 +69,8 @@ public static class DesktopRegistration
         services.AddTransient<IBankingExtras, BankingExtrasService>();
         services.AddTransient<IStatementsService, StatementsService>();
         services.AddSierraOperations();
+        services.AddTransient<ISyncService, SyncService>();
+        if (sync.Role == SyncRole.Branch) services.AddSingleton<IBackgroundJob, SyncJob>();
         services.TryAddSingleton<IFiscalIntegration, NoFiscalDevice>();
         services.AddSingleton<IChangeFeed, ChangeFeed>();
         services.AddSingleton<IFileStore, DatabaseFileStore>();

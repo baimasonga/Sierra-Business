@@ -185,4 +185,16 @@ Packaged together with 0.22.0. 260 tests pass. See [notes](background-jobs-0.23.
 - **Controls.** Approval for refunds and returns above a limit.
 - **Payroll.** Leave allowance and end-of-service tax treatment, staff loans and salary bank files.
 
-269 tests pass. See [notes](smaller-gaps-0.24.0.md). Next: multi-branch sync and SQL Server (0.25.0), then production readiness (0.26.0).
+269 tests pass. See [notes](smaller-gaps-0.24.0.md). Released with Windows SHA256 76370A8ABA7FB05F87E0BCAC2C8C7FB2EEE197A9552E31983021072DA78FBE2F.
+
+## Multi-branch sync and SQL Server — 0.25.0
+
+- **Sync.** Every replicated change goes into a transactional outbox. Branches pull, then push, in whole commits, with idempotent retries.
+- **Isolation and ownership.** Branches only receive their own records; shared masters come from head office. A branch may only send its own records.
+- **Conflicts.** Recorded for review. Head office wins on shared masters; posted history is never overwritten.
+- **Existing data.** Records made before a branch joins are backfilled once, including attachments, which go to head office only.
+- **Security.** HTTPS endpoints with a key per branch.
+- **Monitoring.** A Branch sync screen and a background job.
+- **SQL Server.** A separate migrations assembly and SQL Server history guards (triggers), verified against SQL Server 2022.
+
+277 tests pass. See [notes](branch-sync-sqlserver-0.25.0.md). Next: production readiness (0.26.0).

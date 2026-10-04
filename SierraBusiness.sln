@@ -23,6 +23,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SierraBusiness.Api", "src\S
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SierraBusiness.Desktop", "src\SierraBusiness.Desktop\SierraBusiness.Desktop.csproj", "{DAF3DAC8-E092-4904-A6CE-4BCF1E194BA8}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SierraBusiness.Infrastructure.SqlServer", "src\SierraBusiness.Infrastructure.SqlServer\SierraBusiness.Infrastructure.SqlServer.csproj", "{36A8FD7A-8ECE-4B06-96CD-81CD17D8E24A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -32,6 +34,10 @@ Global
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{36A8FD7A-8ECE-4B06-96CD-81CD17D8E24A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{36A8FD7A-8ECE-4B06-96CD-81CD17D8E24A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{36A8FD7A-8ECE-4B06-96CD-81CD17D8E24A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{36A8FD7A-8ECE-4B06-96CD-81CD17D8E24A}.Release|Any CPU.Build.0 = Release|Any CPU
 		{4559E4AD-DC49-4DA1-A155-7BA4E9BDC57D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{4559E4AD-DC49-4DA1-A155-7BA4E9BDC57D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{4559E4AD-DC49-4DA1-A155-7BA4E9BDC57D}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -66,6 +72,7 @@ Global
 		{DAF3DAC8-E092-4904-A6CE-4BCF1E194BA8}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
+		{36A8FD7A-8ECE-4B06-96CD-81CD17D8E24A} = {78A98EC8-34E9-4315-B37D-A94E092BFF2E}
 		{4559E4AD-DC49-4DA1-A155-7BA4E9BDC57D} = {78A98EC8-34E9-4315-B37D-A94E092BFF2E}
 		{446970E5-3EA9-4C56-83E5-30D7BD6E8847} = {78A98EC8-34E9-4315-B37D-A94E092BFF2E}
 		{EC1B81E2-54FB-4443-A54D-2E83515C7202} = {78A98EC8-34E9-4315-B37D-A94E092BFF2E}

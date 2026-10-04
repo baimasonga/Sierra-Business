@@ -23,7 +23,13 @@ builder.Services.Configure<TradingOptions>(builder.Configuration.GetSection("Tra
 var provider = builder.Configuration["Database:Provider"] ?? "Sqlite";
 var connection = builder.Configuration.GetConnectionString("Business") ?? "Data Source=App_Data/sierra.db";
 Directory.CreateDirectory(Path.Combine(builder.Environment.ContentRootPath, "App_Data"));
-builder.Services.AddDbContextFactory<BusinessDb>(o => { if (provider == "SqlServer") o.UseSqlServer(connection); else o.UseSqlite(connection); });
+var syncRole = builder.Configuration.GetValue<SyncRole>("Sync:Role");
+var branchCode = builder.Configuration["Trading:Branch"] ?? "FREETOWN";
+builder.Services.AddDbContextFactory<BusinessDb>(o =>
+{
+    if (provider == "SqlServer") o.UseSqlServer(connection, x => x.MigrationsAssembly("SierraBusiness.Infrastructure.SqlServer")); else o.UseSqlite(connection);
+    if (syncRole != SyncRole.Off) o.AddInterceptors(new SyncCaptureInterceptor(syncRole, branchCode)); // changes are queued for head office / the branches in the same save
+});
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<IdentityActorValidator>();
 builder.Services.AddScoped<BusinessService>();
@@ -55,6 +61,7 @@ builder.Services.AddScoped<IPricingService, PricingService>();
 builder.Services.AddScoped<IBankingExtras, BankingExtrasService>();
 builder.Services.AddScoped<IStatementsService, StatementsService>();
 builder.Services.AddSierraOperations();
+builder.Services.AddSierraSync(builder.Configuration);
 builder.Services.AddHostedService<JobHostedService>();
 builder.Services.TryAddSingleton<IFiscalIntegration, NoFiscalDevice>();
 builder.Services.AddSingleton<IChangeFeed, ChangeFeed>();
@@ -80,6 +87,7 @@ app.UseAuthorization();
 app.UseAntiforgery();
 app.MapHealthChecks("/health");
 app.MapBusinessEndpoints();
+app.MapSyncEndpoints();
 
 // Database migration is an explicit deployment command, never an implicit production startup action.
 if (args.Contains("--migrate"))

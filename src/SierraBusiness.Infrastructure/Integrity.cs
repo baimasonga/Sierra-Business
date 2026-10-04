@@ -47,6 +47,8 @@ public static class HistoryProtection
     };
 
     private static bool IsSqlite(BusinessDb db) => db.Database.ProviderName == "Microsoft.EntityFrameworkCore.Sqlite";
+    private static bool IsSqlServer(BusinessDb db) => db.Database.ProviderName == "Microsoft.EntityFrameworkCore.SqlServer";
+    private const string Immutable = "Posted history is immutable. Create a reversal.";
     private static IEnumerable<IEntityType> ProtectedEntities(BusinessDb db) => db.Model.GetEntityTypes().Where(x => ProtectedTypes.Contains(x.ClrType)).OrderBy(x => x.GetTableName(), StringComparer.Ordinal);
     private static IEnumerable<string> GuardedTables(BusinessDb db) => ProtectedEntities(db).Select(x => x.GetTableName()!).Append(db.Model.FindEntityType(typeof(IntegritySeal))!.GetTableName()!).Distinct();
 
@@ -54,7 +56,7 @@ public static class HistoryProtection
     public static async Task MigrateAsync(BusinessDb db, CancellationToken ct = default)
     {
         var upgrading = (await db.Database.GetPendingMigrationsAsync(ct)).Any();
-        if (IsSqlite(db)) await SuspendGuards(db, ct);
+        if (upgrading || IsSqlite(db)) await SuspendGuards(db, ct);
         await db.Database.MigrateAsync(ct);
         await ApplyGuards(db, ct);
         // Full re-scan only when the schema changed or protection is new; ordinary startups stay fast.
@@ -63,6 +65,12 @@ public static class HistoryProtection
 
     public static async Task SuspendGuards(BusinessDb db, CancellationToken ct = default)
     {
+        if (IsSqlServer(db))
+        {
+            if (!await db.Database.CanConnectAsync(ct) || !(await db.Database.GetAppliedMigrationsAsync(ct)).Any()) return;
+            foreach (var name in await GuardNames(db, ct)) { var drop = "DROP TRIGGER IF EXISTS [" + Identifier(name) + "]"; await db.Database.ExecuteSqlRawAsync(drop, ct); }
+            return;
+        }
         if (!IsSqlite(db)) return;
         var names = await db.Database.SqlQueryRaw<string>("SELECT name AS Value FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'sb_protect_%'").ToListAsync(ct);
         foreach (var name in names) { var sql = "DROP TRIGGER IF EXISTS \"" + Identifier(name) + "\""; await db.Database.ExecuteSqlRawAsync(sql, ct); }
@@ -71,6 +79,16 @@ public static class HistoryProtection
     /// <summary>Database-level guards: posted rows cannot be updated or deleted even by tools that bypass the application.</summary>
     public static async Task ApplyGuards(BusinessDb db, CancellationToken ct = default)
     {
+        if (IsSqlServer(db))
+        {
+            // One trigger per table rejects any UPDATE or DELETE that touches posted rows, whoever runs it.
+            foreach (var table in GuardedTables(db))
+            {
+                var create = "CREATE OR ALTER TRIGGER [" + Identifier(TriggerPrefix + table) + "] ON [" + Identifier(table) + "] AFTER UPDATE, DELETE AS BEGIN SET NOCOUNT ON; IF EXISTS (SELECT 1 FROM deleted) THROW 51000, '" + Immutable + "', 1; END";
+                await db.Database.ExecuteSqlRawAsync(create, ct);
+            }
+            return;
+        }
         if (!IsSqlite(db)) return;
         foreach (var table in GuardedTables(db))
         foreach (var operation in new[] { "UPDATE", "DELETE" })
@@ -83,10 +101,12 @@ public static class HistoryProtection
     // Only model table names and our own trigger names reach SQL; reject anything that is not a plain identifier.
     private static string Identifier(string name) => System.Text.RegularExpressions.Regex.IsMatch(name, "^[A-Za-z0-9_]{1,128}$") ? name : throw new InvalidOperationException("Unexpected database identifier.");
 
-    public static async Task<int> GuardCount(BusinessDb db, CancellationToken ct = default) => !IsSqlite(db) ? 0 :
+    private static Task<List<string>> GuardNames(BusinessDb db, CancellationToken ct) =>
+        db.Database.SqlQueryRaw<string>("SELECT name AS Value FROM sys.triggers WHERE name LIKE 'sb[_]protect[_]%'").ToListAsync(ct);
+    public static async Task<int> GuardCount(BusinessDb db, CancellationToken ct = default) => IsSqlServer(db) ? (await GuardNames(db, ct)).Count : !IsSqlite(db) ? 0 :
         (await db.Database.SqlQueryRaw<string>("SELECT name AS Value FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'sb_protect_%'").ToListAsync(ct)).Count;
 
-    public static int ExpectedGuardCount(BusinessDb db) => GuardedTables(db).Count() * 2;
+    public static int ExpectedGuardCount(BusinessDb db) => GuardedTables(db).Count() * (IsSqlServer(db) ? 1 : 2);
 
     /// <summary>Called inside SaveChanges after the business rows are written, in the same transaction.</summary>
     internal static void AddCommitSeal(BusinessDb db, IReadOnlyList<EntityEntry> written)
@@ -150,7 +170,7 @@ public static class HistoryProtection
             else if (sealedRow != row) Problem($"{Describe(key)} was changed after it was posted.");
         }
         foreach (var key in expected.Keys.Where(x => !present.Contains(x))) Problem($"{Describe(key)} was deleted.");
-        var guards = await GuardCount(db, ct); var guarded = !IsSqlite(db) || guards >= ExpectedGuardCount(db);
+        var guards = await GuardCount(db, ct); var guarded = !IsSqlite(db) && !IsSqlServer(db) || guards >= ExpectedGuardCount(db);
         if (!guarded) Problem($"Database guards are missing ({guards} of {ExpectedGuardCount(db)} present). Someone may have removed them; restart the application to reinstate them.");
         return new(problems.Count == 0, seals.Count, current.Count, previousHash.Length >= 16 ? previousHash[..16] : previousHash, guarded, problems, notes, DateTimeOffset.UtcNow);
     }

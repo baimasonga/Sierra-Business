@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 0.25.0: SQL Server schema for head-office (central) servers. The desktop app and single-branch servers keep using SQLite. -->
+  <ItemGroup>
+    <ProjectReference Include="../SierraBusiness.Infrastructure/SierraBusiness.Infrastructure.csproj" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
+    <PackageReference Include="System.Security.Cryptography.Xml"><PrivateAssets>all</PrivateAssets></PackageReference>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design"><PrivateAssets>all</PrivateAssets></PackageReference>
+  </ItemGroup>
+</Project>

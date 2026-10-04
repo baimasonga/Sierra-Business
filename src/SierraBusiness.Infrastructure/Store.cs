@@ -74,6 +74,11 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
     public DbSet<Movement> Movements => Set<Movement>();
     public DbSet<JournalLine> Journal => Set<JournalLine>();
     public DbSet<Operation> Operations => Set<Operation>();
+    public DbSet<SyncChange> SyncChanges => Set<SyncChange>();
+    public DbSet<SyncPeer> SyncPeers => Set<SyncPeer>();
+    public DbSet<SyncConflict> SyncConflicts => Set<SyncConflict>();
+    /// <summary>Set while applying changes received from another installation: those are not captured again at a branch, and derived rows are not re-created.</summary>
+    internal string? SyncApplyingOrigin { get; set; }
     public DbSet<CapturedDocument> Captures => Set<CapturedDocument>();
     public DbSet<CaptureRevision> CaptureRevisions => Set<CaptureRevision>();
     public DbSet<LedgerAccount> LedgerAccounts => Set<LedgerAccount>();
@@ -239,6 +244,13 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
         builder.Entity<IssuedChequeEvent>().HasOne<IssuedCheque>().WithMany().HasForeignKey(x => x.ChequeId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<TillAssignment>().HasIndex(x => new { x.Branch, x.AccountCode, x.Cashier }).IsUnique();
         builder.Entity<YearEndClosure>().HasIndex(x => new { x.Branch, x.YearEnd }).IsUnique();
+        builder.Entity<SyncChange>().HasKey(x => x.Seq);
+        builder.Entity<SyncChange>().HasIndex(x => new { x.Origin, x.Seq });
+        builder.Entity<SyncChange>().HasIndex(x => new { x.Scope, x.Seq });
+        builder.Entity<SyncChange>().HasIndex(x => x.Commit);
+        builder.Entity<SyncPeer>().HasKey(x => x.Name);
+        builder.Entity<SyncPeer>().Property(x => x.Name).HasMaxLength(60);
+        builder.Entity<SyncConflict>().HasIndex(x => x.Time);
         builder.Entity<EmployeeLoan>().HasIndex(x => x.EmployeeId);
         builder.Entity<EmployeeLoan>().HasOne<BusinessDocument>().WithMany().HasForeignKey(x => x.DocumentId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<PriceRule>().Property(x => x.Version).IsConcurrencyToken();
@@ -397,7 +409,7 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
     // Every save that adds posted history also appends a seal to the tamper-evidence chain, atomically in the same save.
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
-        GuardHistory(); BankingRules.CaptureTillEntries(this).GetAwaiter().GetResult();
+        GuardHistory(); if (SyncApplyingOrigin is null) BankingRules.CaptureTillEntries(this).GetAwaiter().GetResult();
         var history = NewHistory(); if (history.Count > 0) HistoryProtection.AddCommitSeal(this, history);
         var saved = base.SaveChanges(acceptAllChangesOnSuccess);
         if (history.Count > 0) ChangeNotifier.Raise();
@@ -405,7 +417,7 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
     }
     public override async Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
     {
-        GuardHistory(); await BankingRules.CaptureTillEntries(this, cancellationToken).ConfigureAwait(false);
+        GuardHistory(); if (SyncApplyingOrigin is null) await BankingRules.CaptureTillEntries(this, cancellationToken).ConfigureAwait(false);
         var history = NewHistory(); if (history.Count > 0) await HistoryProtection.AddCommitSealAsync(this, history, cancellationToken).ConfigureAwait(false);
         var saved = await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken).ConfigureAwait(false);
         if (history.Count > 0) ChangeNotifier.Raise(); // listeners debounce, so a transaction committing just after this is picked up

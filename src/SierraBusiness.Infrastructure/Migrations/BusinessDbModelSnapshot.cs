@@ -3830,6 +3830,127 @@ namespace SierraBusiness.Infrastructure.Migrations
                     b.ToTable("SupplierCreditUses");
                 });
 
+            modelBuilder.Entity("SierraBusiness.Infrastructure.SyncChange", b =>
+                {
+                    b.Property<long>("Seq")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("Commit")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Entity")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Operation")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Origin")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("Time")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Seq");
+
+                    b.HasIndex("Commit");
+
+                    b.HasIndex("Origin", "Seq");
+
+                    b.HasIndex("Scope", "Seq");
+
+                    b.ToTable("SyncChanges");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.SyncConflict", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Entity")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("IncomingJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Origin")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Reviewed")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset>("Time")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Time");
+
+                    b.ToTable("SyncConflicts");
+                });
+
+            modelBuilder.Entity("SierraBusiness.Infrastructure.SyncPeer", b =>
+                {
+                    b.Property<string>("Name")
+                        .HasMaxLength(60)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("LastAttempt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("LastError")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("LastSuccess")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("Pulled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("Pushed")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Name");
+
+                    b.ToTable("SyncPeers");
+                });
+
             modelBuilder.Entity("SierraBusiness.Infrastructure.TaxAssignment", b =>
                 {
                     b.Property<Guid>("Id")
