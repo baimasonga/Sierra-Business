@@ -27,7 +27,9 @@ var syncRole = builder.Configuration.GetValue<SyncRole>("Sync:Role");
 var branchCode = builder.Configuration["Trading:Branch"] ?? "FREETOWN";
 builder.Services.AddDbContextFactory<BusinessDb>(o =>
 {
-    if (provider == "SqlServer") o.UseSqlServer(connection, x => x.MigrationsAssembly("SierraBusiness.Infrastructure.SqlServer")); else o.UseSqlite(connection);
+    if (provider == "SqlServer") o.UseSqlServer(connection, x => x.MigrationsAssembly("SierraBusiness.Infrastructure.SqlServer"));
+    else if (provider is "Postgres" or "PostgreSQL" or "Supabase") SierraBusiness.Infrastructure.Postgres.PostgresSetup.UsePostgres(o, connection); // e.g. Supabase: tables live in the "sierra" schema
+    else o.UseSqlite(connection);
     if (syncRole != SyncRole.Off) o.AddInterceptors(new SyncCaptureInterceptor(syncRole, branchCode)); // changes are queued for head office / the branches in the same save
 });
 builder.Services.AddHttpContextAccessor();

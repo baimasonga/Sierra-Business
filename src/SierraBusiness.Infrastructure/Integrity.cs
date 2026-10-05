@@ -48,6 +48,32 @@ public static class HistoryProtection
 
     private static bool IsSqlite(BusinessDb db) => db.Database.ProviderName == "Microsoft.EntityFrameworkCore.Sqlite";
     private static bool IsSqlServer(BusinessDb db) => db.Database.ProviderName == "Microsoft.EntityFrameworkCore.SqlServer";
+    public static bool IsPostgres(DbContext db) => db.Database.ProviderName == "Npgsql.EntityFrameworkCore.PostgreSQL";
+    /// <summary>The PostgreSQL schema that holds every Sierra Business table (never "public", which Supabase publishes through its REST API).</summary>
+    public const string PostgresSchema = "sierra";
+
+    /// <summary>PostgreSQL stores times to the microsecond, .NET to 100 ns. Rounding before the seal is computed keeps seals verifiable after the
+    /// round trip. Only rows being added or changed are touched, and only on PostgreSQL.</summary>
+    internal static void NormalizeTimes(BusinessDb db)
+    {
+        if (!IsPostgres(db)) return;
+        foreach (var entry in db.ChangeTracker.Entries().Where(e => e.State is EntityState.Added or EntityState.Modified)) Normalize(entry.Metadata, entry.Entity);
+    }
+    /// <summary>Rounds an entity's times to what PostgreSQL keeps (used for rows arriving by sync before they are compared).</summary>
+    public static void Normalize(IEntityType type, object row)
+    {
+        foreach (var property in type.GetProperties().Where(p => !p.IsShadowProperty() && p.PropertyInfo is { CanWrite: true }))
+        {
+            var value = property.PropertyInfo!.GetValue(row);
+            if (value is DateTimeOffset t)
+            {
+                // Preserve the instant, not the local clock reading. Npgsql requires a zero offset,
+                // including when the input already has microsecond precision.
+                var utcTicks = t.UtcTicks;
+                property.PropertyInfo.SetValue(row, new DateTimeOffset(utcTicks - utcTicks % 10, TimeSpan.Zero));
+            }
+        }
+    }
     private const string Immutable = "Posted history is immutable. Create a reversal.";
     private static IEnumerable<IEntityType> ProtectedEntities(BusinessDb db) => db.Model.GetEntityTypes().Where(x => ProtectedTypes.Contains(x.ClrType)).OrderBy(x => x.GetTableName(), StringComparer.Ordinal);
     private static IEnumerable<string> GuardedTables(BusinessDb db) => ProtectedEntities(db).Select(x => x.GetTableName()!).Append(db.Model.FindEntityType(typeof(IntegritySeal))!.GetTableName()!).Distinct();
@@ -65,6 +91,12 @@ public static class HistoryProtection
 
     public static async Task SuspendGuards(BusinessDb db, CancellationToken ct = default)
     {
+        if (IsPostgres(db))
+        {
+            if (!await db.Database.CanConnectAsync(ct) || !(await db.Database.GetAppliedMigrationsAsync(ct)).Any()) return;
+            foreach (var (table, name) in await PostgresGuards(db, ct)) { var drop = "DROP TRIGGER IF EXISTS \"" + Identifier(name) + "\" ON \"" + PostgresSchema + "\".\"" + Identifier(table) + "\""; await db.Database.ExecuteSqlRawAsync(drop, ct); }
+            return;
+        }
         if (IsSqlServer(db))
         {
             if (!await db.Database.CanConnectAsync(ct) || !(await db.Database.GetAppliedMigrationsAsync(ct)).Any()) return;
@@ -79,6 +111,18 @@ public static class HistoryProtection
     /// <summary>Database-level guards: posted rows cannot be updated or deleted even by tools that bypass the application.</summary>
     public static async Task ApplyGuards(BusinessDb db, CancellationToken ct = default)
     {
+        if (IsPostgres(db))
+        {
+            // One trigger per table, calling one function that refuses any UPDATE or DELETE of posted rows, whoever runs it.
+            var function = "CREATE OR REPLACE FUNCTION \"" + PostgresSchema + "\".sb_protect() RETURNS trigger LANGUAGE plpgsql SET search_path = '' AS $$ BEGIN RAISE EXCEPTION '" + Immutable + "' USING ERRCODE = 'P0001'; END $$";
+            await db.Database.ExecuteSqlRawAsync(function, ct);
+            foreach (var table in GuardedTables(db))
+            {
+                var create = "CREATE OR REPLACE TRIGGER \"" + Identifier(TriggerPrefix + table) + "\" BEFORE UPDATE OR DELETE ON \"" + PostgresSchema + "\".\"" + Identifier(table) + "\" FOR EACH ROW EXECUTE FUNCTION \"" + PostgresSchema + "\".sb_protect()";
+                await db.Database.ExecuteSqlRawAsync(create, ct);
+            }
+            return;
+        }
         if (IsSqlServer(db))
         {
             // One trigger per table rejects any UPDATE or DELETE that touches posted rows, whoever runs it.
@@ -103,10 +147,13 @@ public static class HistoryProtection
 
     private static Task<List<string>> GuardNames(BusinessDb db, CancellationToken ct) =>
         db.Database.SqlQueryRaw<string>("SELECT name AS Value FROM sys.triggers WHERE name LIKE 'sb[_]protect[_]%'").ToListAsync(ct);
-    public static async Task<int> GuardCount(BusinessDb db, CancellationToken ct = default) => IsSqlServer(db) ? (await GuardNames(db, ct)).Count : !IsSqlite(db) ? 0 :
+    private sealed record GuardRow(string Table, string Name);
+    private static async Task<List<(string Table, string Name)>> PostgresGuards(BusinessDb db, CancellationToken ct) =>
+        (await db.Database.SqlQueryRaw<GuardRow>("SELECT c.relname AS \"Table\", t.tgname AS \"Name\" FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE NOT t.tgisinternal AND n.nspname = 'sierra' AND t.tgname LIKE 'sb\\_protect\\_%'").ToListAsync(ct)).Select(x => (x.Table, x.Name)).ToList();
+    public static async Task<int> GuardCount(BusinessDb db, CancellationToken ct = default) => IsPostgres(db) ? (await PostgresGuards(db, ct)).Count : IsSqlServer(db) ? (await GuardNames(db, ct)).Count : !IsSqlite(db) ? 0 :
         (await db.Database.SqlQueryRaw<string>("SELECT name AS Value FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'sb_protect_%'").ToListAsync(ct)).Count;
 
-    public static int ExpectedGuardCount(BusinessDb db) => GuardedTables(db).Count() * (IsSqlServer(db) ? 1 : 2);
+    public static int ExpectedGuardCount(BusinessDb db) => GuardedTables(db).Count() * (IsSqlServer(db) || IsPostgres(db) ? 1 : 2);
 
     /// <summary>Called inside SaveChanges after the business rows are written, in the same transaction.</summary>
     internal static void AddCommitSeal(BusinessDb db, IReadOnlyList<EntityEntry> written)
@@ -125,7 +172,8 @@ public static class HistoryProtection
 
     private static IntegritySeal NewSeal(IntegritySeal? previous, string kind, List<string> rows)
     {
-        var seal = new IntegritySeal { Sequence = (previous?.Sequence ?? 0) + 1, Kind = kind, Time = DateTimeOffset.UtcNow, PreviousHash = previous?.Hash ?? "", Rows = JsonSerializer.Serialize(rows) };
+        var now = DateTimeOffset.UtcNow; // to the microsecond, the finest time every supported database keeps
+        var seal = new IntegritySeal { Sequence = (previous?.Sequence ?? 0) + 1, Kind = kind, Time = new DateTimeOffset(now.Ticks - now.Ticks % 10, TimeSpan.Zero), PreviousHash = previous?.Hash ?? "", Rows = JsonSerializer.Serialize(rows) };
         seal.Hash = SealHash(seal);
         return seal;
     }
@@ -170,7 +218,7 @@ public static class HistoryProtection
             else if (sealedRow != row) Problem($"{Describe(key)} was changed after it was posted.");
         }
         foreach (var key in expected.Keys.Where(x => !present.Contains(x))) Problem($"{Describe(key)} was deleted.");
-        var guards = await GuardCount(db, ct); var guarded = !IsSqlite(db) && !IsSqlServer(db) || guards >= ExpectedGuardCount(db);
+        var guards = await GuardCount(db, ct); var guarded = !IsSqlite(db) && !IsSqlServer(db) && !IsPostgres(db) || guards >= ExpectedGuardCount(db);
         if (!guarded) Problem($"Database guards are missing ({guards} of {ExpectedGuardCount(db)} present). Someone may have removed them; restart the application to reinstate them.");
         return new(problems.Count == 0, seals.Count, current.Count, previousHash.Length >= 16 ? previousHash[..16] : previousHash, guarded, problems, notes, DateTimeOffset.UtcNow);
     }

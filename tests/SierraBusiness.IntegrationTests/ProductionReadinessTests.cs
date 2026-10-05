@@ -17,6 +17,7 @@ using Xunit.Abstractions;
 namespace SierraBusiness.IntegrationTests;
 
 /// <summary>0.26.0: update checks, an upgrade-and-rollback rehearsal on the desktop store, and performance with a realistic year of trading.</summary>
+[Collection("Production readiness performance")]
 public sealed class ProductionReadinessTests(ITestOutputHelper output)
 {
     private static readonly DateOnly Today = DateOnly.FromDateTime(DateTime.UtcNow);

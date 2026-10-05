@@ -59,6 +59,21 @@ public sealed class WorkspaceHeaderTests : IAsyncLifetime
         Assert.DoesNotContain("Development build", screen.Markup);
     }
 
+    [Fact] public void CatalogueInputsReachSavedProduct()
+    {
+        var screen = Render(session.Actor);
+        screen.WaitForAssertion(() => Assert.DoesNotContain("Loading your branch workspace", screen.Markup));
+        screen.FindAll("button.nav").Single(b => b.QuerySelector(".area-name")!.TextContent == "Inventory").Click();
+        Open(screen, "Catalogue");
+        var form = screen.Find("form");
+        form.QuerySelector("label:nth-child(1) input")!.Change("CAB-FIL4");
+        form.QuerySelector("label:nth-child(2) input")!.Change("Test cabinet");
+        form.QuerySelector("label:nth-child(5) input")!.Change("100");
+        form.Submit();
+        screen.WaitForAssertion(() => Assert.Contains("CAB-FIL4", screen.Find("table").TextContent));
+        Assert.Contains("Test cabinet", screen.Find("table").TextContent);
+    }
+
     [Fact] public void UsersWhoCannotSellDoNotSeeTheShortcut()
     {
         var viewer = new Actor("viewer-7f3a", "FREETOWN", new HashSet<string> { "business.read" });

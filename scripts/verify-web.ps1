@@ -4,11 +4,13 @@ $root = Split-Path -Parent $PSScriptRoot
 $directory = Join-Path $root ('.tools\web-check-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $directory | Out-Null
 $dll = Join-Path $root 'src\SierraBusiness.Web\bin\Release\net10.0\SierraBusiness.Web.dll'
-$names = @('ConnectionStrings__Business', 'Bootstrap__Email', 'Bootstrap__Password', 'ASPNETCORE_URLS')
+$names = @('ConnectionStrings__Business', 'Database__Provider', 'Sync__Role', 'Bootstrap__Email', 'Bootstrap__Password', 'ASPNETCORE_URLS')
 $original = @{}
 foreach ($name in $names) { $original[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 $server = $null
 try {
+    $env:Database__Provider = 'Sqlite'
+    $env:Sync__Role = 'Off'
     $env:ConnectionStrings__Business = 'Data Source=' + (Join-Path $directory 'check.db')
     $env:Bootstrap__Email = 'verify@example.test'
     $env:Bootstrap__Password = 'Verify-' + [Guid]::NewGuid().ToString('N') + '!9a'
@@ -27,7 +29,7 @@ try {
     $login = Invoke-WebRequest "$base/account/login" -SessionVariable session -UseBasicParsing
     $token = [regex]::Match($login.Content, 'name="__RequestVerificationToken" value="([^"]+)"').Groups[1].Value
     $result = Invoke-WebRequest "$base/account/login" -WebSession $session -Method Post -Body @{ email = $env:Bootstrap__Email; password = $env:Bootstrap__Password; __RequestVerificationToken = $token } -UseBasicParsing
-    if (!$result.Content.Contains('SIERRA BUSINESS WORKSPACE')) { throw 'Authenticated workspace did not render.' }
+    if (!$result.Content.Contains('id="workspace-content"')) { throw 'Authenticated workspace did not render.' }
     $token = Invoke-RestMethod "$base/api/v1/antiforgery" -WebSession $session
     $headers = @{ RequestVerificationToken = $token }
     $product = @{ operationId = [guid]::NewGuid(); sku = 'CHECK'; name = 'Check product'; category = 'General'; unit = 'piece'; price = 100; tracking = 0; minimumPrice = 50 } | ConvertTo-Json

@@ -220,3 +220,19 @@ What remains needs the owner: see the [acceptance checklists](acceptance-checkli
   - Setup and uninstall find a running copy and offer to end it.
 
 See [notes](fixes-0.26.1.md).
+
+## Supabase (PostgreSQL) head office — 0.27.0
+
+- **PostgreSQL provider.** Head office can run on Supabase. Tables are in the `sierra` schema, hidden from Supabase's public API.
+- **Protection.** History guards on PostgreSQL, and time rounding so seals verify and sync comparisons stay accurate.
+- **Trial.** A trial launcher script, and a free trial project on Supabase.
+
+283 tests pass against SQLite, SQL Server and PostgreSQL. See [notes](supabase-head-office-0.27.0.md).
+
+### 0.27.0 review fixes — 2026-10-05
+
+Fixed special-character password handling in the Windows Supabase launcher and offset timestamp normalization in PostgreSQL integrity/sync handling. Eight new compatibility tests and 13 existing sync/integrity tests pass. Four live PostgreSQL tests were skipped because `SIERRA_POSTGRES` is not configured; the preceding 283-test result is the earlier implementation's reported verification, not a new full-suite run. See the release notes for exact coverage and remaining live verification.
+
+### Functional UI verification — 2026-10-05
+
+Release integration suite: 287 passed, zero failed, six live-provider tests skipped. Authenticated HTTP workflows passed. Interactive checks covered all 46 navigation screens and representative catalogue, sales, receipt, held-sale, payment, customer, stock and accounting actions in an isolated SQLite company. Updated the HTTP smoke-test workspace assertion and made its provider/sync settings explicitly isolated. See [functional verification](ui-functional-verification-2026-10-05.md) for observed results and remaining interactive acceptance limits.

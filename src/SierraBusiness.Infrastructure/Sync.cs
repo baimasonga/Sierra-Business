@@ -176,6 +176,7 @@ public static class SyncEngine
             }
             object incoming;
             try { incoming = JsonSerializer.Deserialize(c.Data, type.ClrType, Json)!; } catch (Exception) { Conflict(c, "Unreadable record data."); continue; }
+            if (HistoryProtection.IsPostgres(db)) HistoryProtection.Normalize(type, incoming); // compare as PostgreSQL will store it
             if (existing is null) { db.Add(incoming); applied++; continue; }
             if (HistoryProtection.RowFingerprint(type, existing) == HistoryProtection.RowFingerprint(type, incoming)) { skipped++; continue; }
             if (Protected(type)) { Conflict(c, "Posted record differs from the copy here; kept this copy."); continue; }

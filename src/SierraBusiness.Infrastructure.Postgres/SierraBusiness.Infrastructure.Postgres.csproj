@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 0.27.0: PostgreSQL schema (Supabase or any PostgreSQL 15+) for head-office servers. Branch computers keep using SQLite. -->
+  <ItemGroup>
+    <ProjectReference Include="../SierraBusiness.Infrastructure/SierraBusiness.Infrastructure.csproj" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="System.Security.Cryptography.Xml"><PrivateAssets>all</PrivateAssets></PackageReference>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design"><PrivateAssets>all</PrivateAssets></PackageReference>
+  </ItemGroup>
+</Project>

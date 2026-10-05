@@ -176,6 +176,9 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
+        // PostgreSQL (Supabase): keep every table out of the "public" schema, which Supabase exposes through its automatic web API.
+        if (HistoryProtection.IsPostgres(this)) builder.HasDefaultSchema(HistoryProtection.PostgresSchema);
+        string NotNull(string column) => HistoryProtection.IsPostgres(this) ? $"\"{column}\" IS NOT NULL" : $"[{column}] IS NOT NULL";
         builder.Entity<InventoryRevision>().HasIndex(x => new { x.Branch, x.Kind, x.Key, x.Version }).IsUnique();
         builder.Entity<ProductBarcode>().HasIndex(x => x.Code).IsUnique();
         builder.Entity<ProductBarcode>().HasOne<Product>().WithMany().HasForeignKey(x => x.ProductId).OnDelete(DeleteBehavior.Restrict);
@@ -275,7 +278,7 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
         builder.Entity<Movement>().Property(x => x.Location).HasDefaultValue("MAIN");
         builder.Entity<Movement>().HasOne<StockLocation>().WithMany().HasForeignKey(x => x.Location).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<TradeOrder>().HasIndex(x => x.Number).IsUnique();
-        builder.Entity<TradeOrder>().HasIndex(x => x.QuotationId).IsUnique().HasFilter("[QuotationId] IS NOT NULL");
+        builder.Entity<TradeOrder>().HasIndex(x => x.QuotationId).IsUnique().HasFilter(NotNull("QuotationId"));
         builder.Entity<TradeOrder>().HasOne<TradeOrder>().WithMany().HasForeignKey(x => x.QuotationId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<TradeOrderLine>().HasOne<TradeOrder>().WithMany().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<TradeOrderLine>().HasOne<Product>().WithMany().HasForeignKey(x => x.ProductId).OnDelete(DeleteBehavior.Restrict);
@@ -385,7 +388,7 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
         builder.Entity<CaptureRevision>().HasOne<CapturedDocument>().WithMany().HasForeignKey(x => x.CaptureId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<Product>().HasIndex(x => x.Sku).IsUnique();
         builder.Entity<BusinessDocument>().HasIndex(x => x.Number).IsUnique();
-        builder.Entity<BusinessDocument>().HasIndex(x => x.Reverses).IsUnique().HasFilter("[Reverses] IS NOT NULL");
+        builder.Entity<BusinessDocument>().HasIndex(x => x.Reverses).IsUnique().HasFilter(NotNull("Reverses"));
         builder.Entity<BusinessDocument>().HasOne<BusinessDocument>().WithMany().HasForeignKey(x => x.Reverses).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<Movement>().HasOne<Product>().WithMany().HasForeignKey(x => x.ProductId).OnDelete(DeleteBehavior.Restrict);
         builder.Entity<Movement>().HasOne<BusinessDocument>().WithMany().HasForeignKey(x => x.DocumentId).OnDelete(DeleteBehavior.Restrict);
@@ -414,6 +417,7 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
         GuardHistory(); if (SyncApplyingOrigin is null) BankingRules.CaptureTillEntries(this).GetAwaiter().GetResult();
+        HistoryProtection.NormalizeTimes(this);
         var history = NewHistory(); if (history.Count > 0) HistoryProtection.AddCommitSeal(this, history);
         var saved = base.SaveChanges(acceptAllChangesOnSuccess);
         if (history.Count > 0) ChangeNotifier.Raise();
@@ -422,6 +426,7 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
     public override async Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
     {
         GuardHistory(); if (SyncApplyingOrigin is null) await BankingRules.CaptureTillEntries(this, cancellationToken).ConfigureAwait(false);
+        HistoryProtection.NormalizeTimes(this);
         var history = NewHistory(); if (history.Count > 0) await HistoryProtection.AddCommitSealAsync(this, history, cancellationToken).ConfigureAwait(false);
         var saved = await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken).ConfigureAwait(false);
         if (history.Count > 0) ChangeNotifier.Raise(); // listeners debounce, so a transaction committing just after this is picked up
