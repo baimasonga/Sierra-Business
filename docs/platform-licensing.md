@@ -58,3 +58,11 @@ dotnet build src/SierraBusiness.Maui/SierraBusiness.Maui.csproj --configuration 
 New tests cover valid/tampered/wrong-binding signed leases, a Node.js-signed compatibility vector, hard expiry, restart and clock rollback, Ed25519 challenge proof, activation credentials remaining out of storage, refresh/revocation/deactivation, cached actor enforcement, missing release configuration and safe UI error handling. The native DPAPI test runs on Windows and is explicitly skipped on Linux. The Windows CI workflow builds the actual MAUI host.
 
 A disposable local real-platform test also verified .NET activation, device proof, lease verification, refresh and deactivation. This was not a live Railway/customer-account test. Production still needs your approved product/plans, public signing keys and packaged configuration. Physical Windows installation acceptance, TPM identity, a .NET signed update installer and live billing are separate work; they are not implemented by this integration.
+
+## Updated installer 0.33.0
+
+The Windows packaging workflow bootstraps the initial public verification bundle from the publisher's existing HTTPS Railway origin, with redirects disabled, then pins those keys in the produced `licensing.json`. This is an initial publisher build operation; the installed application never automatically trusts replacement keys from the network. The bundle must contain only approved license-purpose Ed25519 public keys. Later rotations still require a trusted publisher configuration/application update.
+
+The workflow builds version 0.33.0, retains the full Release tests and offline OCR smoke check, verifies the immutable source and packaged licensing configuration, and uploads `RokelaBusinessAdmin-Setup-x64.exe`, its SHA-256 checksum and verification report. Product code `sierra-business` and its plans/licenses must exist in the platform before a customer can activate. Production API access is read-only during packaging; it does not create products, subscriptions or licenses.
+
+The package is unsigned unless publisher signing configuration is supplied. Building the installer does not install it on your computer or update any existing business records.

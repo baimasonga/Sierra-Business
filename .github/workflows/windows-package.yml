@@ -5,7 +5,7 @@ on:
       version:
         description: Installer version (major.minor.patch)
         required: true
-        default: '0.10.0'
+        default: '0.33.0'
       webview2_url:
         description: Microsoft Evergreen Standalone Installer x64 HTTPS download URL
         required: true
@@ -39,18 +39,66 @@ jobs:
           New-Item -ItemType Directory -Force .tools | Out-Null
           Invoke-WebRequest -Uri $uri -OutFile .tools/WebView2-x64.exe
           # The packaging script requires a valid Microsoft signature and rejects the online bootstrapper.
+      - name: Configure public licensing keys
+        shell: pwsh
+        run: |
+          $origin = 'https://trustplatform-api-production.up.railway.app/'
+          $bundle = Invoke-RestMethod -Uri ($origin + 'v1/keys/trust-bundle') -MaximumRedirection 0 -TimeoutSec 30
+          if ($bundle.schema -ne 1 -or !$bundle.keys -or $bundle.keys.Count -gt 32) { throw 'Invalid public license trust bundle.' }
+          $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+          $keys = @($bundle.keys | ForEach-Object {
+            if ($_.state -notin @('active', 'deprecated') -or $_.purpose -ne 'license' -or $_.jwk.kty -ne 'OKP' -or $_.jwk.crv -ne 'Ed25519' -or $_.jwk.d) { throw 'Unexpected public license key.' }
+            if (!$_.kid -or !$seen.Add([string]$_.kid) -or $_.jwk.x -notmatch '^[A-Za-z0-9_-]{43}$') { throw 'Invalid or duplicate public license key.' }
+            $bytes = [Convert]::FromBase64String($_.jwk.x.Replace('-', '+').Replace('_', '/') + '=')
+            $canonical = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+            if ($bytes.Length -ne 32 -or $canonical -cne $_.jwk.x) { throw 'Invalid public key encoding.' }
+            @{ Kid = $_.kid; X = $_.jwk.x }
+          })
+          $configuration = @{ ApiOrigin = $origin; ProductCode = 'sierra-business'; Keys = $keys }
+          $path = Join-Path $pwd 'src/SierraBusiness.Maui/licensing.json'
+          if (Test-Path -LiteralPath $path) { throw 'Refusing to overwrite an existing publisher licensing configuration.' }
+          [IO.File]::WriteAllText($path, ($configuration | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
+          Write-Output "Configured $($keys.Count) public license verification keys from the publisher API."
+      - name: Capture immutable build source
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          $snapshot = Join-Path $pwd "artifacts/windows/source-$env:PACKAGE_VERSION"
+          New-Item -ItemType Directory -Path $snapshot | Out-Null
+          $files = @(git ls-files) + @('src/SierraBusiness.Maui/licensing.json')
+          $manifest = @($files | ForEach-Object {
+            $destination = Join-Path $snapshot $_
+            New-Item -ItemType Directory -Force (Split-Path -Parent $destination) | Out-Null
+            Copy-Item -LiteralPath $_ -Destination $destination
+            @{ path = $_; sha256 = (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash }
+          })
+          $manifest | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $snapshot 'source-manifest.json') -Encoding utf8
       - name: Test, publish and compile installer
         shell: pwsh
         env:
           PACKAGE_VERSION: ${{ inputs.version }}
         run: |
           ./scripts/package-windows.ps1 -Version $env:PACKAGE_VERSION -WebView2Installer .tools/WebView2-x64.exe
+      - name: Verify release artifacts
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          $snapshot = "artifacts/windows/source-$env:PACKAGE_VERSION/artifacts/windows"
+          New-Item -ItemType Directory -Force $snapshot | Out-Null
+          $staging = @(Get-ChildItem artifacts/windows -Directory -Filter 'staging-*')
+          if ($staging.Count -ne 1) { throw 'Expected one isolated publish folder.' }
+          Copy-Item -LiteralPath $staging[0].FullName -Destination $snapshot -Recurse
+          ./scripts/verify-windows-release.ps1 -Version $env:PACKAGE_VERSION
       - uses: actions/upload-artifact@v4
         with:
           name: SierraBusiness-Windows-${{ inputs.version }}
           path: |
-            artifacts/windows/${{ inputs.version }}/SierraBusiness-Setup-x64.exe
+            artifacts/windows/${{ inputs.version }}/RokelaBusinessAdmin-Setup-x64.exe
             artifacts/windows/${{ inputs.version }}/SHA256SUMS.txt
+            artifacts/windows/${{ inputs.version }}/release-verification.json
+            src/SierraBusiness.Maui/licensing.json
           if-no-files-found: error
           retention-days: 14
 
