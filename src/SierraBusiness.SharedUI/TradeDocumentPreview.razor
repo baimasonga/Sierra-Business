@@ -8,20 +8,23 @@
         <DocumentLetterhead Setup="setup" CompanyName="@CompanyName" Branch="@Branch" Number="@Document.Number" TaxInvoice="Document.Kind == DocumentKind.Sale && !receipt"
                             Title="@(Document.Kind == DocumentKind.Sale ? (receipt ? "Payment receipt" : "Sales invoice") : "Goods receipt")" />
         @if (Reversed) { <p><strong>REVERSED — retained for audit</strong></p> }
+        @if (reliefReference.Length > 0) { <p>Reviewed GST relief certificate: @reliefReference</p> }
         <p>Date: @Document.BusinessDate.ToString("dd MMM yyyy") · @Document.Party@(customerTin.Length > 0 ? $" · {(Document.Kind == DocumentKind.Sale ? "Customer" : "Supplier")} TIN {customerTin}" : "")<br />Settlement: @Document.Settlement · Warehouse: @request.Location</p>
-        <table><thead><tr><th>Item</th><th>Quantity</th><th>Unit price</th><th class="numeric">Amount / @Company.CurrencySymbol</th></tr></thead><tbody>
+        @if (foreignCurrency.Length > 0) { <p>Invoice currency @foreignCurrency · stored rate NLe @exchangeRate.ToString("0.0000") per @foreignCurrency. Source net @sourceNet.ToString("N2") · Source tax @sourceTax.ToString("N2") · Source total @((sourceNet + sourceTax).ToString("N2")). Local accounting and tax amounts are shown below.</p> }
+        <table><thead><tr><th>Item</th><th>Quantity</th><th>Unit price@if (foreignCurrency.Length > 0) { <text> / @foreignCurrency</text> }</th><th class="numeric">Amount / @Company.CurrencySymbol</th></tr></thead><tbody>
         @foreach (var line in request.Lines)
         {
             var product = Products.SingleOrDefault(x => x.Id == line.ProductId);
             var category = categories.GetValueOrDefault(line.ProductId, TaxCategory.Standard);
-            <tr><td>@(product?.Name ?? line.ProductId.ToString())@if (category != TaxCategory.Standard) { <em class="tax-mark"> (@(category == TaxCategory.ZeroRated ? "zero-rated" : "exempt"))</em> }<br /><small>@product?.Sku @line.Serial @line.Batch @line.Expiry</small></td><td>@line.Quantity × @line.Conversion @product?.Unit</td><td>@Fmt(line.UnitPrice)</td><td class="numeric">@Fmt(AccountingEngine.Money(line.Quantity * line.UnitPrice))</td></tr>
+            <tr><td>@(product?.Name ?? line.ProductId.ToString())@if (category != TaxCategory.Standard) { <em class="tax-mark"> (@(category == TaxCategory.ZeroRated ? "zero-rated" : category == TaxCategory.Relieved ? "relieved" : "exempt"))</em> }<br /><small>@product?.Sku @line.Serial @line.Batch @line.Expiry</small></td><td>@line.Quantity × @line.Conversion @product?.Unit</td><td>@(foreignCurrency.Length > 0 ? line.UnitPrice.ToString("0.00##") : Fmt(line.UnitPrice))</td><td class="numeric">@Fmt(AccountingEngine.Money(AccountingEngine.Money(line.Quantity * line.UnitPrice) * exchangeRate))</td></tr>
         }
         </tbody><tfoot>
-            @if (Document.Kind == DocumentKind.Sale && (zeroRated != 0 || exempt != 0))
+            @if (Document.Kind == DocumentKind.Sale && (zeroRated != 0 || exempt != 0 || relieved != 0))
             {
                 <tr><th colspan="3">Standard-rated</th><td class="numeric">@Fmt(taxable)</td></tr>
                 @if (zeroRated != 0) { <tr><th colspan="3">Zero-rated</th><td class="numeric">@Fmt(zeroRated)</td></tr> }
                 @if (exempt != 0) { <tr><th colspan="3">Exempt</th><td class="numeric">@Fmt(exempt)</td></tr> }
+                @if (relieved != 0) { <tr><th colspan="3">Relieved</th><td class="numeric">@Fmt(relieved)</td></tr> }
             }
             <tr><th colspan="3">Net</th><td class="numeric">@Fmt(net)</td></tr>
             <tr><th colspan="3">@Company.TaxName (@rate.ToString("P2"))</th><td class="numeric">@Fmt(tax)</td></tr>
@@ -40,7 +43,8 @@
     [Parameter] public bool Reversed { get; set; }
     private bool receipt;
     private TradeCommand? request;
-    private decimal net, tax, rate, taxable, zeroRated, exempt;
+    private decimal net,tax,rate,taxable,zeroRated,exempt,relieved; private string reliefReference = "";
+    private string foreignCurrency = ""; private decimal exchangeRate = 1, sourceNet, sourceTax;
     private Dictionary<Guid, TaxCategory> categories = [];
     private PrintSetup setup = PrintSetups.Default;
     private FiscalDocumentView? fiscal;
@@ -51,7 +55,7 @@
     protected override async Task OnParametersSetAsync()
     {
         if (loadedFor != Document.Id) { receipt = false; loadedFor = Document.Id; }
-        request = null; categories = []; fiscal = null;
+        request = null; categories = []; fiscal = null; foreignCurrency = ""; exchangeRate = 1; sourceNet = sourceTax = 0;
         if (Document.Kind is not DocumentKind.Sale and not DocumentKind.Receipt) return;
         try {
             using var json = JsonDocument.Parse(Document.Detail); var root = json.RootElement;
@@ -59,9 +63,14 @@
             net = root.GetProperty("Net").GetDecimal();
             tax = root.GetProperty("Tax").GetDecimal();
             rate = root.GetProperty("TaxRate").GetDecimal();
+            if (root.TryGetProperty("Currency", out var currency) && currency.ValueKind == JsonValueKind.String) foreignCurrency = currency.GetString() ?? "";
+            if (root.TryGetProperty("ExchangeRate", out var fxRate)) exchangeRate = fxRate.GetDecimal();
+            if (root.TryGetProperty("SourceTotal", out var fxNet)) sourceNet = fxNet.GetDecimal();
+            if (root.TryGetProperty("SourceTax", out var fxTax)) sourceTax = fxTax.GetDecimal();
             taxable = root.TryGetProperty("Taxable", out var t) ? t.GetDecimal() : net;
             zeroRated = root.TryGetProperty("ZeroRated", out var z) ? z.GetDecimal() : 0;
             exempt = root.TryGetProperty("Exempt", out var e) ? e.GetDecimal() : 0;
+            relieved = root.TryGetProperty("Relieved",out var r) ? r.GetDecimal() : 0; reliefReference = root.TryGetProperty("ReliefAuthorityReference",out var rr) && rr.ValueKind == JsonValueKind.String ? rr.GetString() ?? "" : "";
             if (root.TryGetProperty("Categories", out var c)) categories = c.Deserialize<Dictionary<Guid, TaxCategory>>() ?? [];
         } catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException) { request = null; return; }
         if (Document.Kind == DocumentKind.Sale) fiscal = await PrintSetups.Fiscal(Services, Document.Id);

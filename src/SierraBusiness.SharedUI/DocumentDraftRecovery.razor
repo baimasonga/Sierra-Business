@@ -1,0 +1,52 @@
+@inject IServiceProvider Services
+@inject Microsoft.JSInterop.IJSRuntime JS
+@inject Microsoft.Extensions.Logging.ILogger<DocumentDraftRecovery> Logger
+@if (waiting is not null || warning.Length > 0)
+{
+    <div class="notice warning" role="alert">
+        @(warning.Length > 0 ? warning : "An unfinished document was recovered from the last session.")
+        @if (waiting is not null) { <button type="button" class="secondary" disabled="@Busy" @onclick="Restore">Restore draft</button> }
+        <button type="button" class="secondary" disabled="@Busy" @onclick="Discard">Discard recovery copy</button>
+    </div>
+}
+@code {
+    [Parameter, EditorRequired] public string Scope { get; set; } = "";
+    [Parameter] public DocumentDraft? Current { get; set; }
+    [Parameter] public bool HasDraft { get; set; }
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public bool Enabled { get; set; } = true;
+    [Parameter] public EventCallback<DocumentDraft> OnRestore { get; set; }
+    private DocumentDraft? waiting;
+    private IDocumentDraftRecovery? service;
+    private string lastJson = "", warning = "";
+    private bool initialized, failed;
+    public bool HasRecovery => waiting is not null;
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!Enabled || Busy) return;
+        service ??= Services.GetService(typeof(IDocumentDraftRecovery)) as IDocumentDraftRecovery;
+        if (service is null || failed) return;
+        try
+        {
+            if (!initialized) { initialized = true; waiting = await service.Read(Scope); if (waiting is not null) { await InvokeAsync(StateHasChanged); return; } }
+            if (waiting is not null) return;
+            if (HasDraft && Current is { } draft) { var key = draft.OperationId + draft.Json; if (key == lastJson) return; await service.Save(draft); lastJson = key; }
+            else if (lastJson.Length > 0) { await service.Clear(Scope); lastJson = ""; }
+        }
+        catch (Exception e)
+        {
+            Microsoft.Extensions.Logging.LoggerExtensions.LogError(Logger, e, "Document recovery failed for {Scope}.", Scope);
+            failed = true; warning = "Automatic draft recovery is unavailable. Keep the app open and save the document before closing.";
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    private async Task Restore()
+    {
+        if (waiting is null) return;
+        if (HasDraft && !await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", "Replace the current unfinished document with the recovery copy?")) return;
+        try { await OnRestore.InvokeAsync(waiting); waiting = null; warning = ""; failed = false; }
+        catch (Exception e) { warning = e is BusinessException or UnauthorizedAccessException ? e.Message : "This draft could not be restored. Keep the recovery copy or discard it."; }
+    }
+    private async Task Discard() { try { await Clear(); failed = false; } catch (Exception e) { warning = e is BusinessException ? e.Message : "The recovery copy could not be cleared."; } }
+    public async Task Clear() { if (service is not null) await service.Clear(Scope); waiting = null; lastJson = warning = ""; }
+}

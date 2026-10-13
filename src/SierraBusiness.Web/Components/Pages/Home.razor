@@ -1,7 +1,7 @@
 @page "/"
 @attribute [Authorize]
 @inject AuthenticationStateProvider Authentication
-<PageTitle>Sierra Business · Workspace</PageTitle>
+<PageTitle>Rokela Business Admin · Workspace</PageTitle>
 @if (actor is not null) { <Workspace Actor="actor" UserName="@userName" /> }
 @code {
     private Actor? actor; private string userName = "";

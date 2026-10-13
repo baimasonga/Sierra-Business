@@ -9,10 +9,13 @@ public static class SyncEndpoints
     public static void MapSyncEndpoints(this WebApplication app)
     {
         var group = app.MapGroup("/api/sync").DisableAntiforgery().RequireRateLimiting("sync");
+        group.MapGet("/compatibility", (HttpContext context, SyncServer server) =>
+            server.Authorized(Branch(context), Key(context)) ? Results.Ok(SyncContract.Current) : Results.Unauthorized());
         group.MapPost("/push", async (HttpContext context, SyncServer server, SyncPushRequest body, CancellationToken ct) =>
         {
             var branch = Branch(context);
             if (!server.Authorized(branch, Key(context)) || !string.Equals(body.Branch, branch, StringComparison.OrdinalIgnoreCase)) return Results.Unauthorized();
+            if (!Compatible(context)) return Results.Problem(statusCode: 426, title: "Sync upgrade required", detail: SyncContract.UpgradeMessage);
             if (body.Changes is null || body.Changes.Count > 20_000) return Results.BadRequest();
             return Results.Ok(await server.Push(body with { Branch = branch! }, ct));
         });
@@ -20,9 +23,14 @@ public static class SyncEndpoints
         {
             var branch = Branch(context);
             if (!server.Authorized(branch, Key(context))) return Results.Unauthorized();
+            if (!Compatible(context)) return Results.Problem(statusCode: 426, title: "Sync upgrade required", detail: SyncContract.UpgradeMessage);
             return Results.Ok(await server.Pull(branch!, Math.Max(0, after), max ?? 500, ct));
         });
     }
+    private static bool Compatible(HttpContext context) =>
+        int.TryParse(context.Request.Headers[SyncContract.ProtocolHeader], out var protocol) &&
+        int.TryParse(context.Request.Headers[SyncContract.SchemaHeader], out var schema) &&
+        SyncContract.Supports(new(protocol, schema));
     private static string? Branch(HttpContext context) => context.Request.Headers["X-Sierra-Branch"].FirstOrDefault();
     private static string? Key(HttpContext context)
     {

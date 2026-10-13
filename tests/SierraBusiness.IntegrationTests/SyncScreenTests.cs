@@ -31,7 +31,7 @@ public sealed class SyncScreenTests : IAsyncLifetime
     }
     public Task DisposeAsync() { context.Dispose(); Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); File.Delete(central); File.Delete(branch); if (Directory.Exists(folder)) Directory.Delete(folder, true); return Task.CompletedTask; }
 
-    [Fact] public void SyncNowAndSaveTheConnection()
+    [WindowsFact] public void SyncNowAndSaveTheConnection()
     {
         var page = context.Render<SyncWorkspace>(p => p.Add(x => x.Actor, owner));
         page.WaitForAssertion(() => Assert.Contains("Branch sync", page.Markup));
@@ -47,7 +47,7 @@ public sealed class SyncScreenTests : IAsyncLifetime
         page.FindAll("input").First(i => i.GetAttribute("placeholder")?.StartsWith("https://") == true).Change("https://hq.example");
         page.FindAll("input[type=password]").Single().Change("branch-key-0123456789");
         page.FindAll("button").First(b => b.TextContent == "Save connection").Click();
-        page.WaitForAssertion(() => Assert.Contains("Restart Sierra Business", page.Markup));
+        page.WaitForAssertion(() => Assert.Contains("Restart Rokela Business Admin", page.Markup));
         var saved = new DesktopSyncConfiguration(folder).Load();
         Assert.Equal((SyncRole.Branch, "https://hq.example", "branch-key-0123456789"), (saved.Role, saved.Server, saved.Key));
     }

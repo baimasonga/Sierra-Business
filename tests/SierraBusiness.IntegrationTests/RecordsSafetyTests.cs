@@ -42,6 +42,16 @@ public sealed class RecordsSafetyTests : IAsyncLifetime
         Assert.False(await Store.RunAutomaticIfDue());
         Assert.Empty(BackupFiles(Store.BackupDirectory));
     }
+    [Fact] public async Task ClosedAppWorkerSkipsOpenCompanyThenBacksUpWithoutMigration()
+    {
+        await Owner(); await Backups.SaveSettings(new(false, 24, 14, ""));
+        var factory = services.GetRequiredService<IDbContextFactory<BusinessDb>>();
+        await using (var worker = new DesktopStore(directory)) { Assert.False(await worker.RunClosedAppBackup(factory)); Assert.Contains("Desktop is open", worker.LastAutomaticStatus); }
+        await Store.DisposeAsync();
+        await using var closedWorker = new DesktopStore(directory); closedWorker.SaveSettings(new(true, 24, 14, ""));
+        Assert.True(await closedWorker.RunClosedAppBackup(factory)); Assert.Single(closedWorker.ListBackups()); Assert.False(await closedWorker.RunAutomaticIfDue());
+        var backup = closedWorker.ListBackups().Single(); Assert.True(File.Exists(backup.Path + ".manifest.json")); Assert.NotEmpty(backup.Manifest.Sha256);
+    }
 
     [Fact] public async Task AutomaticBackupRunsWhenDueWritesManifestAndTrimsOldAutomaticOnly()
     {

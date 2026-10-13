@@ -49,6 +49,7 @@ public sealed record AgeingReport(DateOnly AsAt, bool Receivable, IReadOnlyList<
 
 public interface IReportService
 {
+    Task<StockAgeingReport> StockAgeing(DateOnly asAt, int slowDays = 90);
     Task<DashboardView> Dashboard(DateOnly from, DateOnly to);
     Task<RegisterReport> Register(RegisterQuery query);
     Task<SalesAnalysis> Sales(DateOnly from, DateOnly to, SalesGrouping by);
@@ -57,6 +58,10 @@ public interface IReportService
     Task<AgeingReport> Ageing(DateOnly asAt, bool receivable);
     Task<IReadOnlyList<LedgerDefinition>> Accounts();
 }
+
+public sealed record StockAgeingRow(Guid ProductId, string Sku, string Name, string Unit, string Location, string? Serial, string? Batch, DateOnly? Expiry,
+    decimal Quantity, decimal Days30, decimal Days60, decimal Days90, decimal Over90, decimal UnknownAge, decimal Value, DateOnly? LastDispatch, bool SlowMoving);
+public sealed record StockAgeingReport(DateOnly AsAt, int SlowDays, IReadOnlyList<StockAgeingRow> Rows, decimal Value);
 
 /// <summary>Raised after any save that adds posted history, so open dashboards can refresh. Screens must keep a refresh/poll fallback.</summary>
 public interface IChangeFeed

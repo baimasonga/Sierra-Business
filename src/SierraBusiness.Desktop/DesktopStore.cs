@@ -10,7 +10,7 @@ namespace SierraBusiness.Desktop;
 public sealed record BackupManifest(string Kind, DateTimeOffset Created, string Sha256, long Size, string SealHead, string Migration);
 
 /// <summary>Per-Windows-user durable data, independent of the installation directory.</summary>
-public sealed class DesktopStore(string directory) : IDisposable
+public sealed class DesktopStore(string directory) : IDisposable, IAsyncDisposable
 {
     private const string SettingsFile = "backup-settings.json", ManifestSuffix = ".manifest.json", CopySubfolder = "SierraBusiness-Backups";
     private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
@@ -19,6 +19,8 @@ public sealed class DesktopStore(string directory) : IDisposable
     private FileStream? instanceLock;
     private IDbContextFactory<BusinessDb>? factory;
     private bool ready;
+    private Task? automaticTask, disposal;
+    private readonly object lifetime = new();
     public string DirectoryPath { get; } = Path.GetFullPath(directory);
     public string DatabasePath => Path.Combine(DirectoryPath, "sierra.db");
     public string BackupDirectory => Path.Combine(DirectoryPath, "Backups");
@@ -47,7 +49,7 @@ public sealed class DesktopStore(string directory) : IDisposable
             if (!Directory.Exists(folder)) throw new BusinessException("The copy folder does not exist or the drive is not connected.");
             var probe = Path.Combine(folder, $".sierra-write-test-{Guid.NewGuid():N}");
             try { File.WriteAllText(probe, "test"); File.Delete(probe); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new BusinessException("Sierra Business cannot write to the copy folder. Choose a folder you can save files in."); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new BusinessException("Rokela Business Admin cannot write to the copy folder. Choose a folder you can save files in."); }
         }
         File.WriteAllText(Path.Combine(DirectoryPath, SettingsFile), JsonSerializer.Serialize(settings with { CopyFolder = folder }, Indented));
     }
@@ -89,7 +91,11 @@ public sealed class DesktopStore(string directory) : IDisposable
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
         manifest = manifest with { Sha256 = await FileHash(path), Size = new FileInfo(path).Length };
         await File.WriteAllTextAsync(path + ManifestSuffix, JsonSerializer.Serialize(manifest, Indented));
-        return new(path, await CopyOffMachine(path, manifest));
+        var copyStatus = await CopyOffMachine(path, manifest);
+        try { copyStatus += " " + await GoogleDriveBackup.Upload(DirectoryPath,path,manifest,stopping.Token); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException or System.Net.Http.HttpRequestException or OperationCanceledException or BusinessException or PlatformNotSupportedException or System.Text.Json.JsonException)
+        { copyStatus += " Google Drive upload did not complete. The verified local backup is retained; check the connection and retry from Google backup settings."; }
+        return new(path,copyStatus);
     }
 
     /// <summary>Copies the verified backup to the configured second location. A failed copy never invalidates the local backup.</summary>
@@ -193,10 +199,10 @@ public sealed class DesktopStore(string directory) : IDisposable
         }
         await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
         try { await connection.OpenAsync(); if (await Scalar(connection, "PRAGMA integrity_check") != "ok") throw new BusinessException("This backup failed its integrity check. Choose another backup."); }
-        catch (SqliteException) { throw new BusinessException("This file is not a readable Sierra Business backup."); }
+        catch (SqliteException) { throw new BusinessException("This file is not a readable Rokela Business Admin backup."); }
         var migrations = await Column(connection, "SELECT MigrationId FROM __EFMigrationsHistory");
-        if (migrations.Count == 0) throw new BusinessException("This file is not a Sierra Business backup.");
-        if (migrations.Any(x => !knownMigrations.Contains(x))) throw new BusinessException("This backup was made by a newer version of Sierra Business. Install that version before restoring it.");
+        if (migrations.Count == 0) throw new BusinessException("This file is not a Rokela Business Admin backup.");
+        if (migrations.Any(x => !knownMigrations.Contains(x))) throw new BusinessException("This backup was made by a newer version of Rokela Business Admin. Install that version before restoring it.");
         if ((await Column(connection, "SELECT COUNT(*) FROM AspNetUsers")).Single() == "0") throw new BusinessException("This backup contains no user accounts, so nobody could sign in after restoring it.");
         var branches = (await Column(connection, "SELECT DISTINCT Branch FROM Documents")).Concat(await Column(connection, "SELECT DISTINCT ClaimValue FROM AspNetUserClaims WHERE ClaimType = 'branch'")).Distinct().ToArray();
         if (branches.Any(x => x != branch)) throw new BusinessException("This backup belongs to a different branch or company and cannot be restored here.");
@@ -234,7 +240,7 @@ public sealed class DesktopStore(string directory) : IDisposable
             if (ready) return;
             Directory.CreateDirectory(DirectoryPath);
             try { instanceLock ??= new FileStream(Path.Combine(DirectoryPath, "desktop.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
-            catch (IOException) { throw new InvalidOperationException("Sierra Business is already open for this Windows account. Close the other window and try again."); }
+            catch (IOException) { throw new InvalidOperationException("Rokela Business Admin is already open for this Windows account. Close the other window and try again."); }
             var existed = File.Exists(DatabasePath);
             await using var db = await contextFactory.CreateDbContextAsync();
             var pending = (await db.Database.GetPendingMigrationsAsync()).ToArray();
@@ -249,9 +255,28 @@ public sealed class DesktopStore(string directory) : IDisposable
                 throw new InvalidOperationException("The configured branch differs from this database's records or accounts. Restore the original branch setting; do not repurpose an existing database for a different branch.");
             factory = contextFactory;
             ready = true;
+            automaticTask = Task.Run(AutomaticLoop);
         }
         finally { gate.Release(); }
-        _ = AutomaticLoop();
+    }
+    /// <summary>One scheduled backup without starting the desktop or migrating company data.</summary>
+    public async Task<bool> RunClosedAppBackup(IDbContextFactory<BusinessDb> contextFactory)
+    {
+        if (!File.Exists(DatabasePath)) throw new BusinessException("An existing initialized company database is required.");
+        await gate.WaitAsync();
+        try
+        {
+            if (ready) throw new InvalidOperationException("Use a separate store for the closed-app worker.");
+            try { instanceLock = new FileStream(Path.Combine(DirectoryPath, "desktop.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+            catch (IOException) { LastAutomaticStatus = "Desktop is open; its own automatic backup worker remains responsible."; return false; }
+            await using var db = await contextFactory.CreateDbContextAsync();
+            if ((await db.Database.GetPendingMigrationsAsync()).Any()) throw new BusinessException("Open the desktop to complete its verified upgrade before scheduled backup.");
+            var integrity = await HistoryProtection.Verify(db);
+            if (!integrity.Ok) throw new BusinessException("Protected history failed verification. Open Backups & integrity for review.");
+            factory = contextFactory; ready = true;
+        }
+        finally { gate.Release(); }
+        return await RunAutomaticIfDue();
     }
 
     private static async Task<string> FileHash(string path) { await using var stream = File.OpenRead(path); return Convert.ToHexString(await SHA256.HashDataAsync(stream)); }
@@ -265,5 +290,18 @@ public sealed class DesktopStore(string directory) : IDisposable
         return values;
     }
 
-    public void Dispose() { stopping.Cancel(); instanceLock?.Dispose(); gate.Dispose(); stopping.Dispose(); }
+    public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
+    public ValueTask DisposeAsync()
+    {
+        lock (lifetime) return new(disposal ??= StopAsync());
+    }
+    private async Task StopAsync()
+    {
+        stopping.Cancel();
+        if (automaticTask is not null) await automaticTask.ConfigureAwait(false);
+        // Finish any backup already writing before releasing the company lock or disposing its gate.
+        await gate.WaitAsync().ConfigureAwait(false);
+        try { ready = false; instanceLock?.Dispose(); }
+        finally { gate.Release(); gate.Dispose(); stopping.Dispose(); }
+    }
 }

@@ -5,7 +5,7 @@
 @if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
 
 <div class="view-toggle report-tabs" role="tablist">
-    @foreach (var t in new[] { "Employees", "Run payroll", "Payslips & payments", "Loans", "PAYE & NASSIT" }) { <button type="button" role="tab" class="@(tab == t ? "active" : "")" aria-selected="@(tab == t)" @onclick="() => Open(t)">@t</button> }
+    @foreach (var t in new[] { "Employees", "Attendance & leave", "Run payroll", "Payslips & payments", "Loans", "PAYE & NASSIT" }) { <button type="button" role="tab" class="@(tab == t ? "active" : "")" aria-selected="@(tab == t)" @onclick="() => Open(t)">@t</button> }
 </div>
 @if (rules is null && tab != "PAYE & NASSIT") { <div class="notice" role="note">Statutory deductions are off. Set the PAYE and NASSIT rules on the <button class="text-button" @onclick='() => Open("PAYE & NASSIT")'>PAYE &amp; NASSIT</button> tab to calculate them automatically.</div> }
 
@@ -27,11 +27,17 @@
         <tbody>@foreach (var e in data.Employees) { <tr><td>@e.Code · @e.Name</td><td>@e.Department</td><td class="numeric">@e.BasicSalary.ToString("N2")</td><td class="numeric">@e.Allowances.ToString("N2")</td><td class="numeric">@e.Deductions.ToString("N2")</td><td>@(e.Tin.Length > 0 ? e.Tin : "—") / @(e.NassitNumber.Length > 0 ? e.NassitNumber : "—")@(e.Resident ? "" : " · non-resident")@(e.NassitExempt ? " · no NASSIT" : "")</td><td>@e.StartDate.ToString("dd MMM yyyy")@(e.EndDate is DateOnly x ? $" – {x:dd MMM yyyy}" : "")</td><td><button class="text-button" disabled="@busy" @onclick="() => Edit(e)">Edit</button></td></tr> }</tbody></table></div>
     </section>
 }
+else if (tab == "Attendance & leave")
+{
+    <WorkforceWorkspace @ref="workforceEditor" />
+}
 else if (tab == "Run payroll")
 {
     <section class="panel"><h2>Run payroll</h2>
         <div class="form-grid"><label>Payroll month<input type="month" @bind="MonthText" /></label><label>Posting date (month-end or later)<input type="date" @bind="postingDate" /></label></div>
         <p class="hint">Employees who joined or left during the month are paid for the days employed. Enter unpaid days, overtime, bonus or a one-off deduction for this month only. Editing an employee never changes payslips already posted.</p>
+        <label class="check"><input type="checkbox" @bind="useWorkforce" @bind:after="ClearPreview" />Use attendance leave and pay heads</label>
+        @if (useWorkforce) { <p class="hint">Recorded unpaid absence and approved unpaid leave supply unpaid days. Clear manual unpaid days first. Pay-head earnings and deductions are additional to entered bonus and deductions. Missing attendance does not deduct pay. Review the calculation note before posting.</p> }
         <div class="table-wrap"><table><thead><tr><th><input type="checkbox" aria-label="Select all employees" checked="@(data.Employees.Count > 0 && selected.Count == Eligible.Count())" @onchange="ChooseAll" /></th><th>Employee</th><th>Unpaid days</th><th>Overtime</th><th>Bonus</th><th>One-off deduction</th><th>Leave allowance</th><th>End of service</th><th>Skip loan</th><th>Note</th></tr></thead>
         <tbody>@foreach (var e in Eligible) { var adj = Adjustment(e.Id); <tr><td><input type="checkbox" aria-label="Select @e.Name for payroll" checked="@selected.Contains(e.Id)" @onchange="args => Choose(e.Id, args)" /></td><td>@e.Code · @e.Name</td>
             <td><input class="num" type="number" min="0" step="0.5" value="@adj.UnpaidDays" @onchange="v => Adjust(e.Id, a => a with { UnpaidDays = Num(v) })" /></td>
@@ -49,6 +55,7 @@ else if (tab == "Run payroll")
             <div class="table-wrap"><table class="report-table"><thead><tr><th>Employee</th><th class="numeric">Days</th><th class="numeric">Gross</th><th class="numeric">NASSIT 5%</th><th class="numeric">Chargeable</th><th class="numeric">PAYE</th><th class="numeric">Other</th><th class="numeric">Loan</th><th class="numeric">Net pay</th><th class="numeric">Employer NASSIT</th></tr></thead>
                 <tbody>@foreach (var l in p.Lines) { var c = l.Calculation; <tr><td>@l.Code · @l.Name</td><td class="numeric">@c.DaysPaid.ToString("0.#")/@c.DaysInMonth</td><td class="numeric">@c.Gross.ToString("N2")</td><td class="numeric">@c.NassitEmployee.ToString("N2")</td><td class="numeric">@c.Chargeable.ToString("N2")</td><td class="numeric">@c.Paye.ToString("N2")</td><td class="numeric">@c.OtherDeductions.ToString("N2")</td><td class="numeric">@c.LoanRepayment.ToString("N2")</td><td class="numeric"><strong>@c.Net.ToString("N2")</strong></td><td class="numeric">@c.NassitEmployer.ToString("N2")</td></tr> }</tbody>
                 <tfoot><tr><th>Total</th><td></td><td class="numeric">@p.Gross.ToString("N2")</td><td class="numeric">@p.NassitEmployee.ToString("N2")</td><td></td><td class="numeric">@p.Paye.ToString("N2")</td><td class="numeric">@p.OtherDeductions.ToString("N2")</td><td class="numeric">@p.Lines.Sum(x => x.Calculation.LoanRepayment).ToString("N2")</td><td class="numeric"><strong>@p.Net.ToString("N2")</strong></td><td class="numeric">@p.NassitEmployer.ToString("N2")</td></tr></tfoot></table></div>
+            @if (useWorkforce) { <details open><summary>Attendance leave and pay head calculation notes</summary>@foreach (var line in p.Lines) { <p><strong>@line.Code · @line.Name</strong> @line.Calculation.Note</p> }</details> }
             <button class="primary" disabled="@busy" @onclick="Post">Post payroll for @p.Month.ToString("MMMM yyyy")</button>
         }
     </section>
@@ -171,19 +178,21 @@ else if (tab == "PAYE & NASSIT")
     private Guid? employeeId; private int version; private decimal basic, allowances, deductions; private bool resident = true, nassitExempt;
     private DateOnly start = DateOnly.FromDateTime(DateTime.Now); private DateOnly? end, birthDate;
     private Guid employeeOperation = Guid.NewGuid();
-    public bool HasDraft => code.Length > 0 || name.Length > 0 || department.Length > 0 || selected.Count > 0;
+    private WorkforceWorkspace? workforceEditor;
+    public bool HasDraft => code.Length > 0 || name.Length > 0 || department.Length > 0 || selected.Count > 0 || workforceEditor?.HasDraft == true;
 
     // run
     private DateOnly month = new DateOnly(DateTime.Now.Year, DateTime.Now.Month, 1).AddMonths(-1), postingDate = DateOnly.FromDateTime(DateTime.Now);
     private DateTime MonthText { get => month.ToDateTime(TimeOnly.MinValue); set { month = new DateOnly(value.Year, value.Month, 1); preview = null; } }
     private readonly HashSet<Guid> selected = [];
     private readonly Dictionary<Guid, PayrollAdjustment> adjustments = [];
-    private PayrollPreview? preview; private Guid payrollOperation = Guid.NewGuid();
+    private PayrollPreview? preview; private Guid payrollOperation = Guid.NewGuid(); private bool useWorkforce;
+    private void ClearPreview() => preview = null;
     private IEnumerable<EmployeeView> Eligible => data.Employees.Where(e => e.StartDate <= month.AddMonths(1).AddDays(-1) && (e.EndDate is null || e.EndDate >= month));
     private PayrollAdjustment Adjustment(Guid id) => adjustments.TryGetValue(id, out var a) ? a : new(id);
     private void Adjust(Guid id, Func<PayrollAdjustment, PayrollAdjustment> change) { adjustments[id] = change(Adjustment(id)); preview = null; }
     private static decimal Num(ChangeEventArgs v) => decimal.TryParse(v.Value?.ToString(), System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : 0;
-    private PayrollCommand Command() => new(payrollOperation, month, postingDate, selected.ToList(), adjustments.Values.Where(a => selected.Contains(a.EmployeeId) && a != new PayrollAdjustment(a.EmployeeId)).ToList());
+    private PayrollCommand Command() => new(payrollOperation, month, postingDate, selected.ToList(), adjustments.Values.Where(a => selected.Contains(a.EmployeeId) && a != new PayrollAdjustment(a.EmployeeId)).ToList(), useWorkforce ? true : null, preview?.CalculationFingerprint);
 
     // payslips and payments
     private string slipMonth = "";
@@ -228,7 +237,7 @@ else if (tab == "PAYE & NASSIT")
         if (slipMonth.Length == 0 || !Months.Any(m => m.ToString("yyyy-MM") == slipMonth)) slipMonth = Months.FirstOrDefault().ToString("yyyy-MM");
         ApplyRules(view.History.FirstOrDefault());
     }
-    private Task Open(string t) { tab = t; error = message = ""; return t == "PAYE & NASSIT" ? Run(async () => { await Load(); await LoadScheduleCore(); }) : Run(Load); }
+    private async Task Open(string t) { if (t != tab && workforceEditor?.HasDraft == true && !await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", "Leave attendance and leave with unsaved changes?")) return; tab = t; error = message = ""; if (t == "PAYE & NASSIT") await Run(async () => { await Load(); await LoadScheduleCore(); }); else await Run(Load); }
     private async Task Run(Func<Task> action) { if (busy) return; busy = true; error = message = ""; try { await action(); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; } catch (Exception) { error = "Payroll could not complete. Check the details and try again."; } finally { busy = false; } }
 
     private void Choose(Guid id, ChangeEventArgs args) { if (args.Value is true) selected.Add(id); else selected.Remove(id); preview = null; }
@@ -247,7 +256,7 @@ else if (tab == "PAYE & NASSIT")
     private Task Post() => Run(async () =>
     {
         await Payroll.Post(Command());
-        payrollOperation = Guid.NewGuid(); selected.Clear(); adjustments.Clear(); preview = null; await Load();
+        payrollOperation = Guid.NewGuid(); selected.Clear(); adjustments.Clear(); preview = null; useWorkforce = false; await Load();
         slipMonth = month.ToString("yyyy-MM"); message = $"Payroll for {month:MMMM yyyy} posted. Pay salaries from Payslips & payments.";
     });
 

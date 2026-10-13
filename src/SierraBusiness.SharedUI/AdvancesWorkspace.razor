@@ -1,0 +1,86 @@
+@inject IBankingService Banking
+@inject ICommerceService Commerce
+@inject IFinanceService Finance
+@inject IPartyService Parties
+@inject IServiceProvider Services
+@inject Microsoft.JSInterop.IJSRuntime JS
+<div class="view-toggle report-tabs" role="tablist"><button role="tab" aria-selected="@(!foreignTab)" @onclick="() => OpenAdvanceTab(false)">Local advances</button><button role="tab" aria-selected="@foreignTab" @onclick="() => OpenAdvanceTab(true)">Foreign currency advances</button></div>
+@if (foreignTab) { <ForeignAdvancesWorkspace Actor="Actor" @ref="foreignWorkspace" /> }
+else
+{
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+@if (finance is null) { <p role="status">Loading deposits and advances…</p> }
+else
+{
+    @if (CanWrite)
+    {
+        <section class="panel"><h2>Record a deposit or advance</h2>
+            <p>Record money received from a customer or paid to a supplier before an invoice exists. Payments use today's open-period date. Allocate the balance later or record a refund.</p>
+            <form @onsubmit="Post" @onsubmit:preventDefault="true"><fieldset disabled="@busy"><div class="form-grid">
+                <label>Payment type<select @bind="Kind"><option value="@TradeAdvanceKind.CustomerDeposit">Customer deposit received</option><option value="@TradeAdvanceKind.SupplierAdvance">Supplier advance paid</option></select></label>
+                <label>Customer / supplier<select @bind="partyId" required><option value="@Guid.Empty">Select a registered party</option>@foreach (var p in EligibleParties) { <option value="@p.Id">@p.Code · @p.Name</option> }</select></label>
+                <label class="check"><input type="checkbox" @bind="byCheque" @bind:after="ChooseChequeMode" />Record this advance by cheque</label>
+                @if (!(byCheque && kind == TradeAdvanceKind.CustomerDeposit)) { <label>Cash / bank ledger<select @bind="fundsAccount">@foreach (var a in finance.Accounts.Where(a => a.CashOrBank && (!byCheque || a.Code != 1000))) { <option value="@a.Code">@a.Name</option> }</select></label> }
+                @if (byCheque) { <label>Advance cheque number<input maxlength="100" @bind="chequeNumber" /></label><label>Advance cheque date<input type="date" @bind="chequeDate" /></label>@if (kind == TradeAdvanceKind.CustomerDeposit) { <label>Customer cheque bank<input maxlength="100" @bind="chequeBank" /></label><p class="hint">This deposit remains unavailable until the cheque clears in Banking.</p> } else { <label>Supplier advance cheque book<select @bind="bookId"><option value="@Guid.Empty">No selected book</option>@foreach (var b in books.Where(b => b.Active && b.BankAccount == fundsAccount)) { <option value="@b.Id">@b.Name · next @b.NextNumber</option> }</select></label><p class="hint">Supplier cheque advances use today's issue date and appear in cheque printing and presentation tracking.</p> } }
+                <label>Amount (NLe)<input type="number" min="0.01" max="1000000000" step="0.01" @bind="amount" required /></label>
+                <label>Payment reference / reason<input @bind="reference" maxlength="160" required /></label>
+            </div><button class="primary" type="submit" disabled="@(busy || partyId == Guid.Empty || amount <= 0 || string.IsNullOrWhiteSpace(reference))">Record payment</button></fieldset></form>
+        </section>
+    }
+    <section class="panel"><div class="panel-title"><h2>Deposits and advances</h2><button class="secondary" disabled="@busy" @onclick="Refresh">Refresh balances</button></div>
+        <table><thead><tr><th>Date / document</th><th>Party / type</th><th>Amount (NLe)</th><th>Remaining (NLe)</th><th></th></tr></thead><tbody>
+        @foreach (var a in advances) { <tr><td>@a.Date<br />@a.Number</td><td>@a.Party<br />@(a.Kind == TradeAdvanceKind.CustomerDeposit ? "Customer deposit" : "Supplier advance")</td><td>@a.Amount.ToString("N2")</td><td>@a.Remaining.ToString("N2")@if (a.ChequeStatus is not null) { <br /><span>Cheque @a.ChequeStatus</span> }</td><td>@if (CanWrite && a.Remaining > 0) { <button disabled="@busy" @onclick="() => Select(a)">Apply or refund</button> }</td></tr> }
+        </tbody></table>@if (advances.Count == 0) { <p>No deposits or advances recorded.</p> }
+        <p class="hint">Balances also appear in party statements and the existing customer/supplier credit registers. Correct posted payments through the document register; reverse allocations and refunds first.</p>
+    </section>
+    @if (selected is not null && CanWrite)
+    {
+        <section class="panel"><h2>Apply or refund · @selected.Party</h2><p>@selected.Number · Remaining NLe @selected.Remaining.ToString("N2")</p>
+            <form @onsubmit="Apply" @onsubmit:preventDefault="true"><fieldset disabled="@busy"><div class="form-grid">
+                <label>Action<select @bind="refund"><option value="false">Apply to invoice</option><option value="true">Refund</option></select></label>
+                @if (refund) { <label>Cash / bank ledger<select @bind="refundAccount">@foreach (var a in finance.Accounts.Where(a => a.CashOrBank)) { <option value="@a.Code">@a.Name</option> }</select></label> }
+                else { <label>Outstanding invoice<select @bind="invoiceId"><option value="@Guid.Empty">Select an invoice</option>@foreach (var b in EligibleBills) { <option value="@b.Id">@b.Number · NLe @b.Outstanding.ToString("N2")</option> }</select></label><p class="hint">Only outstanding invoices for this party appear. Foreign-currency supplier bills use the existing FX settlement workflow.</p> }
+                <label>Amount to apply / refund (NLe)<input type="number" min="0.01" max="@selected.Remaining" step="0.01" @bind="useAmount" required /></label>
+                <label>Allocation / refund reason<input @bind="useReason" maxlength="160" required /></label>
+            </div><button class="primary" type="submit" disabled="@(busy || useAmount <= 0 || string.IsNullOrWhiteSpace(useReason) || !refund && invoiceId == Guid.Empty)">@(refund ? "Record refund" : "Apply to invoice")</button><button class="secondary" type="button" disabled="@busy" @onclick="CancelUse">Cancel</button></fieldset></form>
+        </section>
+    }
+}
+}
+@code {
+    [Parameter] public Actor Actor { get; set; } = default!;
+    private bool CanWrite => Actor.Permissions.Contains("accounting.write");
+    private bool foreignTab; private ForeignAdvancesWorkspace? foreignWorkspace;
+    private async Task OpenAdvanceTab(bool foreign) { if (foreign == foreignTab) return; if (HasDraft && !await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS,"confirm","Switch advance tools while leaving this draft?")) return; foreignTab = foreign; }
+    private bool busy, refund;
+    private bool byCheque; private string chequeNumber = "",chequeBank = ""; private DateOnly chequeDate = DateOnly.FromDateTime(DateTime.UtcNow); private Guid bookId; private IReadOnlyList<ChequeBookView> books = [];
+    private string error = "", message = "", reference = "", useReason = "";
+    private TradeAdvanceKind kind;
+    private TradeAdvanceKind Kind { get => kind; set { kind = value; partyId = Guid.Empty; bookId = Guid.Empty; ChooseChequeMode(); } }
+    private void ChooseChequeMode() { if (byCheque && kind == TradeAdvanceKind.SupplierAdvance && fundsAccount == 1000) fundsAccount = finance?.Accounts.FirstOrDefault(a => a.CashOrBank && a.Code != 1000)?.Code ?? 1010; }
+    private Guid partyId, invoiceId, operation = Guid.NewGuid(), useOperation = Guid.NewGuid();
+    private int fundsAccount = 1000, refundAccount = 1000;
+    private decimal amount, useAmount;
+    private TradeAdvanceView? selected;
+    private FinanceSnapshot? finance;
+    private IReadOnlyList<PartyView> parties = [];
+    private IReadOnlyList<TradeAdvanceView> advances = [];
+    private IEnumerable<PartyView> EligibleParties => parties.Where(p => kind == TradeAdvanceKind.CustomerDeposit ? p.Type != PartyType.Supplier : p.Type != PartyType.Customer);
+    private IEnumerable<OutstandingBill> EligibleBills => finance!.Bills.Where(b => selected is not null && b.Outstanding > 0 && b.Receivable == (selected.Kind == TradeAdvanceKind.CustomerDeposit) && b.Party.Equals(selected.Party, StringComparison.OrdinalIgnoreCase));
+    public bool HasDraft => foreignTab ? foreignWorkspace?.HasDraft == true : partyId != Guid.Empty || amount != 0 || reference.Length > 0 || selected is not null || byCheque;
+    protected override Task OnInitializedAsync() => Refresh();
+    private async Task Reload() { var today = DateOnly.FromDateTime(DateTime.UtcNow); finance = await Finance.Read(today, today); parties = await Parties.Read(); advances = await Banking.Advances(); if (Services.GetService(typeof(IBankingExtras)) is IBankingExtras extras) books = await extras.ChequeBooks(); if (selected is not null) selected = advances.SingleOrDefault(a => a.CreditId == selected.CreditId); }
+    private Task Refresh() => Run(Reload);
+    private Task Post() => Run(async () => { var customerCheque = byCheque && kind == TradeAdvanceKind.CustomerDeposit; var cheque = byCheque ? new AdvanceCheque(chequeNumber,chequeBank,chequeDate,bookId == Guid.Empty ? null : bookId) : null; await Banking.PostAdvance(new(operation,kind,partyId,customerCheque ? 1020 : fundsAccount,amount,reference,cheque)); operation = Guid.NewGuid(); partyId = Guid.Empty; amount = 0; reference = chequeNumber = chequeBank = ""; byCheque = false; bookId = Guid.Empty; await Reload(); message = customerCheque ? "Cheque deposit recorded. Clear it in Banking before allocation or refund." : "Payment recorded. Its balance is available for allocation or refund."; });
+    private void Select(TradeAdvanceView a) { selected = a; useAmount = a.Remaining; invoiceId = Guid.Empty; refund = false; useReason = ""; useOperation = Guid.NewGuid(); }
+    private void CancelUse() { selected = null; useAmount = 0; useReason = ""; invoiceId = Guid.Empty; }
+    private Task Apply() => Run(async () =>
+    {
+        if (selected is null) throw new BusinessException("Select a deposit or advance.");
+        var command = new UseCreditCommand(useOperation, selected.CreditId, useAmount, refund ? refundAccount : null, refund ? null : invoiceId, useReason);
+        if (selected.Kind == TradeAdvanceKind.CustomerDeposit) await Commerce.UseCredit(command); else await Banking.UseSupplierCredit(command);
+        CancelUse(); await Reload(); message = "Allocation or refund posted. Balances refreshed.";
+    });
+    private async Task Run(Func<Task> action) { if (busy) return; busy = true; error = message = ""; try { await action(); } catch (Exception e) when (e is BusinessException or UnauthorizedAccessException) { error = e.Message; } catch (Exception) { error = "The operation could not complete. Refresh and check the document register before retrying."; } finally { busy = false; } }
+}

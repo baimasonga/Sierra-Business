@@ -6,7 +6,7 @@ namespace SierraBusiness.Application;
 public sealed record StatementFormat(string Name, string Delimiter = ",", int HeaderRows = 1, int DateColumn = 1, string DateFormat = "yyyy-MM-dd", int ReferenceColumn = 2, int AmountColumn = 3, int DebitColumn = 0, int CreditColumn = 0)
 {
     public static IReadOnlyList<StatementFormat> BuiltIn { get; } = [
-        new("Sierra Business standard (Date, Reference, Amount)"),
+        new("Rokela Business Admin standard (Date, Reference, Amount)"),
         new("Debit and credit columns (Date, Details, Debit, Credit, Balance)", ",", 1, 1, "dd/MM/yyyy|d/M/yyyy|dd-MMM-yyyy|yyyy-MM-dd", 2, 0, 3, 4),
         new("Signed amount (Date, Details, Amount)", ",", 1, 1, "dd/MM/yyyy|d/M/yyyy|dd-MMM-yyyy|yyyy-MM-dd", 2, 3),
         new("Value date, details, reference, debit, credit", ",", 1, 1, "dd/MM/yyyy|d/M/yyyy|dd-MMM-yyyy|yyyy-MM-dd", 2, 0, 4, 5)
@@ -17,7 +17,8 @@ public sealed record BankFormatView(Guid Id, string Bank, StatementFormat Format
 
 public enum IssuedChequeState { Issued, Presented, Cancelled }
 /// <param name="ExpenseAccount">Ledger debited when the cheque does not settle supplier bills (for example 5100 operating expenses).</param>
-public sealed record IssueChequeCommand(Guid OperationId, int BankAccount, string Payee, string ChequeNumber, DateOnly Date, decimal Amount, List<BillSettlement> Allocations, int? ExpenseAccount = null, string Narration = "");
+public sealed record IssueChequeCommand(Guid OperationId, int BankAccount, string Payee, string ChequeNumber, DateOnly Date, decimal Amount, List<BillSettlement> Allocations, int? ExpenseAccount = null, string Narration = "",
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] Guid? BookId = null);
 public sealed record IssuedChequeActionCommand(Guid OperationId, Guid ChequeId, IssuedChequeState NewState, DateOnly Date, string Reason);
 public sealed record IssuedChequeView(Guid Id, string Number, int BankAccount, string Payee, DateOnly Date, decimal Amount, IssuedChequeState State, DateOnly? StateDate, string Reason, Guid VoucherId, string VoucherNumber);
 
@@ -26,6 +27,12 @@ public sealed record AssignDrawerCommand(Guid OperationId, int AccountCode, stri
 
 public interface IBankingExtras
 {
+    Task<IReadOnlyList<ChequeBookView>> ChequeBooks();
+    Task<Guid> SaveChequeBook(ChequeBookCommand input);
+    Task<IReadOnlyList<ChequeLayoutView>> ChequeLayouts();
+    Task<Guid> SaveChequeLayout(ChequeLayoutCommand input);
+    Task<ChequePrintPreview> PreviewChequePrint(ChequePrintRequest input);
+    Task<Guid> RecordChequePrint(ChequePrintCommand input);
     Task<IReadOnlyList<BankFormatView>> Formats();
     Task<Guid> SaveFormat(SaveStatementFormat input);
     Task<IReadOnlyList<StatementLineInput>> Preview(string csv, StatementFormat format);

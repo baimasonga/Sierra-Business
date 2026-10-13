@@ -4,13 +4,45 @@ $root = Split-Path -Parent $PSScriptRoot
 $directory = Join-Path $root ('.tools\web-check-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $directory | Out-Null
 $dll = Join-Path $root 'src\SierraBusiness.Web\bin\Release\net10.0\SierraBusiness.Web.dll'
-$names = @('ConnectionStrings__Business', 'Database__Provider', 'Sync__Role', 'Bootstrap__Email', 'Bootstrap__Password', 'ASPNETCORE_URLS')
+$names = @('ConnectionStrings__Business', 'Database__Provider', 'Sync__Role', 'Bootstrap__Email', 'Bootstrap__Password', 'ASPNETCORE_URLS', 'Trading__Branch', 'Trading__Device', 'Trading__TaxRate', 'Trading__ClosedThrough')
 $original = @{}
 foreach ($name in $names) { $original[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 $server = $null
+$notificationSocket = $null
+function Receive-Notification($socket, [string]$expected) {
+    $deadline = [System.Threading.CancellationTokenSource]::new(10000)
+    try {
+        $buffer = [byte[]]::new(16384)
+        while ($true) {
+            $received = $socket.ReceiveAsync([System.ArraySegment[byte]]::new($buffer), $deadline.Token).GetAwaiter().GetResult()
+            if ($received.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) { throw 'Live-update socket closed unexpectedly.' }
+            $text = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $received.Count)
+            if ($text.Contains('"target":"' + $expected + '"')) { return }
+        }
+    } finally { $deadline.Dispose() }
+}
+function Connect-Notifications($base, $session) {
+    $negotiation = Invoke-RestMethod "$base/notifications/workspace/negotiate?negotiateVersion=1" -WebSession $session -Method Post
+    if (!$negotiation.connectionToken) { throw 'Authenticated live-update negotiation failed.' }
+    $socket = [System.Net.WebSockets.ClientWebSocket]::new()
+    $socket.Options.Cookies = $session.Cookies
+    $deadline = [System.Threading.CancellationTokenSource]::new(10000)
+    try {
+        $address = $base.Replace('http://', 'ws://').Replace('https://', 'wss://') + '/notifications/workspace?id=' + [uri]::EscapeDataString($negotiation.connectionToken)
+        [void]$socket.ConnectAsync([uri]$address, $deadline.Token).GetAwaiter().GetResult()
+        $handshake = [System.Text.Encoding]::UTF8.GetBytes('{"protocol":"json","version":1}' + [char]30)
+        [void]$socket.SendAsync([System.ArraySegment[byte]]::new($handshake), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $deadline.Token).GetAwaiter().GetResult()
+        Receive-Notification $socket 'WorkspaceReady'
+        return $socket
+    } catch { $socket.Dispose(); throw } finally { $deadline.Dispose() }
+}
 try {
     $env:Database__Provider = 'Sqlite'
     $env:Sync__Role = 'Off'
+    $env:Trading__Branch = 'FREETOWN'
+    $env:Trading__Device = 'HTTPVERIFY32'
+    $env:Trading__TaxRate = '0'
+    $env:Trading__ClosedThrough = '2000-01-01'
     $env:ConnectionStrings__Business = 'Data Source=' + (Join-Path $directory 'check.db')
     $env:Bootstrap__Email = 'verify@example.test'
     $env:Bootstrap__Password = 'Verify-' + [Guid]::NewGuid().ToString('N') + '!9a'
@@ -26,23 +58,43 @@ try {
         try { $health = Invoke-WebRequest "$base/health" -UseBasicParsing; $ready = $health.StatusCode -eq 200; if ($ready) { break } } catch { Start-Sleep -Milliseconds 500 }
     }
     if (!$ready) { throw 'Temporary web host did not become healthy.' }
+    $anonymousStatus = 0
+    try { $null = Invoke-WebRequest "$base/notifications/workspace/negotiate?negotiateVersion=1" -Method Post -UseBasicParsing } catch { $anonymousStatus = [int]$_.Exception.Response.StatusCode }
+    if ($anonymousStatus -ne 401) { throw 'Anonymous live-update access was not denied.' }
     $login = Invoke-WebRequest "$base/account/login" -SessionVariable session -UseBasicParsing
     $token = [regex]::Match($login.Content, 'name="__RequestVerificationToken" value="([^"]+)"').Groups[1].Value
     $result = Invoke-WebRequest "$base/account/login" -WebSession $session -Method Post -Body @{ email = $env:Bootstrap__Email; password = $env:Bootstrap__Password; __RequestVerificationToken = $token } -UseBasicParsing
     if (!$result.Content.Contains('id="workspace-content"')) { throw 'Authenticated workspace did not render.' }
     $token = Invoke-RestMethod "$base/api/v1/antiforgery" -WebSession $session
+    $negotiation = Invoke-RestMethod "$base/notifications/workspace/negotiate?negotiateVersion=1" -WebSession $session -Method Post
+    if (!$negotiation.connectionToken -or !($negotiation.availableTransports | Where-Object transport -eq 'WebSockets')) { throw 'Authenticated live-update negotiation failed.' }
+    $notificationSocket = Connect-Notifications $base $session
+    $apiDocument = Invoke-RestMethod "$base/openapi/v1.json" -WebSession $session
+    foreach ($path in @('/api/v1/products', '/api/v1/documents', '/api/v1/reversals', '/api/v1/statements/compare', '/api/v1/reports/stock-ageing', '/api/v1/finance/advances')) {
+        if (!$apiDocument.paths.PSObject.Properties[$path]) { throw "Generated API documentation is missing $path" }
+    }
+    if ($apiDocument.info.title -ne 'Rokela Business Admin API') { throw 'API document title mismatch.' }
     $headers = @{ RequestVerificationToken = $token }
     $product = @{ operationId = [guid]::NewGuid(); sku = 'CHECK'; name = 'Check product'; category = 'General'; unit = 'piece'; price = 100; tracking = 0; minimumPrice = 50 } | ConvertTo-Json
     $id = Invoke-RestMethod "$base/api/v1/products" -WebSession $session -Headers $headers -Method Post -ContentType application/json -Body $product
     $date = Get-Date -Format yyyy-MM-dd
     $receipt = @{ operationId = [guid]::NewGuid(); kind = 0; party = 'Test supplier'; businessDate = $date; lines = @(@{ productId = $id; quantity = 10; unitPrice = 60; conversion = 1 }) } | ConvertTo-Json -Depth 5
     $null = Invoke-RestMethod "$base/api/v1/documents" -WebSession $session -Headers $headers -Method Post -ContentType application/json -Body $receipt
+    Receive-Notification $notificationSocket 'WorkspaceChanged'
+    $notificationSocket.Abort(); $notificationSocket.Dispose()
+    $notificationSocket = Connect-Notifications $base $session
     $sale = @{ operationId = [guid]::NewGuid(); kind = 1; party = 'Walk-in'; businessDate = $date; payment = 0; lines = @(@{ productId = $id; quantity = 2; unitPrice = 100; conversion = 1 }) } | ConvertTo-Json -Depth 5
     $saleId = Invoke-RestMethod "$base/api/v1/documents" -WebSession $session -Headers $headers -Method Post -ContentType application/json -Body $sale
+    Receive-Notification $notificationSocket 'WorkspaceChanged'
+    $notificationSocket.Abort(); $notificationSocket.Dispose(); $notificationSocket = $null
     $replayed = Invoke-RestMethod "$base/api/v1/documents" -WebSession $session -Headers $headers -Method Post -ContentType application/json -Body $sale
     if ($saleId -ne $replayed) { throw 'HTTP replay duplicated sale.' }
     $state = Invoke-RestMethod "$base/api/v1/workspace" -WebSession $session
     if ($state.netSales -ne 200 -or $state.stock[0].quantity -ne 8) { throw 'HTTP accounting/stock mismatch.' }
+    $ageing = Invoke-RestMethod "$base/api/v1/reports/stock-ageing?asAt=$date" -WebSession $session
+    if ($ageing.rows[0].quantity -ne 8 -or $ageing.rows[0].days30 -ne 8) { throw 'HTTP stock ageing mismatch.' }
+    $comparison = Invoke-RestMethod "$base/api/v1/statements/compare?statement=Profit%20and%20loss&from=$date&to=$date&comparisonFrom=$date&comparisonTo=$date" -WebSession $session
+    if (!($comparison.rows | Where-Object { $_.section -eq 'Result' -and $_.current -eq 80 -and $_.previous -eq 80 -and $_.change -eq 0 })) { throw 'HTTP comparative statement mismatch.' }
     $reversal = @{ operationId = [guid]::NewGuid(); documentId = $saleId; reason = 'Verification reversal' } | ConvertTo-Json
     $null = Invoke-RestMethod "$base/api/v1/reversals" -WebSession $session -Headers $headers -Method Post -ContentType application/json -Body $reversal
     $state = Invoke-RestMethod "$base/api/v1/workspace" -WebSession $session
@@ -162,12 +214,38 @@ try {
     $state = Invoke-RestMethod "$base/api/v1/workspace" -WebSession $session
     $serialStock = $state.stock | Where-Object productId -eq $serialId
     if ($serialStock.quantity -ne 1 -or $serialStock.serial -ne 'CHECK-SN' -or $serialStock.value -ne 60) { throw 'Serial count stock mismatch.' }
+    function Post-Verification([string]$endpoint, $payload) { Invoke-RestMethod "$base/api/v1/$endpoint" -WebSession $session -Headers $headers -Method Post -ContentType application/json -Body ($payload | ConvertTo-Json -Depth 30) }
+    $costProduct = Post-Verification 'products' @{ operationId=[guid]::NewGuid(); sku='COSTCHECK'; name='FIFO HTTP item'; category='General'; unit='piece'; price=100; tracking=0; minimumPrice=50 }
+    $null = Post-Verification 'inventory/cost-policies' @{ operationId=[guid]::NewGuid(); productId=$costProduct; expectedVersion=0; method=1; standardUnitCost=0; from=$date; reason='Initial HTTP FIFO' }
+    foreach ($unitCost in @(10,20)) { $null = Post-Verification 'documents' @{ operationId=[guid]::NewGuid(); kind=0; party='HTTP supplier'; businessDate=$date; lines=@(@{ productId=$costProduct; quantity=10; unitPrice=$unitCost; conversion=1 }) } }
+    $null = Post-Verification 'documents' @{ operationId=[guid]::NewGuid(); kind=1; party='Walk-in'; businessDate=$date; payment=0; lines=@(@{ productId=$costProduct; quantity=5; unitPrice=100; conversion=1 }) }
+    $valuation = Post-Verification 'inventory/valuation' @{ asAt=$date; method=1 }
+    $valuedItem = $valuation.rows | Where-Object productId -eq $costProduct
+    if ($valuedItem.quantity -ne 15 -or $valuedItem.bookValue -ne 250 -or $valuedItem.selectedValue -ne 250) { throw 'HTTP FIFO valuation mismatch.' }
+    $snapshot = Invoke-RestMethod "$base/api/v1/statements/company-snapshot?company=HTTP%20verification&from=$date&to=$date" -WebSession $session
+    $second = $snapshot | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+    $second.sourceId = [guid]::NewGuid().ToString(); $second.company = 'Second synthetic company'
+    $consolidated = Post-Verification 'statements/consolidate' @{ statement='Balance sheet'; members=@($snapshot,$second); mappings=@(); adjustments=@(@{ reference='HTTP-ADJUST'; date=$date; reason='Synthetic balanced HTTP adjustment'; lines=@(@{accountCode=2000;debit=1;credit=0},@{accountCode=1100;debit=0;credit=1}) }) }
+    if ($consolidated.balanceDifference -ne 0 -or !$consolidated.hasAdjustments) { throw 'HTTP consolidated balance-sheet mismatch.' }
+    $null = Post-Verification 'inventory/consignment-sites' @{ operationId=[guid]::NewGuid(); code='CON-HTTP'; partner='HTTP supplier'; ownership=1 }
+    $custodyId = Post-Verification 'inventory/custody' @{ operationId=[guid]::NewGuid(); site='CON-HTTP'; date=$date; productId=$costProduct; quantity=3; referenceUnitCost=10; reference='Synthetic supplier custody' }
+    $custodyRows = Invoke-RestMethod "$base/api/v1/inventory/custody" -WebSession $session
+    if (($custodyRows | Where-Object receiveId -eq $custodyId).remaining -ne 3) { throw 'HTTP off-balance custody mismatch.' }
+    $bookId = Post-Verification 'banking/cheque-books' @{ operationId=[guid]::NewGuid(); expectedVersion=0; bankAccount=1010; name='HTTP cheque book'; prefix='H'; first=100; last=125; digits=6; active=$true }
+    $issuedId = Post-Verification 'banking/issued-cheques' @{ operationId=[guid]::NewGuid(); bankAccount=1010; payee='HTTP payee'; chequeNumber='H000100'; date=$date; amount=1; allocations=@(); expenseAccount=5100; narration='Synthetic cheque'; bookId=$bookId }
+    $layoutId = Post-Verification 'banking/cheque-layouts' @{ operationId=[guid]::NewGuid(); expectedVersion=0; bankAccount=1010; name='HTTP print layout'; width=210; height=80; fontSize=10; date=@{x=150;y=12;width=45}; payee=@{x=20;y=25;width=140}; amount=@{x=160;y=25;width=40}; words=@{x=20;y=40;width=180}; number=@{x=20;y=65;width=70} }
+    $printRequest = @{ layoutId=$layoutId; chequeIds=@($issuedId); test=$true; expectedLayoutVersion=1 }
+    $printPreview = Post-Verification 'banking/cheque-print-preview' $printRequest
+    if (!$printPreview.test -or $printPreview.cheques.Count -ne 1) { throw 'HTTP cheque print preview mismatch.' }
+    $null = Post-Verification 'banking/cheque-print-attempts' @{ operationId=[guid]::NewGuid(); request=$printRequest }
+    Write-Output 'PASS: HTTP FIFO policy/valuation, portable company snapshot, balanced consolidation adjustment, off-balance supplier custody, cheque-book issuance and marked print preview/audit. No physical cheque was printed.'
     $status = 0
     $session.Headers.Remove('RequestVerificationToken')
     try { $null = Invoke-WebRequest "$base/api/v1/products" -WebSession $session -Method Post -ContentType application/json -Body $product -UseBasicParsing } catch { $status = [int]$_.Exception.Response.StatusCode }
     if ($status -ne 400) { throw "Missing antiforgery token returned $status rather than 400." }
-    Write-Output 'PASS: HTTP health, sign-in, workspace, catalogue, receipt, sale, replay, reversal, module reads, voucher, bank match/cancellation, cash flow, warehouse transfer, user creation, reservations, delivery/invoice stock-once posting, paid return credit, partial refund, confidential-price denial, statement import/matching, cheque deposit/clearance, till closing, barcode packs, held-sale recall/post-once, batch count/replay, FEFO suggestion/sale, serial count/replay, print asset and antiforgery rejection.'
+    Write-Output 'PASS: generated OpenAPI, comparative reports, stock ageing, authenticated live notifications and reconnect, HTTP health, sign-in, workspace, catalogue, receipt, sale, replay, reversal, module reads, voucher, bank match/cancellation, cash flow, warehouse transfer, user creation, reservations, delivery/invoice stock-once posting, paid return credit, partial refund, confidential-price denial, statement import/matching, cheque deposit/clearance, till closing, barcode packs, held-sale recall/post-once, batch count/replay, FEFO suggestion/sale, serial count/replay, print asset and antiforgery rejection.'
 } finally {
+    if ($notificationSocket) { $notificationSocket.Abort(); $notificationSocket.Dispose() }
     if ($server -and !$server.HasExited) { Stop-Process -Id $server.Id }
     foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $original[$name], 'Process') }
 }

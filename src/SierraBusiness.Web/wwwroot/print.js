@@ -10,7 +10,9 @@ window.sierraPrint = (id) => {
     const doc = frame.contentDocument;
     const style = doc.createElement('style');
     const narrow = source.classList.contains('receipt-80') || !!source.querySelector('.receipt-80');
-    const page = narrow ? '@page{size:80mm auto;margin:3mm}body{font:9pt Segoe UI,Arial,sans-serif;color:#111;width:74mm}h1{font-size:12pt!important}h2{font-size:10pt!important}th,td{padding:3px!important}' : '@page{size:A4;margin:16mm}body{font:11pt Segoe UI,Arial,sans-serif;color:#111}';
+    const chequeWidth = Number(source.dataset.paperWidth), chequeHeight = Number(source.dataset.paperHeight);
+    const cheque = source.classList.contains('cheque-print') && chequeWidth >= 100 && chequeWidth <= 300 && chequeHeight >= 50 && chequeHeight <= 150;
+    const page = cheque ? `@page{size:${chequeWidth}mm ${chequeHeight}mm;margin:0}body{margin:0;font-family:Segoe UI,Arial,sans-serif}.cheque-page:last-child{page-break-after:auto!important}` : narrow ? '@page{size:80mm auto;margin:3mm}body{font:9pt Segoe UI,Arial,sans-serif;color:#111;width:74mm}h1{font-size:12pt!important}h2{font-size:10pt!important}th,td{padding:3px!important}' : '@page{size:A4;margin:16mm}body{font:11pt Segoe UI,Arial,sans-serif;color:#111}';
     const letterhead = '.letterhead{display:flex;gap:14px;align-items:flex-start;border-bottom:3px solid var(--accent,#1f4e79);padding-bottom:8px;margin-bottom:12px}.letterhead p{margin:2px 0}.letterhead-logo{max-height:64px;max-width:150px;object-fit:contain}.letterhead h1{margin:0;color:var(--accent,#1f4e79)}.lh-doc{margin-left:auto;text-align:right}.lh-doc h2{margin:0}.lh-ids,.lh-tagline{font-size:9pt}.doc-footer{margin-top:16px;border-top:1px solid #bbb;padding-top:6px;font-size:9pt}.doc-footer .words{font-style:italic}.terms{white-space:pre-line}.fiscal{font-weight:600}.sign{display:flex;gap:40px;margin-top:30px}.sign span{flex:1;border-top:1px solid #333;padding-top:4px}.lh-footer{text-align:center;color:#555}.receipt-80 .letterhead,.receipt-80 .sign{display:block;text-align:center}.receipt-80 .lh-doc{text-align:center}.receipt-80 .sign span{display:block;margin-top:24px}';
     style.textContent = page + letterhead + 'h1{font-size:20pt}h2{font-size:15pt}table{width:100%;border-collapse:collapse;margin:16px 0}th,td{border-bottom:1px solid #bbb;padding:8px;text-align:left}thead{display:table-header-group}tr{break-inside:avoid}.numeric{text-align:right}button,input,select,summary,.no-print{display:none!important}p{overflow-wrap:anywhere}.code{font-size:9pt;overflow-wrap:anywhere}';
     doc.head.appendChild(style);
@@ -33,6 +35,29 @@ window.sierraDownload = (name, base64, type) => {
     link.remove();
     setTimeout(() => URL.revokeObjectURL(link.href), 10000);
 };
+
+// Non-financial display preferences only: never store session tokens or document contents here.
+window.sierraPreferenceRead = (key) => {
+    try { const value = localStorage.getItem('rokela.preferences.' + key); return value && value.length <= 8192 ? value : null; }
+    catch { return null; }
+};
+window.sierraPreferenceWrite = (key, json) => {
+    if (typeof json !== 'string' || json.length > 8192) throw new Error('Invalid display preferences');
+    localStorage.setItem('rokela.preferences.' + key, json);
+};
+window.sierraPreferenceRemove = (key) => localStorage.removeItem('rokela.preferences.' + key);
+window.sierraConfigureShortcuts = (keys) => { window.rokelaShortcutKeys = new Set(keys); };
+document.addEventListener('keydown', event => {
+    if (!event.target?.closest?.('.workspace')) return;
+    if (!event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && window.rokelaShortcutKeys?.has(event.key)) event.preventDefault();
+    if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === 's') {
+        const button = document.querySelector('.workspace [data-post-document]');
+        if (!button) return;
+        event.preventDefault();
+        event.target.blur?.(); // commit the focused Blazor field before clicking the same visible posting action
+        setTimeout(() => { if (!button.disabled) button.click(); }, 0);
+    }
+}, true);
 
 // Shows a stored original (PDF, image or text) inside the page without saving it to disk.
 window.sierraPreview = (id, base64, type) => {

@@ -46,7 +46,7 @@ public sealed class ImportRow
     public Guid? EntityId { get; set; }
 }
 
-public sealed class ImportService(IDbContextFactory<BusinessDb> factory, IActorSession session, IOptions<TradingOptions> options) : IImportService
+public sealed partial class ImportService(IDbContextFactory<BusinessDb> factory, IActorSession session, IOptions<TradingOptions> options) : IImportService
 {
     private const string Committed = "Committed", Validated = "Validated";
     private static ImportField F(string key, string label, bool required, string hint) => new(key, label, required, hint);
@@ -56,6 +56,12 @@ public sealed class ImportService(IDbContextFactory<BusinessDb> factory, IActorS
     private const string StockPermissions = "inventory.receive,accounting.write";
     private static readonly ImportTemplate[] All =
     [
+        new(ImportType.Parties, "Customers and suppliers", "Create party masters with contact details, payment terms and credit limits.", "catalogue.write",
+            [F("code","Party code",true,"Unique code, up to 40 characters."), F("name","Party name",true,"Unique name, up to 160 characters."), F("party_type","Party type",true,"Customer, Supplier or Both."), F("contact","Contact",false,"Main contact name."), F("phone","Phone",false,"Up to 60 characters."), F("email","Email",false,"Valid email address."), F("address","Address",false,"Up to 200 characters."), F("payment_days","Payment days",false,"0–3650, default zero."), F("credit_limit","Credit limit",false,"NLe, default zero, at most two decimal places."), F("category","Organisation type",false,"Optional, up to 40 characters."), F("tin","TIN",false,"Optional, up to 30 characters.")]),
+        new(ImportType.Ledgers, "Ledger accounts", "Create custom accounts before importing vouchers. Control accounts are already supplied by the system.", "accounting.read,accounting.write",
+            [F("account_code","Account code",true,"Custom code 6000–999999."), F("name","Account name",true,"Up to 160 characters."), F("group","Account type",true,"Asset, Liability, Equity, Income or Expense."), F("cash_bank","Cash or bank",false,"Yes or No. Only assets may be cash/bank accounts.")]),
+        new(ImportType.Vouchers, "Accounting vouchers", "Import balanced vouchers, grouped by voucher reference. Each group is one journal, receipt, payment or contra. The batch commits together after every group passes domain checks.", "accounting.read,accounting.write",
+            [F("voucher_key","Voucher reference",true,"Group key shared by all lines of one voucher."), F("date","Voucher date",true,"An open-period date, not in the future."), F("voucher_type","Voucher type",true,"Journal, Receipt, Payment or Contra."), F("narration","Narration",true,"Same narration on every line of the group."), F("account_code","Account code",true,"An existing ledger code."), F("debit","Debit",false,"NLe debit, at most two decimal places."), F("credit","Credit",false,"NLe credit, at most two decimal places."), F("cost_centre","Cost centre",false,"Income/expense allocation code."), F("bill_number","Allocated bill number",false,"Existing customer/supplier credit bill number, if settling trade controls."), F("bill_amount","Bill allocation amount",false,"Positive local amount against the bill.")]),
         new(ImportType.Products, "Product catalogue", "Create new products, with optional confidential minimum price and barcode.", "catalogue.write",
             [F("sku", "SKU", true, "Up to 40 characters. Must not already exist."), F("name", "Product name", true, "Up to 160 characters."), F("category", "Category", true, "For example Stationery."), F("unit", "Base unit", true, "Smallest unit you sell or count, e.g. piece, ream, box."),
              F("price", "Selling price", true, "Asking price per base unit in NLe."), F("tracking", "Tracking", false, "Quantity (default), Serial, Batch, or Batch+Expiry."),
@@ -81,7 +87,7 @@ public sealed class ImportService(IDbContextFactory<BusinessDb> factory, IActorS
         ["expiry"] = ["expirydate", "exp", "bestbefore", "expires"], ["counted"] = ["count", "countedqty", "physical", "physicalcount"], ["barcode_units"] = ["packsize", "unitsperpack"]
     };
 
-    public IReadOnlyList<ImportTemplate> Templates() => All;
+    public IReadOnlyList<ImportTemplate> Templates() => All.OrderBy(t => (int)t.Type).ToArray();
     private static ImportTemplate Get(ImportType type) => All.SingleOrDefault(x => x.Type == type) ?? throw new BusinessException("Unknown import type.");
     private static bool IsStock(ImportType type) => type is ImportType.OpeningStock or ImportType.SerialStock or ImportType.BatchStock;
 
@@ -209,6 +215,9 @@ public sealed class ImportService(IDbContextFactory<BusinessDb> factory, IActorS
         }
         switch (type)
         {
+            case ImportType.Parties: await CheckParties(db, actor, lines); break;
+            case ImportType.Ledgers: await CheckLedgers(db, lines); break;
+            case ImportType.Vouchers: await CheckVouchers(db, actor, lines); break;
             case ImportType.Products:
             {
                 var barcodes = (await db.ProductBarcodes.AsNoTracking().Select(x => x.Code).ToListAsync()).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -361,6 +370,7 @@ public sealed class ImportService(IDbContextFactory<BusinessDb> factory, IActorS
         var index = sheet.Headers.Select((h, i) => (h, i)).ToDictionary(x => x.h, x => x.i);
         var lines = sheet.Rows.Select(r => new Line { Row = r.Number, Values = mapping.ToDictionary(m => m.Key, m => r.Cells[index[m.Value]]) }).ToList();
         await Check(db, actor, input.Type, lines);
+        if (IsStock(input.Type)) await CheckStockCostDates(db,actor,lines,asAt!.Value);
         var key = KeyFor(input.Type, actor.Branch, asAt, sessionName, lines);
         var previous = await db.ImportBatches.AsNoTracking().Where(x => x.Branch == actor.Branch && x.Key == key && x.Status == Committed).FirstOrDefaultAsync();
 
@@ -421,6 +431,23 @@ public sealed class ImportService(IDbContextFactory<BusinessDb> factory, IActorS
         var documents = new List<Guid>(); string summary;
         switch (batch.Type)
         {
+            case ImportType.Parties:
+                foreach (var line in lines) { var party = await PartyService.SaveCore(db, actor, PartyInput(line)); line.EntityId = party.Id; }
+                summary = $"Created {lines.Count} customers/suppliers."; break;
+            case ImportType.Ledgers:
+                foreach (var line in lines) await FinanceService.CreateLedgerCore(db, LedgerInputFor(line));
+                summary = $"Created {lines.Count} ledger accounts."; break;
+            case ImportType.Vouchers:
+                var finance = new FinanceService(factory, session, options);
+                foreach (var group in lines.GroupBy(l => l.V("voucher_key")))
+                {
+                    var command = await VoucherInput(db, actor, group.ToList(), Derived(batch.Key + "|voucher|" + group.Key));
+                    var id = await finance.PostVoucherCore(db, actor, command); documents.Add(id); foreach (var line in group) line.EntityId = id;
+                    var payload = JsonSerializer.Serialize(command); var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(actor.Branch + actor.Id + "voucher.post" + payload)));
+                    db.Operations.Add(Audit(command.OperationId,id,actor,"voucher.post",command,fingerprint));
+                    await db.SaveChangesAsync(); // Visible to later groups in this transaction; any failure rolls back the entire batch.
+                }
+                summary = $"Posted {documents.Count} balanced accounting vouchers."; break;
             case ImportType.Products:
             {
                 foreach (var line in lines)
@@ -516,6 +543,7 @@ public sealed class ImportService(IDbContextFactory<BusinessDb> factory, IActorS
         var rows = await db.ImportRows.Where(x => x.BatchId == batch.Id).OrderBy(x => x.RowNumber).ToListAsync();
         var lines = rows.Select(r => new Line { Row = r.RowNumber, Values = JsonSerializer.Deserialize<Dictionary<string, string>>(r.ValuesJson) ?? [] }).ToList();
         await Check(db, actor, batch.Type, lines);
+        if (IsStock(batch.Type)) await CheckStockCostDates(db,actor,lines,batch.AsAt!.Value);
         var failed = lines.Where(x => x.Errors.Count > 0).ToList();
         if (failed.Count > 0)
             throw new BusinessException(batch.Errors > 0

@@ -20,7 +20,8 @@
 
 <section class="panel">
     <h2>2. Choose your workbook</h2>
-    <label>Excel file (.xlsx)<InputFile OnChange="LoadFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled="@busy" /></label>
+    <label>Excel or exchange file (.xlsx, .json, .xml)<InputFile OnChange="LoadFile" accept=".xlsx,.json,.xml,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled="@busy" /></label>
+    <p class="hint">JSON uses Version 1, the selected Type and Rows with template field keys. Tally XML supports plain accounting vouchers with existing uniquely named ledgers. Unsupported inventory, bill and cost-centre details are refused. Conversion still requires mapping, validation and review before posting.</p>
     @if (sheets.Count > 0)
     {
         <div class="form-grid">
@@ -139,6 +140,7 @@
         using var stream = new MemoryStream();
         await args.File.OpenReadStream(10 * 1024 * 1024).CopyToAsync(stream);
         fileName = args.File.Name; var bytes = stream.ToArray();
+        if (Path.GetExtension(fileName).Equals(".json", StringComparison.OrdinalIgnoreCase) || Path.GetExtension(fileName).Equals(".xml", StringComparison.OrdinalIgnoreCase)) { bytes = await Imports.ConvertExchange(new(type, fileName, bytes)); fileName = Path.GetFileNameWithoutExtension(fileName) + "-review.xlsx"; }
         sheets = (await Imports.Inspect(fileName, bytes)).ToList();
         content = bytes;
         sheet = (sheets.FirstOrDefault(x => x.Name == "Data" && x.Rows > 0) ?? sheets.FirstOrDefault(x => x.Rows > 0) ?? sheets[0]).Name;
@@ -160,7 +162,7 @@
             history = (await Imports.History()).ToList();
         });
     }
-    private Task DownloadTemplate() => Run(async () => message = await Deliver($"Sierra Business - {Current!.Title} template.xlsx", await Imports.Template(type)));
+    private Task DownloadTemplate() => Run(async () => message = await Deliver($"Rokela Business Admin - {Current!.Title} template.xlsx", await Imports.Template(type)));
     private Task DownloadErrors() => Run(async () => message = await Deliver($"{Path.GetFileNameWithoutExtension(fileName)} - rows to fix.xlsx", await Imports.ErrorWorkbook(preview!.BatchId)));
     private async Task<string> Deliver(string name, byte[] bytes)
     {

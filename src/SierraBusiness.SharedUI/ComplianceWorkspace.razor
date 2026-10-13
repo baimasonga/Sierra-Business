@@ -1,4 +1,5 @@
 @inject IComplianceService Compliance
+@inject Microsoft.JSInterop.IJSRuntime JS
 @if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
 @if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
 
@@ -96,6 +97,12 @@ else if (tab == "Tax categories")
         }
     </section>
 }
+else if (tab == "Input tax")
+{
+    <InputTaxWorkspace Actor="Actor" @ref="inputTaxWorkspace" />
+}
+else if (tab == "Monthly GST record") { <TaxFilingWorkspace Actor="Actor" @ref="taxFilingWorkspace" /> }
+else if (tab == "GST relief") { <TaxReliefWorkspace Actor="Actor" @ref="taxReliefWorkspace" /> }
 else if (tab == "Tax return")
 {
     <section class="panel">
@@ -108,14 +115,14 @@ else if (tab == "Tax return")
         @if (taxReturn is { } r)
         {
             <div class="table-wrap"><table class="report-table">
-                <thead><tr><th></th><th class="numeric">Standard-rated</th><th class="numeric">Zero-rated</th><th class="numeric">Exempt</th><th class="numeric">@r.TaxName</th><th class="numeric">Documents</th></tr></thead>
-                <tbody>@foreach (var l in r.Lines) { <tr><td>@l.Section</td><td class="numeric">@Fmt(l.Standard)</td><td class="numeric">@Fmt(l.ZeroRated)</td><td class="numeric">@Fmt(l.Exempt)</td><td class="numeric">@Fmt(l.Tax)</td><td class="numeric">@l.Documents</td></tr> }</tbody>
+                <thead><tr><th></th><th class="numeric">Standard-rated</th><th class="numeric">Zero-rated</th><th class="numeric">Exempt</th><th class="numeric">Relieved</th><th class="numeric">@r.TaxName</th><th class="numeric">Documents</th></tr></thead>
+                <tbody>@foreach (var l in r.Lines) { <tr><td>@l.Section</td><td class="numeric">@Fmt(l.Standard)</td><td class="numeric">@Fmt(l.ZeroRated)</td><td class="numeric">@Fmt(l.Exempt)</td><td class="numeric">@Fmt(l.Relieved)</td><td class="numeric">@Fmt(l.Tax)</td><td class="numeric">@l.Documents</td></tr> }</tbody>
             </table></div>
             <p class="check-line">@(r.Check.Ok ? "✓ Reconciled" : "⚠ Difference") — @r.Check.Name @Fmt(r.Check.Report) against @r.Check.SourceName @Fmt(r.Check.Source)</p>
             <details><summary>@r.Documents.Count documents</summary>
                 <div class="table-wrap"><table class="report-table">
-                    <thead><tr><th>Date</th><th>Document</th><th>Type</th><th>Party</th><th class="numeric">Standard</th><th class="numeric">Zero</th><th class="numeric">Exempt</th><th class="numeric">Tax</th><th>Fiscal</th></tr></thead>
-                    <tbody>@foreach (var d in r.Documents) { <tr><td>@d.Date.ToString("dd MMM")</td><td>@d.Number</td><td>@d.Kind</td><td>@d.Party</td><td class="numeric">@Fmt(d.Standard)</td><td class="numeric">@Fmt(d.ZeroRated)</td><td class="numeric">@Fmt(d.Exempt)</td><td class="numeric">@Fmt(d.Tax)</td><td>@d.Fiscal</td></tr> }</tbody>
+                    <thead><tr><th>Date</th><th>Document</th><th>Type</th><th>Party</th><th class="numeric">Standard</th><th class="numeric">Zero</th><th class="numeric">Exempt</th><th class="numeric">Relieved</th><th class="numeric">Tax</th><th>Fiscal</th></tr></thead>
+                    <tbody>@foreach (var d in r.Documents) { <tr><td>@d.Date.ToString("dd MMM")</td><td>@d.Number</td><td>@d.Kind</td><td>@d.Party</td><td class="numeric">@Fmt(d.Standard)</td><td class="numeric">@Fmt(d.ZeroRated)</td><td class="numeric">@Fmt(d.Exempt)</td><td class="numeric">@Fmt(d.Relieved)</td><td class="numeric">@Fmt(d.Tax)</td><td>@d.Fiscal</td></tr> }</tbody>
                 </table></div>
             </details>
         }
@@ -190,7 +197,7 @@ else if (tab == "Fiscal")
     private bool CanTax => Actor.Permissions.Contains("accounting.write");
     private bool CanReturn => Actor.Permissions.Contains("accounting.read");
     private bool CanRegister => Actor.Permissions.Contains("sales.create") || Actor.Permissions.Contains("accounting.write");
-    private IEnumerable<string> Tabs => new[] { "Company", "Tax categories", CanReturn ? "Tax return" : "", "Documents", "Fiscal" }.Where(x => x.Length > 0);
+    private IEnumerable<string> Tabs => new[] { "Company", "Tax categories", CanReturn ? "Tax return" : "", CanReturn ? "Input tax" : "",CanReturn ? "Monthly GST record" : "",CanReturn ? "GST relief" : "", "Documents", "Fiscal" }.Where(x => x.Length > 0);
 
     // company
     private CompanyProfile profile = new();
@@ -226,7 +233,11 @@ else if (tab == "Fiscal")
     private string Fmt(decimal amount) => amount.ToString("N" + Math.Clamp(profile.Decimals, 0, 4));
 
     protected override Task OnInitializedAsync() => Run(async () => { ApplyProfile(await Compliance.Profile()); ApplyTemplate(await Compliance.Template()); });
-    private Task Open(string t) { tab = t; error = message = ""; return Run(LoadTab); }
+    private InputTaxWorkspace? inputTaxWorkspace;
+    private TaxFilingWorkspace? taxFilingWorkspace;
+    private TaxReliefWorkspace? taxReliefWorkspace;
+    public bool HasDraft => tab == "Input tax" ? inputTaxWorkspace?.HasDraft == true : tab == "Monthly GST record" ? taxFilingWorkspace?.HasDraft == true : tab == "GST relief" && taxReliefWorkspace?.HasDraft == true;
+    private async Task Open(string t) { if (tab == t) return; if (HasDraft && !await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS,"confirm","Discard unfinished tax changes? Choose Cancel to keep editing.")) return; tab = t; error = message = ""; await Run(LoadTab); }
     private async Task LoadTab()
     {
         if (tab == "Tax categories") products = await Compliance.ProductTax();

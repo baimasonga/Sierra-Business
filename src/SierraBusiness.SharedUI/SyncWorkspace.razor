@@ -8,7 +8,7 @@
         @if (s.Role == SyncRole.Branch) { <button class="primary" disabled="@busy" @onclick="SyncNow">@(busy ? "Syncing…" : "Sync now")</button> }</div>
         @if (s.Role == SyncRole.Off)
         {
-            <p>This installation works on its own. To join head office, enter head office's address and this branch's key below, then restart Sierra Business. Records made before joining are sent on the first sync.</p>
+            <p>This installation works on its own. To join head office, enter head office's address and this branch's key below, then restart Rokela Business Admin. Records made before joining are sent on the first sync.</p>
         }
         else if (s.Role == SyncRole.Branch)
         {
@@ -37,6 +37,7 @@
 }
 @if (settings is { } cfg)
 {
+    @if (cfg.Warning.Length > 0) { <div class="notice error" role="alert">@cfg.Warning</div> }
     <section class="panel"><h2>Connection to head office</h2>
         @if (!cfg.Editable) { <p class="hint">Set on the server in the Sync section of the configuration (Role, Server, Key, or Keys for each branch).</p> }
         else if (!Actor.Permissions.Contains("users.manage")) { <p class="hint">Only an owner or administrator can change the connection.</p> }
@@ -47,7 +48,7 @@
                 <label>Branch key @(cfg.HasKey ? "(saved — leave blank to keep)" : "")<input type="password" autocomplete="new-password" maxlength="200" @bind="key" /></label>
             </div>
             <button class="primary" disabled="@busy" @onclick="SaveSettings">Save connection</button>
-            <p class="hint">Leave the address blank to stop syncing. Restart Sierra Business after saving.</p>
+            <p class="hint">Leave the address blank to stop syncing. Restart Rokela Business Admin after saving.</p>
         }
     </section>
 }
@@ -60,7 +61,7 @@
     private async Task Run(Func<Task> action) { if (busy) return; busy = true; error = message = ""; try { await action(); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; } catch (Exception) { error = "The action could not complete. Try again."; } finally { busy = false; } }
     private Task SyncNow() => Run(async () => { var r = await Sync.SyncNow(); message = r.Message; await Load(); });
     private Task Review(Guid id) => Run(async () => { await Sync.MarkReviewed(id); await Load(); });
-    private Task SaveSettings() => Run(() => { store!.Save(server, key.Length == 0 ? null : key); key = ""; settings = store.Read(); message = "Connection saved. Restart Sierra Business to apply it."; return Task.CompletedTask; });
+    private Task SaveSettings() => Run(() => { store!.Save(server, key.Length == 0 ? null : key); key = ""; settings = store.Read(); message = "Connection saved. Restart Rokela Business Admin to apply it."; return Task.CompletedTask; });
     private static string RoleTitle(SyncRole role) => role switch { SyncRole.Branch => "Branch sync", SyncRole.Central => "Head office sync", _ => "Branch sync is off" };
     private static string Time(DateTimeOffset? t) => t is DateTimeOffset v ? v.ToLocalTime().ToString("dd MMM yyyy HH:mm") : "—";
 }

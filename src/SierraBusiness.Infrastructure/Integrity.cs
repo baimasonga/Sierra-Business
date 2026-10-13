@@ -49,7 +49,7 @@ public static class HistoryProtection
     private static bool IsSqlite(BusinessDb db) => db.Database.ProviderName == "Microsoft.EntityFrameworkCore.Sqlite";
     private static bool IsSqlServer(BusinessDb db) => db.Database.ProviderName == "Microsoft.EntityFrameworkCore.SqlServer";
     public static bool IsPostgres(DbContext db) => db.Database.ProviderName == "Npgsql.EntityFrameworkCore.PostgreSQL";
-    /// <summary>The PostgreSQL schema that holds every Sierra Business table (never "public", which Supabase publishes through its REST API).</summary>
+    /// <summary>The PostgreSQL schema that holds every Rokela Business Admin table (never "public", which Supabase publishes through its REST API).</summary>
     public const string PostgresSchema = "sierra";
 
     /// <summary>PostgreSQL stores times to the microsecond, .NET to 100 ns. Rounding before the seal is computed keeps seals verifiable after the

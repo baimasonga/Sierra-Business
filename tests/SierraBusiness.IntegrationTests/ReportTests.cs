@@ -9,6 +9,81 @@ namespace SierraBusiness.IntegrationTests;
 /// <summary>Specification Skill 21 (0.18.0): dashboard and reports reconcile to the ledger and stock movements, drill down to documents and page large registers.</summary>
 public sealed class ReportTests : IAsyncLifetime
 {
+    [Fact] public async Task LiveNotificationsAreRaisedAfterCommitAndNeverForRolledBackWrites()
+    {
+        var marker = new AsyncLocal<bool>(); marker.Value = true;
+        var notifications = 0;
+        void Changed() { if (marker.Value) notifications++; }
+        ChangeNotifier.Changed += Changed;
+        try
+        {
+            await using (var db = factory.CreateDbContext())
+            {
+                await using var transaction = await db.Database.BeginTransactionAsync();
+                db.LedgerAccounts.Add(new() { Id = 6001, Name = "Committed test account", Group = LedgerGroup.Expense });
+                await db.SaveChangesAsync(); Assert.Equal(0, notifications);
+                await transaction.CommitAsync(); Assert.Equal(1, notifications);
+            }
+            await using (var db = factory.CreateDbContext())
+            {
+                await using var transaction = await db.Database.BeginTransactionAsync();
+                db.LedgerAccounts.Add(new() { Id = 6002, Name = "Rolled back account", Group = LedgerGroup.Expense });
+                await db.SaveChangesAsync(); Assert.Equal(1, notifications);
+                await transaction.RollbackAsync(); Assert.Equal(1, notifications);
+            }
+            await using var read = factory.CreateDbContext(); Assert.Null(await read.LedgerAccounts.FindAsync(6002));
+        }
+        finally { marker.Value = false; ChangeNotifier.Changed -= Changed; }
+    }
+    [Fact] public async Task StockAgeingReconcilesAndPreservesAgeAcrossTransfersAndReversals()
+    {
+        var age = await reports.StockAgeing(today, 30);
+        var row = age.Rows.Single(r => r.ProductId == widget);
+        Assert.Equal((5m, 5m, 0m, false), (row.Quantity, row.Days60, row.UnknownAge, row.SlowMoving));
+        Assert.True(age.Rows.Single(r => r.ProductId == unsold).SlowMoving);
+        Assert.Equal((await reports.Stock(today)).Total, age.Value);
+        var inventory = new InventoryService(factory, session, Options.Create(new TradingOptions()));
+        await inventory.CreateLocation(new(Guid.NewGuid(), "STORE", "Stores"));
+        var transfer = await inventory.Transfer(new(Guid.NewGuid(), widget, "MAIN", "STORE", 2, null, null, null, "Move stock"));
+        age = await reports.StockAgeing(today, 30);
+        var moved = age.Rows.Single(r => r.ProductId == widget && r.Location == "STORE");
+        Assert.Equal((2m, 2m, true), (moved.Quantity, moved.Days60, moved.SlowMoving));
+        Assert.Equal(5m, age.Rows.Where(r => r.ProductId == widget).Sum(r => r.Quantity));
+        await business.Reverse(session.Actor, new(Guid.NewGuid(), transfer, "Move cancelled"));
+        age = await reports.StockAgeing(today, 30);
+        Assert.Single(age.Rows, r => r.ProductId == widget);
+        Assert.Equal(5m, age.Rows.Single(r => r.ProductId == widget).Days60);
+        var historical = await reports.StockAgeing(today.AddDays(-41));
+        Assert.Equal(10m, historical.Rows.Single(r => r.ProductId == widget).Days30);
+        await Assert.ThrowsAsync<BusinessException>(() => reports.StockAgeing(today, 0));
+        session.Actor = new("clerk", "OTHER", new HashSet<string> { "business.read" });
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => reports.StockAgeing(today));
+    }
+
+    [Fact] public async Task ComparativeStatementsAlignLossWithProfitAndExportBothPeriods()
+    {
+        var options = Options.Create(new TradingOptions());
+        var finance = new FinanceService(factory, session, options);
+        var previous = new DateOnly(today.Year - 1, 1, 1);
+        await finance.PostVoucher(new(Guid.NewGuid(), VoucherType.Payment, previous, "Prior expense", [new(5100, 10, 0), new(1000, 0, 10)], []));
+        var statements = new StatementsService(factory, session, options);
+        var query = new ComparisonRequest("Profit and loss", new(today.Year, 1, 1), today, previous, previous.AddYears(1).AddDays(-1));
+        var result = await statements.Compare(query);
+        var net = result.Rows.Single(r => r.Section == "Result");
+        Assert.Equal((850m, -10m, 860m, 8600m), (net.Current, net.Previous, net.Change, net.ChangePercent));
+        Assert.Null(result.Rows.Single(r => r.AccountCode == 4000).ChangePercent);
+        foreach (var name in new[] { "Profit and loss", "Balance sheet", "Cash flow", "Funds flow" })
+        {
+            using var workbook = DocumentFormat.OpenXml.Packaging.SpreadsheetDocument.Open(new MemoryStream(await statements.ExportComparison(query with { Statement = name })), false);
+            Assert.Equal("Comparison", workbook.WorkbookPart!.Workbook!.Sheets!.Elements<DocumentFormat.OpenXml.Spreadsheet.Sheet>().Single().Name!.Value);
+            Assert.Contains("Current", workbook.WorkbookPart.WorksheetParts.Single().Worksheet!.InnerText);
+        }
+        await Assert.ThrowsAsync<BusinessException>(() => statements.Compare(query with { ComparisonFrom = today, ComparisonTo = previous }));
+        await Assert.ThrowsAsync<BusinessException>(() => statements.Compare(query with { Statement = "Unsupported" }));
+        session.Actor = new("clerk", "FREETOWN", new HashSet<string> { "business.read" });
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => statements.Compare(query));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => statements.ExportComparison(query));
+    }
     private readonly string path = Path.Combine(Path.GetTempPath(), $"sierra-reports-{Guid.NewGuid():N}.db");
     private Factory factory = null!; private BusinessService business = null!; private ReportService reports = null!;
     private readonly Session session = new(); private readonly DateOnly today = DateOnly.FromDateTime(DateTime.UtcNow);

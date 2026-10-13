@@ -1,0 +1,143 @@
+@inject IStatementsService Statements
+@inject Microsoft.JSInterop.IJSRuntime JS
+@inject IServiceProvider Services
+<section class="panel" aria-label="Group company reporting">
+    <h2>Group company reporting</h2>
+    <p class="hint">Export a snapshot while signed in to each company, then load the members here. Reports use NLe and matching periods. Loaded files are reporting copies; review their origin before using them. Group adjustments apply only to this report and are shown separately from member balances.</p>
+    @if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+    @if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+    <fieldset disabled="@busy">
+        <legend>Export this company</legend>
+        <div class="form-grid"><label>Company name<input maxlength="120" @bind="company" /></label><label>Snapshot from<input type="date" @bind="from" /></label><label>Snapshot to<input type="date" @bind="to" /></label></div>
+        <button class="secondary" @onclick="ExportSnapshot">Export company snapshot</button>
+    </fieldset>
+    <fieldset disabled="@busy">
+        <legend>Build a group report</legend>
+        <label>Load company snapshot or saved group (.json)<InputFile OnChange="Import" accept=".json,application/json" /></label>
+        @if (members.Count == 0) { <p>Load snapshots from at least two companies to begin.</p> }
+        @foreach (var member in members)
+        {
+            <div class="panel-title"><p><strong>@member.Company</strong> / @member.Branch — @member.From.ToString("dd MMM yyyy") to @member.To.ToString("dd MMM yyyy")<br /><small>Exported @member.Exported.ToUniversalTime().ToString("dd MMM yyyy HH:mm 'UTC'")</small></p><button class="secondary" @onclick="() => Remove(member)">Remove @member.Company</button></div>
+        }
+        @if (members.Count > 0)
+        {
+            <details><summary>Map member accounts to group accounts</summary>
+                <p class="hint">Use a common group code and name for equivalent accounts. Account types must agree. Separate accounts with different meanings.</p>
+                <div class="table-wrap"><table><thead><tr><th>Company / account</th><th>Type</th><th>Group code</th><th>Group name</th></tr></thead><tbody>
+                @foreach (var map in maps)
+                {
+                    <tr><td>@map.Company / @map.SourceCode @map.SourceName</td><td>@map.Nature</td><td><input type="number" min="1" aria-label="@($"Group code for {map.Company} {map.SourceCode}")" @bind="map.Code" @bind:after="Invalidate" /></td><td><input maxlength="120" aria-label="@($"Group name for {map.Company} {map.SourceCode}")" @bind="map.Name" @bind:after="Invalidate" /></td></tr>
+                }
+                </tbody></table></div>
+            </details>
+        }
+        <label>Group statement<select @bind="kind" @bind:after="Invalidate"><option>Profit and loss</option><option>Balance sheet</option></select></label>
+        @if (members.Count >= 2)
+        {
+            <details><summary>Intercompany eliminations and group adjustments</summary><p class="hint">Enter reviewed debit/credit adjustments using mapped group accounts. Member books stay unchanged. Use a unique reference and describe the balances or transactions being eliminated.</p>
+                <div class="form-grid"><label>Adjustment reference<input maxlength="80" @bind="adjustmentReference" /></label><label>Adjustment date<input type="date" @bind="adjustmentDate" /></label><label>Adjustment reason<input maxlength="200" @bind="adjustmentReason" /></label><label>Group debit account<select @bind="adjustmentDebit"><option value="0">Choose group account</option>@foreach (var a in maps.GroupBy(m => m.Code).Select(g => g.First()).OrderBy(m => m.Code)) { <option value="@a.Code">@a.Code · @a.Name</option> }</select></label><label>Group credit account<select @bind="adjustmentCredit"><option value="0">Choose group account</option>@foreach (var a in maps.GroupBy(m => m.Code).Select(g => g.First()).OrderBy(m => m.Code)) { <option value="@a.Code">@a.Code · @a.Name</option> }</select></label><label>Adjustment amount (NLe)<input type="number" min="0.01" step="0.01" @bind="adjustmentAmount" /></label></div>
+                <button class="secondary" @onclick="AddAdjustment">Add reviewed group adjustment</button>
+                @foreach (var a in adjustments) { <p><strong>@a.Reference</strong> · @a.Date · @a.Reason<br />@string.Join("; ",a.Lines.Select(l => $"{l.AccountCode}: debit {l.Debit:N2}, credit {l.Credit:N2}")) <button class="secondary" @onclick="() => RemoveAdjustment(a)">Remove @a.Reference</button></p> }
+            </details>
+        }
+        @if (members.Count >= 2)
+        {
+            <details><summary>Match reciprocal intercompany accounts</summary><p>Select the two dedicated intercompany accounts. Only exact opposite balances produce a proposal. Review it before adding the elimination; differences require investigation.</p><div class="form-grid">
+            <label>Elimination reference<input maxlength="80" @bind="pairReference" @bind:after="ClearProposals" /></label><label>Reason<input maxlength="200" @bind="pairReason" @bind:after="ClearProposals" /></label>
+            <label>Debit-side company<select @bind="pairDebitSource" @bind:after="ClearProposals"><option value="@Guid.Empty">Choose company</option>@foreach (var m in members) { <option value="@m.SourceId">@m.Company</option> }</select></label><label>Debit-side account<select @bind="pairDebitAccount" @bind:after="ClearProposals"><option value="0">Choose account</option>@foreach (var a in members.FirstOrDefault(m => m.SourceId == pairDebitSource)?.Accounts.Where(a => a.Nature == (kind == "Profit and loss" ? LedgerGroup.Expense : LedgerGroup.Asset)) ?? []) { <option value="@a.Code">@a.Code · @a.Name</option> }</select></label>
+            <label>Credit-side company<select @bind="pairCreditSource" @bind:after="ClearProposals"><option value="@Guid.Empty">Choose company</option>@foreach (var m in members) { <option value="@m.SourceId">@m.Company</option> }</select></label><label>Credit-side account<select @bind="pairCreditAccount" @bind:after="ClearProposals"><option value="0">Choose account</option>@foreach (var a in members.FirstOrDefault(m => m.SourceId == pairCreditSource)?.Accounts.Where(a => a.Nature == (kind == "Profit and loss" ? LedgerGroup.Income : LedgerGroup.Liability)) ?? []) { <option value="@a.Code">@a.Code · @a.Name</option> }</select></label></div>
+            <button class="secondary" @onclick="ReviewPair">Review reciprocal balances</button>@foreach (var proposal in proposals) { <p>@proposal.Message Debit @proposal.DebitBalance.ToString("N2") · Credit @proposal.CreditBalance.ToString("N2")</p>@if (proposal.Adjustment is not null) { <button class="secondary" @onclick="() => AcceptPair(proposal)">Add reviewed elimination @proposal.Reference</button> } }</details>
+        }
+        <button class="primary" disabled="@(members.Count < 2)" @onclick="Build">Build group report</button>
+        <button class="secondary" disabled="@(members.Count < 2)" @onclick="SaveGroup">Save group and mappings</button>
+        @if (report is not null) { <button class="secondary" @onclick="ExportReport">Export group report to Excel</button> }
+    </fieldset>
+    @if (report is { } r)
+    {
+        <h3>@r.Statement — @r.From.ToString("dd MMM yyyy") to @r.To.ToString("dd MMM yyyy")</h3>
+        <div class="table-wrap"><table class="report-table"><thead><tr><th>Account / measure</th>@foreach (var m in r.Members) { <th class="numeric">@m.Company / @m.Branch</th> }@if (r.HasAdjustments) { <th class="numeric">Eliminations / adjustments</th> }<th class="numeric">Group total (NLe)</th></tr></thead><tbody>
+        @foreach (var row in r.Rows) { <tr class="@(row.Total ? "total-row" : "")"><td>@row.Section: @row.Label</td>@foreach (var value in row.Contributions) { <td class="numeric">@value.ToString("N2")</td> }<td class="numeric">@row.Amount.ToString("N2")</td></tr> }
+        </tbody></table></div>
+        @if (r.Statement == "Balance sheet") { <p class="check-line">Balance sheet difference: @r.BalanceDifference.ToString("N2") NLe</p> }
+    }
+</section>
+@code {
+    private string company = "", kind = "Profit and loss", error = "", message = "";
+    private DateOnly from = new(DateTime.Now.Year, 1, 1), to = DateOnly.FromDateTime(DateTime.Now);
+    private bool busy;
+    private readonly List<CompanyReportSnapshot> members = [];
+    private readonly List<Mapping> maps = [];
+    private readonly List<ConsolidationAdjustment> adjustments = []; private string adjustmentReference = "", adjustmentReason = ""; private DateOnly adjustmentDate = DateOnly.FromDateTime(DateTime.Now); private int adjustmentDebit, adjustmentCredit; private decimal adjustmentAmount;
+    private ConsolidatedStatement? report;
+    private string pairReference = "", pairReason = ""; private Guid pairDebitSource, pairCreditSource; private int pairDebitAccount, pairCreditAccount; private IReadOnlyList<IntercompanyProposal> proposals = [];
+    private void ClearProposals() => proposals = [];
+    private Task ReviewPair() => Run(async () => proposals = await Statements.ReviewIntercompany(new(Query, [new(pairReference, pairDebitSource, pairDebitAccount, pairCreditSource, pairCreditAccount, pairReason)])));
+    private void AcceptPair(IntercompanyProposal proposal) { if (proposal.Adjustment is null) return; if (adjustments.Any(a => a.Reference.Equals(proposal.Reference, StringComparison.OrdinalIgnoreCase))) { error = "An adjustment with this reference already exists."; return; } adjustments.Add(proposal.Adjustment); Invalidate(); message = "Reviewed reciprocal elimination added. Build the report to check group totals."; }
+    private sealed class Mapping
+    {
+        public Guid SourceId { get; init; } public int SourceCode { get; init; } public string Company { get; init; } = ""; public string SourceName { get; init; } = ""; public LedgerGroup Nature { get; init; }
+        public int Code { get; set; } public string Name { get; set; } = "";
+    }
+    private ConsolidationRequest Query => new(kind, members.ToArray(), maps.Select(m => new ConsolidationMapping(m.SourceId, m.SourceCode, m.Code, m.Name)).ToArray(), adjustments.Count == 0 ? null : adjustments.ToArray());
+    private void Invalidate() { report = null; message = ""; ClearProposals(); }
+    private void Remove(CompanyReportSnapshot member) { members.Remove(member); maps.RemoveAll(m => m.SourceId == member.SourceId); Invalidate(); }
+    private async Task Run(Func<Task> action)
+    {
+        if (busy) return; busy = true; error = message = "";
+        try { await action(); }
+        catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException or System.Text.Json.JsonException or IOException or ArgumentException) { error = ex is System.Text.Json.JsonException ? "That file is not a valid company snapshot. Export it again from Group company reporting." : ex.Message; }
+        finally { busy = false; }
+    }
+    private Task ExportSnapshot() => Run(async () =>
+    {
+        var snapshot = await Statements.CompanySnapshot(company, from, to);
+        var bytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(snapshot);
+        message = await Download($"company-snapshot-{snapshot.SourceId:N}-{to:yyyy-MM-dd}.json", bytes, "application/json") + " Load it with the other company snapshots for the same period.";
+    });
+    private Task Import(InputFileChangeEventArgs args) => Run(async () =>
+    {
+        await using var stream = args.File.OpenReadStream(5 * 1024 * 1024);
+        using var json = await System.Text.Json.JsonDocument.ParseAsync(stream);
+        if (json.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object && json.RootElement.TryGetProperty("Members", out _))
+        {
+            var saved = System.Text.Json.JsonSerializer.Deserialize<ConsolidationRequest>(json.RootElement.GetRawText()) ?? throw new BusinessException("The saved group file is empty.");
+            var validated = await Statements.Consolidate(saved);
+            members.Clear(); members.AddRange(validated.Members); maps.Clear();
+            foreach (var m in members) AddMaps(m, saved.Mappings);
+            adjustments.Clear(); adjustments.AddRange(saved.Adjustments ?? []); adjustmentDate = members[0].To;
+            kind = validated.Statement; Invalidate(); message = "Saved group and mappings loaded. Build the report to review its totals."; return;
+        }
+        if (members.Count >= 20) throw new BusinessException("Use at most twenty member companies.");
+        var member = System.Text.Json.JsonSerializer.Deserialize<CompanyReportSnapshot>(json.RootElement.GetRawText()) ?? throw new BusinessException("The snapshot file is empty.");
+        await Statements.ValidateCompanySnapshot(member);
+        if (members.Any(m => m.SourceId == member.SourceId)) throw new BusinessException("This company source is already loaded. Remove it before loading a newer snapshot.");
+        if (members.Any(m => m.From != member.From || m.To != member.To)) throw new BusinessException("Export every member for the same start and end dates.");
+        members.Add(member);
+        if (members.Count == 1) adjustmentDate = member.To;
+        AddMaps(member, []);
+        Invalidate(); message = $"{member.Company} loaded. Review account mapping, then build the report.";
+    });
+    private void AddMaps(CompanyReportSnapshot member, IReadOnlyList<ConsolidationMapping> saved)
+    {
+        foreach (var a in member.Accounts)
+        {
+            var match = saved.SingleOrDefault(m => m.SourceId == member.SourceId && m.SourceCode == a.Code);
+            maps.Add(new Mapping { SourceId = member.SourceId, SourceCode = a.Code, Company = member.Company, SourceName = a.Name, Nature = a.Nature, Code = match?.GroupCode ?? a.Code, Name = match?.GroupName ?? a.Name });
+        }
+    }
+    private Task SaveGroup() => Run(async () =>
+    {
+        var query = Query; await Statements.Consolidate(query); var bytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(query);
+        if (bytes.Length > 5 * 1024 * 1024) throw new BusinessException("The saved group exceeds the 5 MB file limit. Use fewer member accounts or companies.");
+        message = await Download("group-reporting-set.json", bytes, "application/json") + " Load this file to restore the reporting set.";
+    });
+    private Task Build() => Run(async () => { report = null; report = await Statements.Consolidate(Query); message = "Group report built from the loaded snapshots."; });
+    private Task AddAdjustment() => Run(async () => { var entry = new ConsolidationAdjustment(adjustmentReference,adjustmentDate,adjustmentReason,[new(adjustmentDebit,adjustmentAmount,0),new(adjustmentCredit,0,adjustmentAmount)]); await Statements.Consolidate(Query with { Adjustments = [..adjustments,entry] }); adjustments.Add(entry); Invalidate(); adjustmentReference = adjustmentReason = ""; adjustmentAmount = 0; message = "Reviewed group adjustment added."; });
+    private void RemoveAdjustment(ConsolidationAdjustment entry) { adjustments.Remove(entry); Invalidate(); }
+    private Task ExportReport() => Run(async () => { var query = Query; var bytes = await Statements.ExportConsolidation(query); message = await Download($"group-report-{query.Members[0].To:yyyy-MM-dd}.xlsx", bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); });
+    private async Task<string> Download(string name, byte[] bytes, string type)
+    {
+        if (Services.GetService(typeof(IFileExport)) is IFileExport export) return "Saved to " + await export.Save(name, bytes) + ".";
+        await Microsoft.JSInterop.JSRuntimeExtensions.InvokeVoidAsync(JS, "sierraDownload", name, Convert.ToBase64String(bytes), type); return "Download prepared: " + name + ".";
+    }
+}

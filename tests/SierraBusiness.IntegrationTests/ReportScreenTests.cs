@@ -12,6 +12,31 @@ namespace SierraBusiness.IntegrationTests;
 /// <summary>Drives the dashboard and reports: drill from a figure to its documents, and live refresh when someone posts.</summary>
 public sealed class ReportScreenTests : IAsyncLifetime
 {
+    [Fact] public async Task ReportPreferencesRestoreForTheUserAndNeverStorePartyNamesOrAmounts()
+    {
+        var key = session.Actor.Id + "." + session.Actor.Branch + ".Reports";
+        var json = System.Text.Json.JsonSerializer.Serialize(new { From = today, To = today, View = "Stock ageing & slow-moving", Grouping = SalesGrouping.Day, Account = 0, Kind = "" });
+        context.JSInterop.Setup<string>("sierraPreferenceRead", i => i.Arguments[0]!.ToString() == key).SetResult(json);
+        var screen = context.Render<ReportsWorkspace>(p => p.Add(x => x.Actor, session.Actor).Add(x => x.StartView, "Reports"));
+        await Eventually(screen, () => screen.Markup.Contains("Age buckets show"), "saved report restored");
+        await screen.InvokeAsync(() => screen.FindAll("button").Single(b => b.TextContent == "Save report settings").Click());
+        await Eventually(screen, () => screen.Markup.Contains("Report settings saved"), "settings saved");
+        var saved = context.JSInterop.Invocations.Single(i => i.Identifier == "sierraPreferenceWrite");
+        Assert.Equal(key, saved.Arguments[0]);
+        Assert.DoesNotContain("Connaught", saved.Arguments[1]!.ToString());
+        Assert.DoesNotContain("600", saved.Arguments[1]!.ToString());
+        await screen.InvokeAsync(() => screen.FindAll("button").Single(b => b.TextContent == "Reset saved settings").Click());
+        await Eventually(screen, () => screen.Markup.Contains("Saved report settings cleared"), "settings reset");
+    }
+    [Fact] public async Task StockAgeingTabDrillsToMovements()
+    {
+        var screen = context.Render<ReportsWorkspace>(p => p.Add(x => x.Actor, session.Actor).Add(x => x.StartView, "Reports"));
+        await Eventually(screen, () => screen.Markup.Contains("Sales by"), "report loading");
+        await screen.InvokeAsync(() => screen.FindAll("button").Single(b => b.TextContent == "Stock ageing & slow-moving").Click());
+        await Eventually(screen, () => screen.Markup.Contains("Age buckets show") && screen.Markup.Contains("WID-1"), "stock ageing");
+        await screen.InvokeAsync(() => screen.FindAll("button").Single(b => b.TextContent.Contains("WID-1")).Click());
+        await Eventually(screen, () => screen.Markup.Contains("Serial / batch") && screen.Markup.Contains("Connaught Hospital"), "movement drill-down");
+    }
     private readonly string path = Path.Combine(Path.GetTempPath(), $"sierra-report-ui-{Guid.NewGuid():N}.db");
     private readonly BunitContext context = new();
     private Factory factory = null!; private BusinessService business = null!;
@@ -20,6 +45,9 @@ public sealed class ReportScreenTests : IAsyncLifetime
     private Guid widget;
     public async Task InitializeAsync()
     {
+        context.JSInterop.Setup<string?>(i => i.Identifier == "sierraPreferenceRead", isCatchAllHandler: true).SetResult(null);
+        context.JSInterop.SetupVoid("sierraPreferenceWrite", _ => true).SetVoidResult();
+        context.JSInterop.SetupVoid("sierraPreferenceRemove", _ => true).SetVoidResult();
         factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite($"Data Source={path};Pooling=False").Options);
         await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db);
         var options = Options.Create(new TradingOptions());

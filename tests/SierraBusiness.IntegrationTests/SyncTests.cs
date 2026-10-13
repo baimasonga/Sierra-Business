@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Hosting;
 using System.Text.Json;
+using System.Net.Http.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -187,6 +188,13 @@ public sealed class SyncTests : IAsyncLifetime
         await Assert.ThrowsAsync<PermanentJobException>(() => wrong.Pull("FREETOWN", 0, 10));
         using var anonymous = new HttpClient();
         Assert.Equal(System.Net.HttpStatusCode.Unauthorized, (await anonymous.GetAsync(address + "/api/sync/pull?after=0")).StatusCode);
+        anonymous.DefaultRequestHeaders.Add("X-Sierra-Branch", "FREETOWN");
+        anonymous.DefaultRequestHeaders.Authorization = new("Bearer", FreetownKey);
+        Assert.Equal(426, (int)(await anonymous.GetAsync(address + "/api/sync/pull?after=0")).StatusCode);
+        Assert.Equal(426, (int)(await anonymous.PostAsJsonAsync(address + "/api/sync/push", new SyncPushRequest("FREETOWN", []))).StatusCode);
+        anonymous.DefaultRequestHeaders.Add(SyncContract.ProtocolHeader, "999");
+        anonymous.DefaultRequestHeaders.Add(SyncContract.SchemaHeader, "1");
+        Assert.Equal(426, (int)(await anonymous.GetAsync(address + "/api/sync/pull?after=0")).StatusCode);
         await app.StopAsync();
     }
 

@@ -1,0 +1,12 @@
+@inject IServiceProvider Services
+@if (Actor.Permissions.Contains("accounting.read") && Actor.Permissions.Contains("accounting.write") && available)
+{
+    <label>Reviewed GST relief certificate<select value="@(Value?.ToString() ?? "")" @onchange="Change" disabled="@Disabled"><option value="">No relief certificate</option>@if (Value is Guid old && !Eligible.Any(g => g.Id == old)) { <option value="@old">Selected certificate needs recipient/date review</option> }@foreach (var g in Eligible) { <option value="@g.Id">@g.AuthorityReference · remaining @g.Remaining.ToString("N2") NLe</option> }</select><span class="hint">Applies to this registered recipient's standard-rated invoice lines, within the certificate dates and remaining branch-approved ceiling.</span></label>
+}
+@code {
+    [Parameter] public Actor Actor { get; set; } = default!; [Parameter] public string Customer { get; set; } = ""; [Parameter] public DateOnly Date { get; set; } [Parameter] public Guid? Value { get; set; } [Parameter] public EventCallback<Guid?> ValueChanged { get; set; } [Parameter] public bool Disabled { get; set; }
+    private IReadOnlyList<TaxReliefGrantView> grants = []; private bool available;
+    private IEnumerable<TaxReliefGrantView> Eligible => grants.Where(g => g.Customer.Equals(Customer.Trim(),StringComparison.OrdinalIgnoreCase) && g.From <= Date && g.Through >= Date && g.Remaining > 0);
+    protected override async Task OnInitializedAsync() { if (Actor.Permissions.Contains("accounting.read") && Actor.Permissions.Contains("accounting.write") && Services.GetService(typeof(IComplianceService)) is IComplianceService service) { try { grants = await service.ReliefGrants(); available = true; } catch (UnauthorizedAccessException) { } } }
+    private Task Change(ChangeEventArgs e) => ValueChanged.InvokeAsync(Guid.TryParse(e.Value?.ToString(),out var id) ? id : null);
+}

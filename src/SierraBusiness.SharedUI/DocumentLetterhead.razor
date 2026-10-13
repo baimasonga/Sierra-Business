@@ -24,7 +24,7 @@
     [Parameter] public bool TaxInvoice { get; set; }
     private CompanyProfile Company => Setup.Company;
     private DocumentTemplate Template => Setup.Template;
-    private string Name => Company.LegalName.Length > 0 ? Company.LegalName : CompanyName.Length > 0 ? CompanyName : "Sierra Business";
+    private string Name => Company.LegalName.Length > 0 ? Company.LegalName : CompanyName.Length > 0 ? CompanyName : "Rokela Business Admin";
     private string DocumentTitle => TaxInvoice && Company.TaxRegistered ? Company.TaxInvoiceTitle : Title;
     private string Contact => string.Join(" · ", new[] { Company.Address, Company.Phone, Company.Email }.Where(x => x.Length > 0));
     private string Identifiers => string.Join(" · ", Company.Ids.Where(x => x.OnInvoices).Select(x => $"{x.Label}: {x.Value}"));

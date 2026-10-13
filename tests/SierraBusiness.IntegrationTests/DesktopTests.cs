@@ -11,6 +11,29 @@ namespace SierraBusiness.IntegrationTests;
 
 public sealed class DesktopTests : IAsyncLifetime
 {
+    [WindowsFact] public async Task DocumentRecoveryIsEncryptedScopedAndSuppressesCommittedCommands()
+    {
+        var actor = await CreateAndSignIn();
+        var recovery = services.GetRequiredService<IDocumentDraftRecovery>();
+        await recovery.Clear("orders"); await recovery.Clear("tenders");
+        Assert.False(Directory.Exists(Path.Combine(directory, "drafts")));
+        var operation = Guid.NewGuid();
+        var draft = new DocumentDraft("tenders", operation, "{\"notes\":\"Confidential supplier cost 123456\"}");
+        await recovery.Save(draft);
+        Assert.Equal(draft, await recovery.Read("tenders"));
+        Assert.Null(await recovery.Read("orders"));
+        var file = Assert.Single(Directory.GetFiles(Path.Combine(directory, "drafts"), "*.document-draft"));
+        Assert.DoesNotContain("Confidential", System.Text.Encoding.UTF8.GetString(await File.ReadAllBytesAsync(file)));
+        await services.GetRequiredService<IBusinessService>().AddProduct(actor, new(operation, "RECOVERY-COMMITTED", "Already saved", "General", "piece", 1, TrackingMode.Quantity));
+        Assert.Null(await recovery.Read("tenders"));
+        await recovery.Save(draft with { OperationId = Guid.NewGuid() });
+        await File.WriteAllBytesAsync(file, [1, 2, 3]);
+        await Assert.ThrowsAsync<BusinessException>(() => recovery.Read("tenders"));
+        await recovery.Clear("tenders"); Assert.Null(await recovery.Read("tenders"));
+        Accounts.SignOut();
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => recovery.Save(draft));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => recovery.Clear("tenders"));
+    }
     private readonly string directory = Path.Combine(Path.GetTempPath(), "sierra-desktop-tests-" + Guid.NewGuid().ToString("N"));
     private ServiceProvider services = default!;
     private readonly TestClock clock = new();
@@ -35,6 +58,75 @@ public sealed class DesktopTests : IAsyncLifetime
     {
         await Accounts.CreateOwner("owner@example.test", Password, Password);
         return await Accounts.SignIn("owner@example.test", Password);
+    }
+    [WindowsFact] public void SyncKeysMigrateAreEncryptedAndCorruptionRequiresReentry()
+    {
+        const string key = "secret-branch-key-0123456789";
+        var path = Path.Combine(directory, "sync-settings.json");
+        File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(new { Server = "https://hq.example", Key = key }));
+        var settings = new DesktopSyncConfiguration(directory);
+        Assert.Equal(key, settings.Load().Key);
+        Assert.DoesNotContain(key, File.ReadAllText(path));
+        Assert.Equal(key, new DesktopSyncConfiguration(directory).Load().Key);
+        settings.Save("https://new-hq.example", null);
+        Assert.Equal(key, settings.Load().Key);
+        File.WriteAllText(path, "{\"Server\":\"https://hq.example\",\"ProtectedKey\":\"broken!\"}");
+        Assert.Equal(SyncRole.Branch, settings.Load().Role);
+        Assert.False(settings.Read().HasKey);
+        Assert.Contains("cannot be unlocked", settings.Read().Warning);
+        settings.Save("https://hq.example", key);
+        Assert.Equal("", settings.Read().Warning);
+        settings.Save("", null);
+        Assert.False(settings.Read().HasKey);
+        Assert.DoesNotContain(key, File.ReadAllText(path));
+    }
+    [Fact] public async Task RecoveryClearBeforeFirstSaveIsSafeAndStillRequiresSignIn()
+    {
+        await CreateAndSignIn();
+        var recovery = services.GetRequiredService<ISaleDraftRecovery>();
+        Assert.False(Directory.Exists(Path.Combine(directory, "drafts")));
+        await recovery.Clear();
+        await recovery.Clear();
+        Assert.Null(await recovery.Read());
+        Assert.False(Directory.Exists(Path.Combine(directory, "drafts")));
+        Accounts.SignOut();
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => recovery.Clear());
+    }
+    [WindowsFact] public async Task EmptyRecoveryCanBeClearedBeforeTheDraftFolderExists()
+    {
+        await CreateAndSignIn();
+        var recovery = services.GetRequiredService<ISaleDraftRecovery>();
+        Assert.False(Directory.Exists(Path.Combine(directory, "drafts")));
+        await recovery.Clear(); await recovery.Clear();
+        Assert.Null(await recovery.Read());
+        Assert.False(Directory.Exists(Path.Combine(directory, "drafts")));
+    }
+    [WindowsFact] public async Task RecoveryIsPrivateEncryptedAndDoesNotRecoverCommittedSales()
+    {
+        var actor = await CreateAndSignIn();
+        var recovery = services.GetRequiredService<ISaleDraftRecovery>();
+        var business = services.GetRequiredService<IBusinessService>();
+        var product = await business.AddProduct(actor, new(Guid.NewGuid(), "RECOVER", "Recovery product", "General", "piece", 10, TrackingMode.Quantity, MinimumPrice: 1));
+        var date = DateOnly.FromDateTime(DateTime.UtcNow);
+        await business.Post(actor, new(Guid.NewGuid(), DocumentKind.Receipt, "Supplier", date, [new(product, 2, 5)], null));
+        var command = new TradeCommand(Guid.NewGuid(), DocumentKind.Sale, "Walk-in", date, [new(product, 1, 10)], PaymentMethod.Cash);
+        var draft = new RecoverableSaleDraft(command, new(product, 1, 10, 1, "", "", null, "RECOVER", ""));
+        await recovery.Save(draft);
+        var file = Assert.Single(Directory.GetFiles(Path.Combine(directory, "drafts")));
+        Assert.DoesNotContain("Walk-in", System.Text.Encoding.UTF8.GetString(File.ReadAllBytes(file)));
+        var read = await recovery.Read(); Assert.Equal(command.OperationId, read!.Document.OperationId);
+        Assert.Equal(product, Assert.Single(read.Document.Lines).ProductId);
+        Accounts.SignOut();
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => recovery.Read());
+        await Accounts.SignIn("owner@example.test", Password);
+        await business.Post(actor, command); // simulate crash immediately after commit
+        Assert.Null(await recovery.Read());
+        Assert.False(File.Exists(file));
+        var holdOperation = Guid.NewGuid();
+        var heldDraft = draft with { Document = command with { OperationId = Guid.NewGuid() }, Entry = draft.Entry with { HoldOperationId = holdOperation } };
+        await recovery.Save(heldDraft);
+        await services.GetRequiredService<IPosService>().Hold(new(holdOperation, "Crash-safe hold", command with { OperationId = holdOperation }, null));
+        Assert.Null(await recovery.Read()); // a committed hold is recovered through held sales only
     }
     [Fact] public async Task FirstRunCreatesOwnerOnceAndSupportsLocalTrading()
     {

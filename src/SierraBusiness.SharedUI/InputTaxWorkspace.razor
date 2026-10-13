@@ -1,0 +1,33 @@
+@using Microsoft.JSInterop
+@inject IComplianceService Compliance
+@inject IFinanceService Finance
+@inject IJSRuntime JS
+@inject IServiceProvider Services
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+@if (accounts is not null)
+{
+    @if (Actor.Permissions.Contains("accounting.write"))
+    {
+        <section class="panel"><h2>Reviewed input-tax recovery</h2><p>Use an expense payment or a direct average/FIFO goods receipt whose recorded gross price includes GST. Stock claims must be recorded before goods move out or are written down; reverse an active stock claim before a supplier return. The allowable amount moves to a custom recovery asset. Keep the supplier invoice or customs evidence with its source record.</p><div class="form-grid">
+        <label class="check"><input type="checkbox" @bind="stock" @bind:after="ChooseBasis" />GST is included in a direct stock receipt</label><label>Source expense payment or goods receipt<select @bind="payment"><option value="@Guid.Empty">Choose source</option>@foreach (var p in sources.Where(p => p.Stock == stock)) { <option value="@p.Id">@p.Date · @p.Number · @p.Party · @p.Amount.ToString("N2")</option> }</select></label>
+        <label>Claim date<input type="date" @bind="date" /></label><label>Supplier name<input maxlength="160" @bind="supplier" /></label><label>Supplier TIN or customs identifier<input maxlength="80" @bind="tin" /></label><label>Invoice or customs reference<input maxlength="80" @bind="reference" /></label><label class="check"><input type="checkbox" @bind="imported" />Imported input</label>
+        <label>Purchase excluding GST<input type="number" min="0.01" step="0.01" @bind="net" /></label><label>GST paid<input type="number" min="0.01" step="0.01" @bind="tax" /></label><label>Reviewed allowable GST<input type="number" min="0.01" step="0.01" @bind="allowable" /></label>
+        @if (!stock) { <label>Original custom expense<select @bind="expense">@foreach (var a in accounts.Accounts.Where(a => !a.Control && a.Group == LedgerGroup.Expense)) { <option value="@a.Code">@a.Code · @a.Name</option> }</select></label> }<label>Custom recovery asset<select @bind="recovery">@foreach (var a in accounts.Accounts.Where(a => !a.Control && !a.CashOrBank && a.Group == LedgerGroup.Asset)) { <option value="@a.Code">@a.Code · @a.Name</option> }</select></label><label>Allowability review reason<textarea maxlength="500" @bind="reason"></textarea></label></div><button class="primary" disabled="@busy" @onclick="Post">Record reviewed input-tax recovery</button></section>
+    }
+    <section class="panel"><h2>Net GST working paper</h2><p>Output GST less recorded allowable input GST. Review statutory eligibility and the official filing form before submission. Exporting this worksheet does not submit a return or pay tax.</p><div class="form-grid"><label>From<input type="date" @bind="from" /></label><label>To<input type="date" @bind="to" /></label></div><button class="secondary" disabled="@busy" @onclick="Refresh">Refresh GST working paper</button><button class="secondary" disabled="@busy" @onclick="Export">Export GST working paper</button>
+    @if (report is not null) { <p>Output GST @report.Output.OutputTax.ToString("N2") · Allowable input GST @report.AllowableInputTax.ToString("N2") · Net payable / credit @report.NetPayable.ToString("N2")</p><div class="table-wrap"><table><thead><tr><th>Invoice</th><th>Supplier</th><th>Input</th><th>Net purchase</th><th>GST paid</th><th>Allowable GST</th><th>Review</th></tr></thead><tbody>@foreach (var row in report.Inputs) { <tr><td>@row.Claim.InvoiceReference</td><td>@row.Claim.Supplier</td><td>@(row.Claim.Imported ? "Imported" : "Local")</td><td>@((row.Sign*row.Claim.NetPurchase).ToString("N2"))</td><td>@((row.Sign*row.Claim.TaxPaid).ToString("N2"))</td><td>@((row.Sign*row.Claim.AllowableTax).ToString("N2"))</td><td>@row.Claim.ReviewReason</td></tr> }</tbody></table></div> }</section>
+}
+@code {
+    [Parameter] public Actor Actor { get; set; } = default!;
+    private FinanceSnapshot? accounts; private NetTaxReturnReport? report; private bool busy, imported,stock; private IReadOnlyList<InputTaxSource> sources = []; private string error = "", message = "", supplier = "", tin = "", reference = "", reason = ""; private Guid payment, operation = Guid.NewGuid(); private int expense, recovery; private decimal net, tax, allowable;
+    private DateOnly date = DateOnly.FromDateTime(DateTime.Today), from = new(DateTime.Today.Year, 1, 1), to = DateOnly.FromDateTime(DateTime.Today);
+    public bool HasDraft => reference.Length > 0 || supplier.Length > 0 || net != 0 || tax != 0 || allowable != 0;
+    protected override Task OnInitializedAsync() => Run(async () => { await Load(); expense = accounts!.Accounts.FirstOrDefault(a => !a.Control && a.Group == LedgerGroup.Expense)?.Code ?? 0; recovery = accounts.Accounts.FirstOrDefault(a => !a.Control && !a.CashOrBank && a.Group == LedgerGroup.Asset)?.Code ?? 0; });
+    private async Task Load() { accounts = await Finance.Read(new(2000, 1, 1), DateOnly.FromDateTime(DateTime.Today)); sources = await Compliance.InputTaxSources(); report = await Compliance.NetTaxReturn(from, to); }
+    private void ChooseBasis() { payment = Guid.Empty; }
+    private Task Refresh() => Run(Load);
+    private Task Post() => Run(async () => { await Compliance.RecordInputTax(new(operation,payment,date,supplier,tin,reference,imported,net,tax,allowable,stock ? 1200 : expense,recovery,reason,stock)); operation = Guid.NewGuid(); supplier = tin = reference = reason = ""; net = tax = allowable = 0; await Load(); message = "Reviewed input-tax recovery posted."; });
+    private Task Export() => Run(async () => { var bytes = await Compliance.ExportNetTaxReturn(from, to); if (Services.GetService(typeof(IFileExport)) is IFileExport export) message = "Saved to " + await export.Save("GST-working-paper.xlsx",bytes); else await JS.InvokeVoidAsync("sierraDownload", "GST-working-paper.xlsx", Convert.ToBase64String(bytes)); });
+    private async Task Run(Func<Task> work) { if (busy) return; busy = true; error = message = ""; try { await work(); } catch (Exception e) when (e is BusinessException or UnauthorizedAccessException or JSException) { error = e.Message; } catch { error = "The tax operation could not complete. Refresh posted documents before retrying."; } finally { busy = false; } }
+}

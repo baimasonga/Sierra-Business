@@ -325,24 +325,42 @@ public sealed class HttpSyncTransport(HttpClient http, string branch, string key
     {
         var message = new HttpRequestMessage(method, path);
         message.Headers.Add("X-Sierra-Branch", branch);
+        message.Headers.Add(SyncContract.ProtocolHeader, SyncContract.Current.Protocol.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        message.Headers.Add(SyncContract.SchemaHeader, SyncContract.Current.Schema.ToString(System.Globalization.CultureInfo.InvariantCulture));
         message.Headers.Authorization = new("Bearer", key);
         return message;
     }
     public async Task<SyncPushResult> Push(SyncPushRequest request, CancellationToken ct = default)
     {
+        await Negotiate(ct);
         using var message = Request(HttpMethod.Post, "api/sync/push"); message.Content = JsonContent.Create(request);
         using var response = await http.SendAsync(message, ct); await Check(response);
         return (await response.Content.ReadFromJsonAsync<SyncPushResult>(ct))!;
     }
     public async Task<SyncPullResult> Pull(string branchCode, long after, int max, CancellationToken ct = default)
     {
+        await Negotiate(ct);
         using var message = Request(HttpMethod.Get, $"api/sync/pull?after={after}&max={max}");
         using var response = await http.SendAsync(message, ct); await Check(response);
         return (await response.Content.ReadFromJsonAsync<SyncPullResult>(ct))!;
     }
+    private async Task Negotiate(CancellationToken ct)
+    {
+        using var message = Request(HttpMethod.Get, "api/sync/compatibility");
+        using var response = await http.SendAsync(message, ct);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) throw new PermanentJobException(SyncContract.UpgradeMessage);
+        await Check(response);
+        try
+        {
+            var compatibility = await response.Content.ReadFromJsonAsync<SyncCompatibility>(ct);
+            if (!SyncContract.Supports(compatibility)) throw new PermanentJobException(SyncContract.UpgradeMessage);
+        }
+        catch (JsonException) { throw new PermanentJobException(SyncContract.UpgradeMessage); }
+    }
     private static async Task Check(HttpResponseMessage response)
     {
         if (response.IsSuccessStatusCode) return;
+        if ((int)response.StatusCode == 426) throw new PermanentJobException(SyncContract.UpgradeMessage);
         if (response.StatusCode is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden) throw new PermanentJobException("Head office refused this branch's sync key. Check the branch code and key in the sync settings.");
         throw new HttpRequestException($"Head office returned {(int)response.StatusCode}: {SyncEngine.Clean(await response.Content.ReadAsStringAsync())}");
     }

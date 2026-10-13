@@ -56,7 +56,8 @@ public sealed class CommerceService(IDbContextFactory<BusinessDb> factory, IActo
         var actor = await Actor("accounting.read"); await using var db = await factory.CreateDbContextAsync();
         var credits = await (from c in db.CustomerCredits join d in db.Documents on c.ReturnId equals d.Id where d.Branch == actor.Branch && !db.Documents.Any(r => r.Reverses == d.Id) select new { c, d.Number, d.Party }).ToListAsync();
         var ids = credits.Select(x => x.c.Id).ToArray(); var uses = await db.CustomerCreditUses.Where(x => ids.Contains(x.CreditId) && !db.Documents.Any(d => d.Reverses == x.DocumentId)).ToListAsync();
-        return credits.Select(x => new CreditView(x.c.Id, x.Number, x.Party, x.c.Amount, x.c.Amount - uses.Where(u => u.CreditId == x.c.Id).Sum(u => u.Amount))).ToArray();
+        var chequeStates = await ChequeAdvances.States(db,actor.Branch);
+        return credits.Select(x => new CreditView(x.c.Id,x.Number,x.Party,x.c.Amount,chequeStates.TryGetValue(x.c.ReturnId,out var state) && state != ChequeState.Cleared ? 0 : x.c.Amount-uses.Where(u => u.CreditId == x.c.Id).Sum(u => u.Amount))).ToArray();
     }
     public Task<Guid> UseCredit(UseCreditCommand input) => Execute(input.OperationId, "accounting.write", "customer.credit.use", input, async (db, actor) => {
         var date = DateOnly.FromDateTime(DateTime.UtcNow); if (date <= await PeriodControls.ClosedThrough(db, actor.Branch, options.Value.ClosedThrough)) throw new BusinessException("Current period is closed.");
@@ -64,6 +65,8 @@ public sealed class CommerceService(IDbContextFactory<BusinessDb> factory, IActo
         if ((input.InvoiceId is null) == (input.RefundAccount is null)) throw new BusinessException("Select a refund account or an invoice, not both.");
         var credit = await db.CustomerCredits.SingleOrDefaultAsync(x => x.Id == input.CreditId && db.Documents.Any(d => d.Id == x.ReturnId && d.Branch == actor.Branch) && !db.Documents.Any(d => d.Reverses == x.ReturnId)) ?? throw new BusinessException("Customer credit not found.");
         var original = await db.Documents.SingleAsync(x => x.Id == credit.ReturnId);
+        await Fx.RejectLocalAdvance(db,original.Id);
+        await ChequeAdvances.DemandAvailable(db,actor.Branch,original.Id);
         var used = (await db.CustomerCreditUses.Where(x => x.CreditId == credit.Id && !db.Documents.Any(d => d.Reverses == x.DocumentId)).ToListAsync()).Sum(x => x.Amount);
         if (input.Amount > credit.Amount - used) throw new BusinessException("Amount exceeds the remaining customer credit.");
         var doc = new BusinessDocument { Id = Guid.NewGuid(), Branch = actor.Branch, Number = $"{actor.Branch}-{options.Value.Device}-CRU-{input.OperationId:N}", Kind = DocumentKind.CustomerCreditUse, BusinessDate = date, Party = original.Party, Total = input.Amount, Settlement = input.InvoiceId is null ? "Customer refund" : "Customer credit allocation", Detail = JsonSerializer.Serialize(input) };

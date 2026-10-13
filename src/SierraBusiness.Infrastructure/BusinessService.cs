@@ -61,6 +61,8 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
             if (input.HeldSaleId is not null) { if (input.Kind != DocumentKind.Sale || input.OrderId is not null || input.DeliveryId is not null) throw new BusinessException("Held drafts apply only to counter sales."); await PosService.Active(db, actor, input.HeldSaleId.Value); }
             if (input.BusinessDate <= await PeriodControls.ClosedThrough(db, actor.Branch, settings.ClosedThrough) || input.BusinessDate > DateOnly.FromDateTime(DateTime.UtcNow)) throw new BusinessException("Business date must be in an open period and cannot be in the future.");
             if (input.Lines is null || input.Lines.Count is < 1 or > 200) throw new BusinessException("Enter between 1 and 200 lines.");
+            if (input.Lines.Any(l => l is null)) throw new BusinessException("Document lines cannot be empty.");
+            await CustodyRules.ValidateAcceptance(db,actor,input);
             var party = Rules.Required(input.Party, "Customer or supplier");
             var normalizedParty = party.ToUpperInvariant();
             var partyMaster = await db.Parties.SingleOrDefaultAsync(x => x.Branch == actor.Branch && x.NormalizedName == normalizedParty, cancellationToken);
@@ -75,6 +77,7 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
             // Credit limits and holds live on the customer record, so a credit sale to an unregistered name would bypass them.
             if (input.Kind == DocumentKind.Sale && input.Payment is null && partyMaster is null) throw new BusinessException($"Credit sales need a registered customer. Add {party} under Customers & suppliers (with a credit limit), or take payment now.");
             if (input.InvoiceLater && input.Kind != DocumentKind.Receipt) throw new BusinessException("Only goods receipts can wait for a supplier invoice.");
+            if (input.ReliefGrantId is not null && input.Kind != DocumentKind.Sale) throw new BusinessException("GST relief is reviewed on the sales invoice, not a receipt or uninvoiced delivery.");
             if (input.Payment is PaymentMethod.Cheque or PaymentMethod.BankTransfer)
             {
                 Rules.Required(input.PaymentReference, "Payment reference"); Rules.Required(input.Bank, "Bank");
@@ -85,8 +88,9 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
             var currency = Fx.Normalize(input.Currency); var exchangeRate = 1m; decimal sourceTotal = 0;
             if (currency is not null)
             {
-                if (sale) throw new BusinessException("Sales are invoiced in NLe. Foreign currency applies to goods receipts.");
+                if (sale && (delivery || input.Payment is not null || input.OrderId is not null || input.DeliveryId is not null || input.HeldSaleId is not null || input.Lines.Any(l => l.BundleId is not null))) throw new BusinessException("Foreign sales use a direct named-customer credit invoice. Settle it through Foreign exchange after posting; orders, holds and bundles use their existing local-currency workflows.");
                 exchangeRate = await Fx.Rate(db, actor.Branch, currency, input.BusinessDate, cancellationToken);
+                await Fx.EnsureOpenCurrencyDate(db, actor.Branch, currency, input.BusinessDate);
             }
             if (delivery && (input.OrderId is null || input.Payment is not null || input.DeliveryId is not null)) throw new BusinessException("Delivery notes require a sales order, with no payment or prior delivery.");
             if (input.DueDate < input.BusinessDate) throw new BusinessException("Due date cannot precede the invoice date.");
@@ -99,7 +103,9 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
                 delivered = await db.Documents.SingleOrDefaultAsync(x => x.Id == input.DeliveryId && x.Branch == actor.Branch && x.Kind == DocumentKind.Delivery, cancellationToken) ?? throw new BusinessException("Delivery note not found.");
                 if (!sale || delivery || delivered.Party != party || delivered.BusinessDate > input.BusinessDate || await db.Documents.AnyAsync(x => x.Reverses == delivered.Id, cancellationToken) || await db.DeliveryInvoices.AnyAsync(x => x.DeliveryId == delivered.Id && !db.Documents.Any(r => r.Reverses == x.InvoiceId), cancellationToken)) throw new BusinessException("Delivery cannot be invoiced again or does not match this customer/date.");
                 using var deliveryJson = JsonDocument.Parse(delivered.Detail); var agreed = deliveryJson.RootElement.GetProperty("Request").Deserialize<TradeCommand>()!;
-                if (agreed.Location != input.Location || agreed.OrderId != input.OrderId || JsonSerializer.Serialize(agreed.Lines) != JsonSerializer.Serialize(input.Lines)) throw new BusinessException("Invoice must retain the complete delivery quantities, identities and agreed prices.");
+                var remainingLines = await DeliveryRejections.Remaining(db,actor.Branch,delivered);
+                if (agreed.Location != input.Location || agreed.OrderId != input.OrderId || !remainingLines.SequenceEqual(input.Lines)) throw new BusinessException("Invoice must retain the remaining accepted delivery quantities, identities and agreed prices.");
+                movements.AddRange((await DeliveryRejections.Movements(db,actor.Branch,delivered.Id)).Select(m => new Movement { DocumentId = delivered.Id,ProductId = m.ProductId,Location = m.Location,Serial = m.Serial,Batch = m.Batch,Expiry = m.Expiry,Quantity = m.Quantity,Value = m.Value }));
                 db.DeliveryInvoices.Add(new() { Id = Guid.NewGuid(), DeliveryId = delivered.Id, InvoiceId = doc.Id });
             }
             if (input.OrderId is not null && delivered is null)
@@ -120,7 +126,7 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
                 }
             }
             var bundled = await BundleRules.Validate(db, input); // bundle offers carry an approved package price
-            decimal net = 0, cost = 0, taxable = 0, zeroRated = 0, exempt = 0;
+            decimal net = 0,cost = 0,taxable = 0,zeroRated = 0,exempt = 0,relieved = 0,sourceTaxable = 0;
             var receiptLines = new List<object>();
             var categories = new Dictionary<Guid, TaxCategory>();
             foreach (var line in input.Lines)
@@ -128,10 +134,12 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
                 if (line is null) throw new BusinessException("Document lines cannot be empty.");
                 Rules.Positive(line.Quantity, "Quantity"); Rules.Positive(line.UnitPrice, "Unit price"); Rules.Positive(line.Conversion, "Unit conversion");
                 var p = await db.Products.FindAsync([line.ProductId], cancellationToken) ?? throw new BusinessException("Product does not exist.");
+                if (delivered is null) await InventoryCost.GuardDate(db,actor.Branch,p.Id,input.BusinessDate);
                 await InventoryManagement.Active(db, actor.Branch, p.Id);
                 var promotion = sale && !bundled.Contains(line) ? await PriceRules.Best(db, partyMaster?.Category ?? "", p, line.Quantity * line.Conversion, input.BusinessDate) : null;
-                var promoted = promotion is { } pr && line.UnitPrice / line.Conversion >= pr.Price; // priced by an approved promotion
-                if (sale && !bundled.Contains(line) && !promoted) await CommerceRules.Price(db, p.Id, line.UnitPrice, line.Conversion);
+                var localUnitPrice = currency is null ? line.UnitPrice : line.UnitPrice * exchangeRate;
+                var promoted = promotion is { } pr && localUnitPrice / line.Conversion >= pr.Price; // priced by an approved promotion in functional currency
+                if (sale && !bundled.Contains(line) && !promoted) await CommerceRules.Price(db, p.Id, localUnitPrice, line.Conversion);
                 var quantity = line.Quantity * line.Conversion;
                 Rules.Positive(quantity, "Base quantity");
                 var serial = string.IsNullOrWhiteSpace(line.Serial) ? null : Rules.Required(line.Serial, "Serial", 100).ToUpperInvariant();
@@ -150,11 +158,16 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
                 sourceTotal += amount;
                 var lineSource = amount;
                 if (currency is not null) amount = AccountingEngine.Money(amount * exchangeRate); // stock and payable are carried in NLe at the receipt-date rate
+                if (currency is not null) Rules.Positive(amount, "Converted line amount");
                 var deliveredCost = delivered is null ? 0 : -movements.Where(x => x.DocumentId == delivered.Id && x.ProductId == p.Id && x.Serial == serial && x.Batch == batch && x.Expiry == line.Expiry).Sum(x => x.Value);
-                var lineCost = delivered is not null ? AccountingEngine.Money(deliveredCost * quantity / input.Lines.Where(x => x.ProductId == p.Id && (string.IsNullOrWhiteSpace(x.Serial) ? null : x.Serial.Trim().ToUpperInvariant()) == serial && (string.IsNullOrWhiteSpace(x.Batch) ? null : x.Batch.Trim().ToUpperInvariant()) == batch && x.Expiry == line.Expiry).Sum(x => x.Quantity * x.Conversion)) : sale ? (available == quantity ? matching.Sum(x => x.Value) : AccountingEngine.Money(matching.Sum(x => x.Value) / available * quantity)) : amount;
+                var lineCost = delivered is not null ? AccountingEngine.Money(deliveredCost * quantity / input.Lines.Where(x => x.ProductId == p.Id && (string.IsNullOrWhiteSpace(x.Serial) ? null : x.Serial.Trim().ToUpperInvariant()) == serial && (string.IsNullOrWhiteSpace(x.Batch) ? null : x.Batch.Trim().ToUpperInvariant()) == batch && x.Expiry == line.Expiry).Sum(x => x.Quantity * x.Conversion)) : sale ? await InventoryCost.Issue(db,actor.Branch,p.Id,input.Location,serial,batch,line.Expiry,quantity,matching) : amount;
+                if (!sale && (await InventoryCost.Policy(db,actor.Branch,p.Id)) is { Method: InventoryCostMethod.Standard } standard)
+                {
+                    lineCost = AccountingEngine.Money(quantity*standard.StandardUnitCost);
+                }
                 if (sale && delivered is null)
                 {
-                    var per = line.UnitPrice / line.Conversion;
+                    var per = localUnitPrice / line.Conversion;
                     if (!bundled.Contains(line) && !promoted && policy.MaxDiscountPercent is decimal max && p.Price > 0 && (p.Price - per) / p.Price * 100 > max) triggers.Add(new("Discount", $"{p.Sku} at NLe {per:N2} is {(p.Price - per) / p.Price * 100:0.#}% below its list price NLe {p.Price:N2} (limit {max:0.#}%)", "pricing.manage"));
                     if (policy.ApproveBelowCost && amount < lineCost) triggers.Add(new("BelowCost", $"{p.Sku} sold for NLe {amount:N2}, below its stock cost NLe {lineCost:N2}", "pricing.manage"));
                 }
@@ -165,11 +178,13 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
                 if (sale)
                 {
                     if (!categories.TryGetValue(p.Id, out var category)) categories[p.Id] = category = await TaxRules.Category(db, p.Id, input.BusinessDate);
-                    if (category == TaxCategory.ZeroRated) zeroRated += amount; else if (category == TaxCategory.Exempt) exempt += amount; else taxable += amount;
+                    if (input.ReliefGrantId is not null && category == TaxCategory.Standard) categories[p.Id] = category = TaxCategory.Relieved;
+                    if (category == TaxCategory.ZeroRated) zeroRated += amount; else if (category == TaxCategory.Exempt) exempt += amount; else if (category == TaxCategory.Relieved) relieved += amount; else { taxable += amount; sourceTaxable += lineSource; }
                 }
             }
             var configuredRate = await db.SalesTaxRates.Where(x => x.Branch == actor.Branch && x.From <= input.BusinessDate).OrderByDescending(x => x.From).Select(x => (decimal?)x.Rate).FirstOrDefaultAsync(cancellationToken) ?? settings.TaxRate;
             if (configuredRate is < 0 or > 1) throw new BusinessException("Tax configuration is invalid.");
+            var reliefGrant = input.ReliefGrantId is Guid grantId ? await TaxRules.ValidateRelief(db,actor,grantId,partyMaster?.Id,input.BusinessDate,relieved) : null;
             if (delivered is not null) cost = -movements.Where(x => x.DocumentId == delivered.Id).Sum(x => x.Value);
             var tax = sale && !delivery ? AccountingEngine.Money(taxable * configuredRate) : 0; // zero-rated and exempt lines carry no tax
             doc.Total = delivery ? 0 : net + tax; if (delivery) doc.Settlement = "Delivered; awaiting invoice";
@@ -184,17 +199,18 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
                 if (outstanding + doc.Total > partyMaster.CreditLimit && policy.CreditOverride) triggers.Add(new("CreditLimit", $"{party} would owe NLe {outstanding + doc.Total:N2} against a credit limit of NLe {partyMaster.CreditLimit:N2}", "accounting.write"));
                 else if (outstanding + doc.Total > partyMaster.CreditLimit) throw new BusinessException("This sale exceeds the customer's credit limit. Record payment or update the approved limit before posting.");
             }
-            doc.Detail = currency is null ? (sale ? JsonSerializer.Serialize(new { Request = input, TaxRate = configuredRate, Net = net, Tax = tax, Cost = cost, Taxable = taxable, ZeroRated = zeroRated, Exempt = exempt, Categories = categories }) : JsonSerializer.Serialize(new { Request = input, TaxRate = 0m, Net = net, Tax = tax, Cost = cost }))
-                : JsonSerializer.Serialize(new { Request = input, TaxRate = 0m, Net = net, Tax = tax, Cost = cost, Currency = currency, ExchangeRate = exchangeRate, SourceTotal = sourceTotal });
+            doc.Detail = currency is null ? (sale ? JsonSerializer.Serialize(new { Request = input,TaxRate = configuredRate,Net = net,Tax = tax,Cost = cost,Taxable = taxable,ZeroRated = zeroRated,Exempt = exempt,Relieved = relieved,ReliefGrantId = input.ReliefGrantId,ReliefAuthorityReference = reliefGrant?.AuthorityReference,Categories = categories }) : JsonSerializer.Serialize(new { Request = input, TaxRate = 0m, Net = net, Tax = tax, Cost = cost }))
+                : JsonSerializer.Serialize(new { Request = input,TaxRate = sale ? configuredRate : 0m,Net = net,Tax = tax,Cost = cost,Currency = currency,ExchangeRate = exchangeRate,SourceTotal = sourceTotal,SourceTax = sale ? AccountingEngine.Money(sourceTaxable*configuredRate) : 0m,Taxable = taxable,ZeroRated = zeroRated,Exempt = exempt,Relieved = relieved,ReliefGrantId = input.ReliefGrantId,ReliefAuthorityReference = reliefGrant?.AuthorityReference,Categories = categories });
             if (input.InvoiceLater)
             {
                 // The supplier's invoice is matched later; until then the liability is goods received not invoiced.
                 doc.Settlement = currency is null ? Grni.Awaiting : $"{Grni.Awaiting} ({currency})";
                 doc.Detail = JsonSerializer.Serialize(new { Request = input, TaxRate = 0m, Net = net, Tax = tax, Cost = cost, Currency = currency, ExchangeRate = exchangeRate, SourceTotal = sourceTotal, InvoiceLater = true, ReceiptLines = receiptLines });
             }
-            else if (currency is not null) { doc.Settlement = $"Supplier payable ({currency})"; db.ForeignBills.Add(new() { Id = Guid.NewGuid(), DocumentId = doc.Id, Currency = currency, Rate = exchangeRate, SourceAmount = sourceTotal }); }
+            else if (currency is not null) { if (!sale) doc.Settlement = $"Supplier payable ({currency})"; db.ForeignBills.Add(new() { Id = Guid.NewGuid(), DocumentId = doc.Id, Currency = currency, Rate = exchangeRate, SourceAmount = sourceTotal + (sale ? AccountingEngine.Money(sourceTaxable * configuredRate) : 0) }); }
             db.Documents.Add(doc);
             var posting = sale ? AccountingEngine.Sale(net, tax, cost, input.Payment) : AccountingEngine.Receipt(cost);
+            if (!sale && net != cost) posting = AccountingEngine.Balanced([new(Account.Inventory,cost,0),new(Account.Payables,0,net),new((Account)5100,Math.Max(0,net-cost),Math.Max(0,cost-net))]);
             if (input.InvoiceLater) posting = AccountingEngine.Balanced([new(Account.Inventory, cost, 0), new(Grni.Account, 0, cost)]);
             if (delivery) posting = AccountingEngine.Balanced([new((Account)1250, cost, 0), new(Account.Inventory, 0, cost)]);
             else if (delivered is not null) posting = posting.Select(x => x.Account == Account.Inventory ? x with { Account = (Account)1250 } : x).ToArray();
@@ -215,6 +231,26 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
             Rules.Required(input.Reason, "Reversal reason");
             var original = await db.Documents.SingleOrDefaultAsync(x => x.Id == input.DocumentId && x.Branch == actor.Branch, cancellationToken) ?? throw new BusinessException("Document not found.");
             if (original.Kind == DocumentKind.Reversal || await db.Documents.AnyAsync(x => x.Reverses == original.Id, cancellationToken)) throw new BusinessException("This document cannot be reversed again.");
+            if (original.Settlement == "Reviewed GST return settlement") throw new BusinessException("Recorded GST returns are immutable. Record an accountant-reviewed later correction rather than reversing a declared return.");
+            if (await db.IssuedChequeEvents.AnyAsync(e => e.State == IssuedChequeState.Presented && db.IssuedCheques.Any(c => c.Id == e.ChequeId && c.VoucherId == original.Id),cancellationToken)) throw new BusinessException("A cheque paid by the bank cannot be cancelled by reversing its payment. Record the supplier refund instead.");
+            var originalProducts = await db.Movements.Where(m => m.DocumentId == original.Id).Select(m => m.ProductId).Distinct().ToArrayAsync(cancellationToken);
+            foreach (var productId in originalProducts) if ((await InventoryCost.Policy(db,actor.Branch,productId)) is { Version: > 0 } changed && original.BusinessDate < changed.From) throw new BusinessException("This stock document predates a prospective costing-method transition. Use a current reviewed return or adjustment instead of reversing earlier costing history.");
+            var inputClaims = await db.Operations.AsNoTracking().Where(o => o.Branch == actor.Branch && o.Action == "tax.input.claim" && !db.Documents.Any(r => r.Reverses == o.ResultId)).ToListAsync(cancellationToken);
+            if (inputClaims.Any(o => JsonSerializer.Deserialize<InputTaxCommand>(o.Payload)!.PaymentDocumentId == original.Id)) throw new BusinessException("Reverse the active input-tax claim before reversing its source expense payment.");
+            var scheduledPosts = (await db.Operations.AsNoTracking().Where(o => o.Branch == actor.Branch && o.Action == "accounts.schedule.post").ToListAsync(cancellationToken)).Select(o => (o.ResultId, Command: JsonSerializer.Deserialize<PostScheduledJournalCommand>(o.Payload)!)).ToArray();
+            var scheduledOriginal = scheduledPosts.SingleOrDefault(o => o.ResultId == original.Id && !o.Command.Reversal);
+            if (scheduledOriginal.Command is not null)
+            {
+                var opposite = scheduledPosts.Where(o => o.Command.ScheduleId == scheduledOriginal.Command.ScheduleId && o.Command.Reversal).Select(o => o.ResultId).ToArray();
+                if (await db.Documents.AnyAsync(d => opposite.Contains(d.Id) && !db.Documents.Any(r => r.Reverses == d.Id), cancellationToken)) throw new BusinessException("Cancel the scheduled opposite journal before cancelling its original journal.");
+            }
+            if (original.Kind == DocumentKind.Delivery && (await DeliveryRejections.Movements(db,actor.Branch,original.Id)).Count > 0) throw new BusinessException("Reverse the delivery's active rejection documents before reversing the original delivery.");
+            if (original.Kind == DocumentKind.DeliveryRejection)
+            {
+                using var rejection = JsonDocument.Parse(original.Detail); var sourceDelivery = rejection.RootElement.GetProperty("Request").Deserialize<DeliveryRejectionCommand>()!.DeliveryId;
+                if (await db.DeliveryInvoices.AnyAsync(i => i.DeliveryId == sourceDelivery && !db.Documents.Any(r => r.Reverses == i.InvoiceId),cancellationToken)) throw new BusinessException("Reverse the accepted-quantity invoice before reversing this rejection.");
+            }
+            await Fx.CheckForeignReversal(db, original, DateOnly.FromDateTime(DateTime.UtcNow));
             if (ServiceRules.StockKinds.Contains(original.Kind)) throw new BusinessException("Correct service parts from the service job: return unused parts to stock there. Parts already accounted for on a closed job stay with that job.");
             if (await db.ReturnAllocations.AnyAsync(x => x.OriginalDocumentId == original.Id && !db.Documents.Any(r => r.Reverses == x.ReturnDocumentId), cancellationToken)) throw new BusinessException("Reverse the linked return documents before reversing the original document.");
             if (await db.BillAllocations.AnyAsync(x => x.InvoiceId == original.Id && !db.Documents.Any(d => d.Reverses == x.VoucherId), cancellationToken)) throw new BusinessException("Reverse the allocated settlement vouchers before reversing this bill.");

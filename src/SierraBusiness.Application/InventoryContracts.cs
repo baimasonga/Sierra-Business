@@ -11,6 +11,18 @@ public sealed record StockCountCommand(Guid OperationId, Guid ProductId, string 
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] Guid? ApprovalId = null);
 public interface IInventoryService
 {
+    Task<IReadOnlyList<ConsignmentSiteView>> ConsignmentSites();
+    Task<Guid> SaveConsignmentSite(ConsignmentSiteCommand input);
+    Task<Guid> ReceiveCustody(CustodyReceiveCommand input);
+    Task<Guid> ReturnCustody(CustodyReturnCommand input);
+    Task<IReadOnlyList<CustodyStockView>> CustodyStock();
+    Task<IReadOnlyList<PendingDeliveryView>> PendingDeliveries();
+    Task<Guid> RejectDelivery(DeliveryRejectionCommand input);
+    Task<IReadOnlyList<InventoryCostPolicy>> CostPolicies();
+    Task<Guid> WriteDown(InventoryWriteDownCommand input);
+    Task<Guid> SetCostPolicy(InventoryCostCommand input);
+    Task<InventoryValuationReport> Valuation(InventoryValuationRequest input);
+    Task<byte[]> ExportValuation(InventoryValuationRequest input);
     Task<IReadOnlyList<LocationView>> Locations();
     Task<Guid> CreateLocation(LocationCommand input);
     Task<Guid> Transfer(TransferCommand input);

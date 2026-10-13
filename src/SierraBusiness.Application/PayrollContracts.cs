@@ -28,7 +28,9 @@ public sealed record EmployeeView(Guid Id, int Version, string Code, string Name
 /// <param name="SkipLoan">Do not deduct the loan instalment this month.</param>
 public sealed record PayrollAdjustment(Guid EmployeeId, decimal UnpaidDays = 0, decimal Overtime = 0, decimal Bonus = 0, decimal ExtraDeduction = 0, string Note = "", decimal LeaveAllowance = 0, decimal EndOfService = 0, bool SkipLoan = false);
 public sealed record PayrollCommand(Guid OperationId, DateOnly Month, DateOnly PostingDate, List<Guid> EmployeeIds,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] List<PayrollAdjustment>? Adjustments = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] List<PayrollAdjustment>? Adjustments = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? UseWorkforceInputs = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ExpectedCalculation = null);
 
 /// <summary>How one employee's pay was worked out. Stored with the payslip so later rule or salary changes never alter it.</summary>
 public sealed record PayCalculation(decimal DaysInMonth, decimal DaysPaid, decimal Basic, decimal Allowances, decimal Overtime, decimal Bonus, decimal Gross,
@@ -40,7 +42,7 @@ public sealed record PayslipView(Guid DocumentId, string Number, DateOnly Month,
     public bool Paid => PaymentNumber.Length > 0;
 }
 public sealed record PayrollPreviewLine(Guid EmployeeId, string Code, string Name, string Department, PayCalculation Calculation);
-public sealed record PayrollPreview(DateOnly Month, IReadOnlyList<PayrollPreviewLine> Lines, decimal Gross, decimal Paye, decimal NassitEmployee, decimal NassitEmployer, decimal OtherDeductions, decimal Net, bool Statutory, string RulesNote);
+public sealed record PayrollPreview(DateOnly Month, IReadOnlyList<PayrollPreviewLine> Lines, decimal Gross, decimal Paye, decimal NassitEmployee, decimal NassitEmployer, decimal OtherDeductions, decimal Net, bool Statutory, string RulesNote, string CalculationFingerprint = "");
 
 // ---------------- statutory rules ----------------
 
@@ -82,6 +84,13 @@ public sealed record LoanView(Guid DocumentId, string Number, Guid EmployeeId, s
 public sealed record PayrollSnapshot(IReadOnlyList<EmployeeView> Employees, IReadOnlyList<PayslipView> Payslips);
 public interface IPayrollService
 {
+    Task<WorkforceSnapshot> Workforce(DateOnly month);
+    Task<Guid> SaveAttendance(AttendanceCommand input);
+    Task<Guid> SetLeaveEntitlement(LeaveEntitlementCommand input);
+    Task<Guid> RequestLeave(LeaveRequestCommand input);
+    Task<Guid> DecideLeave(LeaveDecisionCommand input);
+    Task<Guid> SavePayHead(PayHeadCommand input);
+    Task<byte[]> ExportWorkforce(DateOnly month);
     Task<PayrollSnapshot> Read();
     Task<Guid> SaveEmployee(EmployeeCommand input);
     Task<PayrollPreview> Preview(PayrollCommand input);

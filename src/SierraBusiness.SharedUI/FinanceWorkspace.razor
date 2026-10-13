@@ -1,10 +1,14 @@
 @inject IFinanceService Finance
 @inject Microsoft.JSInterop.IJSRuntime JS
 
-<section class="panel"><div class="form-grid"><label>From<input type="date" @bind="from" /></label><label>To / as at<input type="date" @bind="to" /></label><label>View<select @bind="view"><option>Financial statements</option><option>Cash flow</option><option>Day book & ledgers</option><option>Bills & ageing</option><option>Bank reconciliation</option><option>Budgets</option><option>Post voucher</option><option>Ledger accounts</option></select></label></div><button class="secondary" disabled="@busy" @onclick="Refresh">Refresh reports</button></section>
+<section class="panel"><div class="form-grid"><label>From<input type="date" @bind="from" /></label><label>To / as at<input type="date" @bind="to" /></label><label>View<select value="@view" @onchange="SelectView"><option>Financial statements</option><option>Cash flow</option><option>Day book & ledgers</option><option>Bills & ageing</option><option>Bank reconciliation</option><option>Budgets</option><option>Post voucher</option><option>Ledger accounts</option><option>Advanced accounting</option></select></label></div><button class="secondary" disabled="@busy" @onclick="Refresh">Refresh reports</button></section>
 @if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
 @if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
 @if (data is null) { <p>Loading accounting records…</p> }
+else if (view == "Advanced accounting")
+{
+    <AdvancedAccountingWorkspace @ref="advancedEditor" Actor="Actor" />
+}
 else if (view == "Financial statements")
 {
     <PrintButton Target="financial-statements-print" /><div id="financial-statements-print"><h2>Financial statements · @Actor.Branch</h2><p>@loadedFrom to @loadedTo · NLe</p><div class="metrics"><section><small>PERIOD PROFIT / (LOSS)</small><strong>@Money(data.Profit)</strong></section><section><small>ASSETS AS AT @loadedTo</small><strong>@Money(data.Assets)</strong></section><section><small>LIABILITIES</small><strong>@Money(data.Liabilities)</strong></section><section><small>EQUITY + ACCUMULATED PROFIT</small><strong>@Money(data.Equity + data.RetainedProfit)</strong></section></div>
@@ -74,7 +78,9 @@ else if (view == "Post voucher")
     private OutstandingBill? selectedBill;
     private Guid voucherOperation = Guid.NewGuid();
     private bool CanWrite => Actor.Permissions.Contains("accounting.write");
-    public bool HasDraft => lines.Count > 0 || narration.Length > 0 || debit != 0 || credit != 0;
+    private AdvancedAccountingWorkspace? advancedEditor;
+    private async Task SelectView(ChangeEventArgs args) { var next = args.Value?.ToString() ?? "Financial statements"; if (next != view && advancedEditor?.HasDraft == true && !await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", "Leave advanced accounting with unsaved changes?")) return; view = next; }
+    public bool HasDraft => lines.Count > 0 || narration.Length > 0 || debit != 0 || credit != 0 || advancedEditor?.HasDraft == true;
     private IEnumerable<FinanceEntry> FilteredEntries => data!.Entries.Where(x => (ledgerFilter == 0 || x.AccountCode == ledgerFilter) && (x.Party + x.Number).Contains(search, StringComparison.OrdinalIgnoreCase));
     private IEnumerable<OutstandingBill> FilteredBills => data!.Bills.Where(x => (x.Party + x.Number).Contains(search, StringComparison.OrdinalIgnoreCase));
     private static string Money(decimal value) => value.ToString("N2");

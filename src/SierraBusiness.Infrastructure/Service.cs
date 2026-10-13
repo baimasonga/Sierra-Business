@@ -411,7 +411,8 @@ public sealed class ServiceDesk(IDbContextFactory<BusinessDb> factory, IActorSes
             var available = matching.Sum(x => x.Quantity);
             var reserved = await CommerceRules.Reserved(db, actor.Branch, p.Id, location, serial, batch, input.Expiry);
             if (available - reserved < input.Quantity) throw new BusinessException($"Insufficient stock for {p.Name} in {location}. Unreserved available: {available - reserved} {p.Unit}.");
-            var cost = available == input.Quantity ? matching.Sum(x => x.Value) : AccountingEngine.Money(matching.Sum(x => x.Value) / available * input.Quantity);
+            await InventoryCost.GuardDate(db,actor.Branch,p.Id,input.Date);
+            var cost = await InventoryCost.Issue(db,actor.Branch,p.Id,location,serial,batch,input.Expiry,input.Quantity,matching);
             var price = input.UnitPrice == 0 ? p.Price : input.UnitPrice;
             if (price < 0 || price > 1_000_000_000 || decimal.Round(price, 4) != price) throw new BusinessException("The part's charge price must be zero or positive.");
             var doc = new BusinessDocument { Id = Guid.NewGuid(), Number = $"{actor.Branch}-{Settings.Device}-SVP-{input.OperationId:N}", Branch = actor.Branch, Kind = DocumentKind.ServiceIssue, Party = job.Row.Customer,
@@ -557,6 +558,7 @@ public sealed class ServiceDesk(IDbContextFactory<BusinessDb> factory, IActorSes
                 foreach (var l in job.Labour.Where(l => l.Rate > 0))
                     lines.Add(new($"Labour {l.Date:dd MMM yyyy}, {l.Engineer}" + (l.Description.Length > 0 ? $": {l.Description}" : ""), l.Hours, l.Rate, AccountingEngine.Money(l.Hours * l.Rate)));
             var net = lines.Sum(x => x.Amount);
+            if (net == 0 && input.ReliefGrantId is not null) throw new BusinessException("GST relief requires a chargeable invoice. Remove the certificate from this no-charge job.");
             var chargedCost = chargeParts ? partsCost : 0; var absorbedCost = partsCost - chargedCost;
 
             Guid? documentId = null;
@@ -564,10 +566,11 @@ public sealed class ServiceDesk(IDbContextFactory<BusinessDb> factory, IActorSes
             {
                 var rate = await db.SalesTaxRates.Where(x => x.Branch == actor.Branch && x.From <= input.Date).OrderByDescending(x => x.From).Select(x => (decimal?)x.Rate).FirstOrDefaultAsync() ?? Settings.TaxRate;
                 if (rate is < 0 or > 1) throw new BusinessException("Tax configuration is invalid.");
-                var taxable = lines.Where(x => x.Category == TaxCategory.Standard).Sum(x => x.Amount); // labour is standard-rated; parts follow their product's category
-                var tax = AccountingEngine.Money(taxable * rate);
                 var party = await db.Parties.SingleOrDefaultAsync(x => x.Branch == actor.Branch && x.NormalizedName == job.Row.Customer.ToUpperInvariant());
                 if (party is not null && party.Type == PartyType.Supplier) throw new BusinessException("The customer on this job is registered as a supplier only.");
+                var reliefGrant = input.ReliefGrantId is Guid grantId ? await TaxRules.ValidateRelief(db,actor,grantId,party?.Id,input.Date,lines.Where(l => l.Category == TaxCategory.Standard).Sum(l => l.Amount)) : null;
+                if (reliefGrant is not null) lines = lines.Select(l => l.Category == TaxCategory.Standard ? l with { Category = TaxCategory.Relieved } : l).ToList();
+                var taxable = lines.Where(x => x.Category == TaxCategory.Standard).Sum(x => x.Amount); var tax = AccountingEngine.Money(taxable*rate);
                 if (input.Payment is not null && !Enum.IsDefined(input.Payment.Value)) throw new BusinessException("Unsupported payment method.");
                 if (input.Payment is PaymentMethod.Cheque or PaymentMethod.BankTransfer)
                 {
@@ -578,7 +581,7 @@ public sealed class ServiceDesk(IDbContextFactory<BusinessDb> factory, IActorSes
                 if (input.Payment is null) await ServiceRules.CheckCredit(db, actor.Branch, party, job.Row.Customer, net + tax);
                 var doc = new BusinessDocument { Id = Guid.NewGuid(), Number = $"{actor.Branch}-{Settings.Device}-SIN-{input.OperationId:N}", Branch = actor.Branch, Kind = DocumentKind.ServiceInvoice,
                     Party = party?.Name ?? job.Row.Customer, BusinessDate = input.Date, DueDate = input.DueDate ?? input.Date.AddDays(party?.PaymentDays ?? 0), Total = net + tax, Settlement = input.Payment?.ToString() ?? "Credit",
-                    Detail = JsonSerializer.Serialize(new { JobId = job.Row.Id, Request = input, coverage.Billing, Lines = lines, Net = net, TaxRate = rate, Tax = tax, PartsCost = partsCost, Taxable = taxable, ZeroRated = lines.Where(x => x.Category == TaxCategory.ZeroRated).Sum(x => x.Amount), Exempt = lines.Where(x => x.Category == TaxCategory.Exempt).Sum(x => x.Amount) }) };
+                    Detail = JsonSerializer.Serialize(new { JobId = job.Row.Id,Request = input,coverage.Billing,Lines = lines,Net = net,TaxRate = rate,Tax = tax,PartsCost = partsCost,Taxable = taxable,ZeroRated = lines.Where(x => x.Category == TaxCategory.ZeroRated).Sum(x => x.Amount),Exempt = lines.Where(x => x.Category == TaxCategory.Exempt).Sum(x => x.Amount),Relieved = lines.Where(x => x.Category == TaxCategory.Relieved).Sum(x => x.Amount),ReliefGrantId = input.ReliefGrantId,ReliefAuthorityReference = reliefGrant?.AuthorityReference }) };
                 db.Documents.Add(doc);
                 var debit = input.Payment switch { PaymentMethod.Cash => Account.Cash, PaymentMethod.BankTransfer => Account.Bank, PaymentMethod.Cheque => Account.ChequesInHand, _ => Account.Receivables };
                 Journal(db, doc, new(debit, net + tax, 0), new(ServiceRules.Income, 0, net), new(Account.TaxPayable, 0, tax),

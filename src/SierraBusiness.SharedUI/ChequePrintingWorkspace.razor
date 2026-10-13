@@ -1,0 +1,67 @@
+@inject IBankingExtras Extras
+@inject IFinanceService Finance
+@inject Microsoft.JSInterop.IJSRuntime JS
+<section class="panel" aria-label="Cheque books and printing">
+    <h2>Cheque books and printing</h2>
+    <p class="hint">Register the preprinted number range, record an issued cheque, then review a bank-specific layout. Use a marked test print on plain paper to check alignment before loading cheque stationery. Printing does not authorize a bank payment.</p>
+    @if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+    @if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+    <fieldset disabled="@busy"><legend>Cheque books</legend>
+        <div class="form-grid"><label>Book bank<select @bind="bookBank">@foreach (var a in banks) { <option value="@a.Code">@a.Name</option> }</select></label><label>Book name<input maxlength="80" @bind="bookName" /></label><label>Number prefix<input maxlength="8" @bind="prefix" /></label><label>First number<input type="number" min="1" @bind="first" /></label><label>Last number<input type="number" min="1" @bind="last" /></label><label>Printed digits<input type="number" min="1" max="8" @bind="digits" /></label></div>
+        <button class="secondary" @onclick="SaveBook">Register cheque book</button>
+        <div class="table-wrap"><table><thead><tr><th>Book / bank</th><th>Range</th><th>Used</th><th>Next number</th><th>State</th><th></th></tr></thead><tbody>@foreach (var b in books) { <tr><td>@b.Name / @b.BankAccount</td><td>@b.Prefix @b.First–@b.Last</td><td>@b.Used</td><td>@(b.NextNumber ?? "No available number")</td><td>@(b.Active ? "Active" : "Closed")</td><td>@if (b.Active) { <button class="secondary" @onclick="() => CloseBook(b)">Close @b.Name</button> }</td></tr> }</tbody></table></div>
+    </fieldset>
+    <fieldset disabled="@busy"><legend>Bank print layout</legend>
+        <label>Saved cheque layout<select value="@layoutId" @onchange="SelectLayout"><option value="@Guid.Empty">New layout</option>@foreach (var l in layouts) { <option value="@l.Id">@l.Layout.Name / bank @l.Layout.BankAccount</option> }</select></label>
+        <div class="form-grid"><label>Layout bank<select @bind="layoutBank" @bind:after="ClearPreview">@foreach (var a in banks) { <option value="@a.Code">@a.Name</option> }</select></label><label>Layout name<input maxlength="80" @bind="layoutName" @bind:after="ClearPreview" /></label><label>Paper width (mm)<input type="number" min="100" max="300" @bind="width" @bind:after="ClearPreview" /></label><label>Paper height (mm)<input type="number" min="50" max="150" @bind="height" @bind:after="ClearPreview" /></label><label>Text size (points)<input type="number" min="8" max="18" @bind="font" @bind:after="ClearPreview" /></label></div>
+        <p class="hint">Coordinates start at the paper's upper left. Each field needs at least 12 mm of vertical space.</p>
+        <div class="table-wrap"><table><thead><tr><th>Field</th><th>Left (mm)</th><th>Top (mm)</th><th>Width (mm)</th></tr></thead><tbody>@foreach (var p in points) { <tr><th>@p.Name</th><td><input type="number" min="0" step="0.1" aria-label="@($"{p.Name} left")" @bind="p.X" @bind:after="ClearPreview" /></td><td><input type="number" min="0" step="0.1" aria-label="@($"{p.Name} top")" @bind="p.Y" @bind:after="ClearPreview" /></td><td><input type="number" min="1" step="0.1" aria-label="@($"{p.Name} width")" @bind="p.Width" @bind:after="ClearPreview" /></td></tr> }</tbody></table></div>
+        <button class="secondary" @onclick="SaveLayout">Save cheque layout</button>
+    </fieldset>
+    <fieldset disabled="@busy"><legend>Review and print issued cheques</legend>
+        <p class="hint">Select up to 25 unpresented cheques from the saved layout's bank.</p>
+        @foreach (var c in cheques.Where(c => c.State == IssuedChequeState.Issued)) { <label class="check"><input type="checkbox" checked="@selected.Contains(c.Id)" @onchange="e => Toggle(c.Id, e)" /> @c.Number · @c.Payee · @c.Amount.ToString("N2") NLe · bank @c.BankAccount</label> }
+        <label class="check"><input type="checkbox" @bind="test" @bind:after="ClearPreview" /> Mark as test print</label>
+        <button class="secondary" @onclick="Review">Review cheque print</button>
+        @if (preview is not null) { <button class="primary" @onclick="Print">@(test ? "Print marked test" : "Print issued cheques")</button> }
+    </fieldset>
+    @if (preview is { } plan)
+    {
+        <div id="cheque-print-preview" class="cheque-print" data-paper-width="@N(plan.Layout.Layout.Width)" data-paper-height="@N(plan.Layout.Layout.Height)">
+            @foreach (var c in plan.Cheques)
+            {
+                var l = plan.Layout.Layout;
+                <div class="cheque-page" style="@($"position:relative;width:{N(l.Width)}mm;height:{N(l.Height)}mm;font-size:{N(l.FontSize)}pt;page-break-after:always;background:white;color:black;")">
+                    @if (plan.Test) { <div style="position:absolute;left:10mm;top:2mm;font-weight:bold;color:#666;">TEST PRINT — NOT VALID</div> }
+                    <span style="@Place(l.Date)">@c.Date.ToString("dd/MM/yyyy")</span><span style="@Place(l.Payee)">@c.Payee</span><span style="@Place(l.Amount)">@c.Amount.ToString("N2")</span><span style="@Place(l.Words)">@AmountWords.Write(c.Amount, "Leones", "cents", 2)</span><span style="@Place(l.Number)">@c.Number</span>
+                </div>
+            }
+        </div>
+    }
+</section>
+@code {
+    private bool busy, test = true; private string error = "", message = "", bookName = "", prefix = "", layoutName = ""; private int bookBank = 1010, layoutBank = 1010, first = 1, last = 25, digits = 6, layoutVersion; private decimal width = 210, height = 80, font = 10; private Guid layoutId;
+    private IReadOnlyList<LedgerDefinition> banks = []; private IReadOnlyList<ChequeBookView> books = []; private IReadOnlyList<ChequeLayoutView> layouts = []; private IReadOnlyList<IssuedChequeView> cheques = []; private readonly HashSet<Guid> selected = []; private ChequePrintPreview? preview;
+    private readonly List<Point> points = [new("Date",150,12,45), new("Payee",20,25,140), new("Amount",160,25,40), new("Words",20,40,180), new("Number",20,65,70)];
+    private sealed class Point(string name, decimal x, decimal y, decimal width) { public string Name = name; public decimal X { get; set; } = x; public decimal Y { get; set; } = y; public decimal Width { get; set; } = width; public ChequePoint Value => new(X,Y,Width); }
+    public bool HasDraft => bookName.Length > 0 || layoutName.Length > 0;
+    private static string N(decimal number) => number.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+    private static string Place(ChequePoint p) => $"position:absolute;left:{N(p.X)}mm;top:{N(p.Y)}mm;width:{N(p.Width)}mm;white-space:normal;overflow-wrap:anywhere;";
+    protected override Task OnInitializedAsync() => Run(Load);
+    private async Task Load() { books = await Extras.ChequeBooks(); layouts = await Extras.ChequeLayouts(); cheques = await Extras.IssuedCheques(); banks = (await Finance.Read(DateOnly.MinValue, DateOnly.FromDateTime(DateTime.UtcNow))).Accounts.Where(a => a.CashOrBank && a.Code != 1000).ToArray(); }
+    private void ClearPreview() { preview = null; message = ""; }
+    private void Toggle(Guid id, ChangeEventArgs e) { if (e.Value is true) selected.Add(id); else selected.Remove(id); ClearPreview(); }
+    private async Task Run(Func<Task> action) { if (busy) return; busy = true; error = message = ""; try { await action(); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; } finally { busy = false; } }
+    private Task SaveBook() => Run(async () => { await Extras.SaveChequeBook(new(Guid.NewGuid(), null, 0, bookBank, bookName, prefix.Trim().ToUpperInvariant(), first, last, digits, true)); bookName = ""; await Load(); message = "Cheque book registered."; });
+    private Task CloseBook(ChequeBookView b) => Run(async () => { await Extras.SaveChequeBook(new(Guid.NewGuid(), b.Id, b.Version, b.BankAccount, b.Name, b.Prefix, b.First, b.Last, b.Digits, false)); await Load(); message = "Cheque book closed. Used numbers remain reserved."; });
+    private void SelectLayout(ChangeEventArgs e)
+    {
+        layoutId = Guid.TryParse(e.Value?.ToString(), out var id) ? id : Guid.Empty; ClearPreview();
+        var saved = layouts.SingleOrDefault(l => l.Id == layoutId); if (saved is null) { layoutVersion = 0; layoutName = ""; return; }
+        var l = saved.Layout; layoutVersion = saved.Version; layoutBank = l.BankAccount; layoutName = l.Name; width = l.Width; height = l.Height; font = l.FontSize;
+        var coords = new[] { l.Date, l.Payee, l.Amount, l.Words, l.Number }; for (var i = 0; i < points.Count; i++) { points[i].X = coords[i].X; points[i].Y = coords[i].Y; points[i].Width = coords[i].Width; }
+    }
+    private Task SaveLayout() => Run(async () => { layoutId = await Extras.SaveChequeLayout(new(Guid.NewGuid(), layoutId == Guid.Empty ? null : layoutId, layoutVersion, layoutBank, layoutName, width, height, font, points[0].Value, points[1].Value, points[2].Value, points[3].Value, points[4].Value)); ClearPreview(); await Load(); layoutVersion = layouts.Single(l => l.Id == layoutId).Version; message = "Cheque print layout saved."; });
+    private Task Review() => Run(async () => { preview = null; var saved = layouts.SingleOrDefault(l => l.Id == layoutId) ?? throw new BusinessException("Save or select a cheque print layout."); if (saved.Layout.Name != layoutName || saved.Layout.BankAccount != layoutBank || saved.Layout.Width != width || saved.Layout.Height != height || saved.Layout.FontSize != font || !new[] { saved.Layout.Date, saved.Layout.Payee, saved.Layout.Amount, saved.Layout.Words, saved.Layout.Number }.SequenceEqual(points.Select(p => p.Value))) throw new BusinessException("Save the changed print layout before reviewing cheques."); preview = await Extras.PreviewChequePrint(new(layoutId, selected.ToArray(), test, layoutVersion)); });
+    private Task Print() => Run(async () => { if (preview is null) throw new BusinessException("Review the cheque print first."); await Extras.RecordChequePrint(new(Guid.NewGuid(), new(preview.Layout.Id, preview.Cheques.Select(c => c.Id).ToArray(), preview.Test, preview.Layout.Version))); await Microsoft.JSInterop.JSRuntimeExtensions.InvokeVoidAsync(JS, "sierraPrint", "cheque-print-preview"); message = "Print attempt recorded. Check the printer output before marking a cheque presented."; });
+}

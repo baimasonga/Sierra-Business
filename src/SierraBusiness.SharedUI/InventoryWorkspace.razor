@@ -1,5 +1,10 @@
 @inject IInventoryService Inventory
 @inject IBusinessService Business
+@inject Microsoft.JSInterop.IJSRuntime JS
+<div class="view-toggle" role="tablist"><button role="tab" aria-selected="@(tool == "Warehouse controls")" @onclick='() => OpenTool("Warehouse controls")'>Warehouses and transfers</button>@if (Actor.Permissions.Contains("accounting.read")) { <button role="tab" aria-selected="@(tool == "Valuation")" @onclick='() => OpenTool("Valuation")'>Costing and valuation</button>@if (CanWrite) { <button role="tab" aria-selected="@(tool == "Consignment")" @onclick='() => OpenTool("Consignment")'>Consignment and rejections</button> } }</div>
+@if (tool == "Valuation") { <InventoryValuationWorkspace Actor="Actor" @ref="valuationWorkspace" /> }
+else if (tool == "Consignment") { <ConsignmentWorkspace Actor="Actor" @ref="consignmentWorkspace" /> }
+else {
 <section class="panel"><div class="panel-title"><h2>Warehouses and stock controls</h2><button class="secondary" disabled="@busy" @onclick="Refresh">Refresh balances</button></div><p>Transfers retain stock value. Counts post a valued adjustment and a balanced journal. All actions save an audit record.</p></section>
 @if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
 @if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
@@ -30,8 +35,11 @@
     </section>
 }
 else { <p>Stock controls require both inventory receiving and document reversal permissions.</p> }
+}
 @code {
     [Parameter] public Actor Actor { get; set; } = default!;
+    private string tool = "Warehouse controls"; private InventoryValuationWorkspace? valuationWorkspace; private ConsignmentWorkspace? consignmentWorkspace;
+    private async Task OpenTool(string next) { if (next == tool) return; if ((tool == "Valuation" && valuationWorkspace?.HasDraft == true || tool == "Consignment" && consignmentWorkspace?.HasDraft == true) && !await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS,"confirm","Discard unfinished input and switch warehouse tools?")) return; valuationWorkspace = null; consignmentWorkspace = null; tool = next; if (next == "Warehouse controls") await Run(Reload); }
     private IReadOnlyList<LocationView> locations = [];
     private IReadOnlyList<ProductView> products = [];
     private IReadOnlyList<StockView> allStock = [];
@@ -46,7 +54,7 @@ else { <p>Stock controls require both inventory receiving and document reversal 
     private List<StockView> CountLots => allStock.Where(x => x.ProductId == countProduct && x.Location == countLocation && x.Batch is not null).OrderBy(x => x.Batch).ThenBy(x => x.Expiry).ToList();
     private decimal transferQuantity = 1, countedQuantity, expectedQuantity, surplusCost;
     private Guid countProduct, transferOperation = Guid.NewGuid(), countOperation = Guid.NewGuid();
-    public bool HasDraft => code.Length > 0 || name.Length > 0 || stockIndex >= 0 || transferReason.Length > 0 || countProduct != Guid.Empty || countReason.Length > 0;
+    public bool HasDraft => tool == "Valuation" && valuationWorkspace?.HasDraft == true || tool == "Consignment" && consignmentWorkspace?.HasDraft == true || code.Length > 0 || name.Length > 0 || stockIndex >= 0 || transferReason.Length > 0 || countProduct != Guid.Empty || countReason.Length > 0;
     private bool CanWrite => Actor.Permissions.Contains("inventory.receive") && Actor.Permissions.Contains("documents.reverse");
     protected override Task OnInitializedAsync() => Refresh();
     private async Task Reload() { locations = await Inventory.Locations(); var data = await Business.Read(Actor); products = data.Products; allStock = data.Stock; stock = data.Stock.Where(x => x.Quantity > 0).ToList(); stockIndex = -1; PrepareCount(); }

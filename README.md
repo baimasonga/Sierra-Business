@@ -1,5 +1,7 @@
 # Sierra Business OS
 
+**Windows release 0.32.0 — verified 11 October 2026:** company period cutovers, inventory costing/valuation and consignment, pre-invoice rejections, cheque layouts/books, reviewed bank-row vouchers, party/ledger/voucher imports and group elimination adjustments are implemented. See [scope and verification](docs/remaining-features-0.32.0.md). The [unsigned installer](artifacts/windows/0.32.0/RokelaBusinessAdmin-Setup-x64.exe) passed 26 artifact checks; 380 full Release tests passed and six live provider tests were skipped. Native visual, physical peripheral and clean-machine acceptance remain unverified.
+
 A Microsoft .NET implementation based on [the supplied engineering specification](docs/engineering-specification.md). This repository contains an initial working vertical slice, not the full production system described in that specification.
 
 **Supabase head office 0.27.0:** head office can keep its database in Supabase (PostgreSQL) with tables hidden from Supabase's public API, history guards and verified seals; branches stay on SQLite and sync through the head-office server. `scripts\head-office-supabase.cmd` starts a trial. See [notes](docs/supabase-head-office-0.27.0.md).

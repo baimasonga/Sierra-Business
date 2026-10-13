@@ -30,7 +30,7 @@ public static class MauiProgram
         {
             // Another window already has this company open (or an earlier one stopped responding). Opening a second copy would wait on the
             // same database and browser profile and look frozen, so say so plainly and leave.
-            MessageBoxW(IntPtr.Zero, $"Sierra Business is already open for {company.Name}.\n\nSwitch to that window from the taskbar. If it is not responding, end \"SierraBusiness.Maui\" in Task Manager (or restart Windows), then open Sierra Business again. Posted records are never half-saved.", "Sierra Business", 0x40);
+            MessageBoxW(IntPtr.Zero, $"Rokela Business Admin is already open for {company.Name}.\n\nSwitch to that window from the taskbar. If it is not responding, end \"SierraBusiness.Maui\" in Task Manager (or restart Windows), then open Rokela Business Admin again. Posted records are never half-saved.", "Rokela Business Admin", 0x40);
             Environment.Exit(0);
         }
         // Keep the embedded browser's cache with the user's data, not in the program folder, so updates and uninstall can always replace the program files.

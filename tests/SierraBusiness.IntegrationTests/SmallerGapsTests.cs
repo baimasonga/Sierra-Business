@@ -156,6 +156,14 @@ public sealed class SmallerGapsTests : IAsyncLifetime
         Assert.Equal(1000m, pl.Income); Assert.Equal(500m, pl.Expenses); Assert.Equal(500m, pl.Profit); // sales 1,000 − cost 400 − rent 100
         var bs = await statements.BalanceSheet(yearEnd);
         Assert.Equal(0m, bs.Difference); Assert.Equal(500m, bs.CurrentProfit);
+        var ratios = await statements.Ratios(new(today.Year - 1, 1, 1), yearEnd);
+        Assert.Equal(60m, ratios.Rows.Single(x => x.Name == "Gross margin").Value);
+        Assert.Equal(50m, ratios.Rows.Single(x => x.Name == "Net profit margin").Value);
+        Assert.Equal(750m, ratios.Rows.Single(x => x.Name == "Return on average assets").Denominator);
+        Assert.Equal(2m, ratios.Rows.Single(x => x.Name == "Liabilities to equity").Value);
+        var emptyRatios = await statements.Ratios(lastYear.AddDays(-2), lastYear.AddDays(-1));
+        Assert.All(emptyRatios.Rows, x => Assert.Null(x.Value));
+        await Assert.ThrowsAsync<BusinessException>(() => statements.Ratios(yearEnd, lastYear));
         var cash = await statements.CashFlow(new(today.Year - 1, 1, 1), yearEnd);
         Assert.True(cash.Reconciled); Assert.Equal(900m, cash.ClosingCash); Assert.Equal(900m, cash.Operating);
         var funds = await statements.FundsFlow(new(today.Year - 1, 1, 1), yearEnd);
@@ -171,7 +179,7 @@ public sealed class SmallerGapsTests : IAsyncLifetime
         bs = await statements.BalanceSheet(today);
         Assert.Equal((500m, -50m, 0m, yearEnd), (bs.RetainedEarnings, bs.CurrentProfit, bs.Difference, bs.LastYearEnd!.Value));
 
-        foreach (var report in new[] { "Profit and loss", "Balance sheet", "Cash flow", "Funds flow", "Sales analysis", "Day book & ledgers", "Stock valuation", "Stock movements", "Receivables ageing", "Payables ageing" })
+        foreach (var report in new[] { "Financial ratios", "Profit and loss", "Balance sheet", "Cash flow", "Funds flow", "Sales analysis", "Day book & ledgers", "Stock valuation", "Stock movements", "Receivables ageing", "Payables ageing" })
         {
             var bytes = await statements.Export(new(report, new(today.Year - 1, 1, 1), today, ProductId: widget));
             using var doc = SpreadsheetDocument.Open(new MemoryStream(bytes), false);
@@ -179,7 +187,20 @@ public sealed class SmallerGapsTests : IAsyncLifetime
         }
         session.Actor = new("cashier", "FREETOWN", new HashSet<string> { "business.read", "sales.create" });
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => statements.BalanceSheet(today));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => statements.Ratios(lastYear, today));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => statements.Export(new("Financial ratios", lastYear, today)));
+        session.Actor = new("owner", "OTHER", BusinessPermissions.All.ToHashSet());
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => statements.Ratios(lastYear, today));
         await Verified();
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-10)]
+    public void RatiosDoNotPresentNonPositiveDenominatorsAsHealthyResults(int denominator)
+    {
+        Assert.Null(new FinancialRatio("Test", "Test", -50, denominator, true).Value);
+        Assert.Equal(-50m, new FinancialRatio("Test", "Test", -50, 100, true).Value);
     }
 
     [Fact] public async Task LargeRefundsWaitForApproval()

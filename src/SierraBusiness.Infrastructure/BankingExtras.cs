@@ -13,7 +13,7 @@ public sealed class IssuedCheque { public Guid Id { get; set; } public string Br
 public sealed class IssuedChequeEvent { public Guid Id { get; set; } public Guid ChequeId { get; set; } public IssuedChequeState State { get; set; } public DateOnly Date { get; set; } public string Reason { get; set; } = ""; public string Actor { get; set; } = ""; public DateTimeOffset Time { get; set; } }
 public sealed class TillAssignment { public Guid Id { get; set; } public string Branch { get; set; } = ""; public int AccountCode { get; set; } public string Cashier { get; set; } = ""; }
 
-public sealed class BankingExtrasService(IDbContextFactory<BusinessDb> factory, IActorSession session, IOptions<TradingOptions> options) : IBankingExtras
+public sealed partial class BankingExtrasService(IDbContextFactory<BusinessDb> factory, IActorSession session, IOptions<TradingOptions> options) : IBankingExtras
 {
     private async Task<Actor> Authorize(params string[] permissions)
     {
@@ -75,12 +75,26 @@ public sealed class BankingExtrasService(IDbContextFactory<BusinessDb> factory, 
         var number = Rules.Required(input.ChequeNumber, "Cheque number", 30).ToUpperInvariant();
         var payee = Rules.Required(input.Payee, "Payee", 160);
         Rules.Positive(input.Amount, "Cheque amount");
+        var normalized = input with { Allocations = input.Allocations ?? [] }; var legacyRecovery = false;
         await using (var db = await factory.CreateDbContextAsync())
         {
             var account = await db.LedgerAccounts.SingleOrDefaultAsync(x => x.Id == input.BankAccount);
             if (account is null || !account.CashOrBank || input.BankAccount == (int)Account.Cash) throw new BusinessException("Choose the bank account the cheque is drawn on.");
             var existing = await db.IssuedCheques.SingleOrDefaultAsync(x => x.Branch == actor.Branch && x.BankAccount == input.BankAccount && x.Number == number);
-            if (existing is not null) { if (existing.VoucherId == input.OperationId || existing.Id == Derived(input.OperationId, "cheque")) return existing.Id; throw new BusinessException($"Cheque {number} has already been issued from this account."); }
+            if (existing is not null)
+            {
+                if (existing.Id != Derived(input.OperationId, "cheque")) throw new BusinessException($"Cheque {number} has already been issued from this account.");
+                var voucherOperation = await db.Operations.SingleOrDefaultAsync(o => o.Id == input.OperationId);
+                var legacyOperation = await db.Operations.SingleOrDefaultAsync(o => o.Id == existing.Id && o.Action == "cheque.issue");
+                var prior = voucherOperation is not null ? JsonSerializer.Deserialize<VoucherCommand>(voucherOperation.Payload)?.ChequeIssue : null;
+                prior ??= legacyOperation is not null ? JsonSerializer.Deserialize<IssueChequeCommand>(legacyOperation.Payload) : null;
+                var origin = prior is not null && voucherOperation is not null ? voucherOperation : legacyOperation;
+                if (prior is null || origin?.Actor != actor.Id || origin.Branch != actor.Branch || JsonSerializer.Serialize(prior) != JsonSerializer.Serialize(normalized)) throw new BusinessException("This cheque operation was already used with different details or identity.");
+                return existing.Id;
+            }
+            var oldVoucher = await db.Operations.SingleOrDefaultAsync(o => o.Id == input.OperationId && o.Action == "voucher.post");
+            legacyRecovery = oldVoucher is not null && JsonSerializer.Deserialize<VoucherCommand>(oldVoucher.Payload)?.ChequeIssue is null;
+            await ValidateBook(db, actor, input, number);
         }
         var allocations = input.Allocations ?? [];
         if (allocations.Count == 0 && input.ExpenseAccount is null) throw new BusinessException("Allocate the cheque to supplier bills or choose an expense account.");
@@ -88,7 +102,8 @@ public sealed class BankingExtrasService(IDbContextFactory<BusinessDb> factory, 
         var debit = allocations.Count > 0 ? (int)Account.Payables : input.ExpenseAccount!.Value;
         var narration = $"Cheque {number} to {payee}" + (string.IsNullOrWhiteSpace(input.Narration) ? "" : $" · {input.Narration.Trim()}");
         var voucher = await new FinanceService(factory, session, options).PostVoucher(new(input.OperationId, VoucherType.Payment, input.Date, narration[..Math.Min(160, narration.Length)],
-            [new(debit, input.Amount, 0), new(input.BankAccount, 0, input.Amount)], allocations));
+            [new(debit, input.Amount, 0), new(input.BankAccount, 0, input.Amount)], allocations, ChequeIssue: legacyRecovery ? null : normalized));
+        if (!legacyRecovery) return Derived(input.OperationId, "cheque");
         return await Commands.Run(factory, actor, Derived(input.OperationId, "cheque"), "cheque.issue", input with { Allocations = allocations }, async db =>
         {
             var row = new IssuedCheque { Id = Derived(input.OperationId, "cheque"), Branch = actor.Branch, BankAccount = input.BankAccount, Number = number, Payee = payee, Date = input.Date, Amount = input.Amount, VoucherId = voucher, Actor = actor.Id };
@@ -116,6 +131,9 @@ public sealed class BankingExtrasService(IDbContextFactory<BusinessDb> factory, 
         else throw new BusinessException("Mark the cheque as presented or cancelled.");
         return await Commands.Run(factory, actor, input.OperationId, "cheque.state", input, async db =>
         {
+            var reversedPayment = await db.Documents.AnyAsync(d => d.Reverses == view.VoucherId);
+            var events = await db.IssuedChequeEvents.Where(e => e.ChequeId == view.Id).ToListAsync(); var current = reversedPayment ? IssuedChequeState.Cancelled : events.OrderBy(e => e.Time).LastOrDefault()?.State ?? IssuedChequeState.Issued;
+            if (input.NewState == IssuedChequeState.Presented && current != IssuedChequeState.Issued || input.NewState == IssuedChequeState.Cancelled && current == IssuedChequeState.Presented) throw new BusinessException("The cheque state changed. Refresh before marking presentation or cancellation.");
             var e = new IssuedChequeEvent { Id = Guid.NewGuid(), ChequeId = view.Id, State = input.NewState, Date = input.Date, Reason = reason, Actor = actor.Id, Time = DateTimeOffset.UtcNow };
             db.IssuedChequeEvents.Add(e); return e.Id;
         });

@@ -4,6 +4,7 @@
 @inject IServiceProvider Services
 @inject Microsoft.JSInterop.IJSRuntime JS
 @if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (preferenceMessage.Length > 0) { <div class="notice success" role="status">@preferenceMessage</div> }
 
 <section class="panel report-bar">
     <div class="report-period">
@@ -32,6 +33,7 @@
             <strong>@Title</strong>
         </nav>
     }
+    <details><summary>Report settings on this device</summary><p class="hint">Save dates, report, grouping, ledger selection and document type for this user and branch. Party names, search text and amounts are not stored.</p><button type="button" class="secondary" disabled="@busy" @onclick="SavePreferences">Save report settings</button><button type="button" class="secondary" disabled="@busy" @onclick="ResetPreferences">Reset saved settings</button></details>
 </section>
 
 @if (view == "Dashboard" && dashboard is { } d)
@@ -230,12 +232,27 @@ else if ((view == ReceivablesReport || view == PayablesReport) && ageing is { } 
 }
 else if (busy) { <section class="panel"><p class="empty">Loading…</p></section> }
 
+@if (view == StockAgeReport && stockAge is { } age)
+{
+    <section class="panel">
+        <h2>Stock ageing &amp; slow-moving</h2>
+        <label>Slow-moving threshold (days)<input type="number" min="1" max="3660" @bind="slowDays" @bind:after="Reload" /></label>
+        <p class="hint">Age buckets show base quantities using oldest-received stock first within each serial/batch/expiry identity. Transfers preserve receipt age. Returns and positive counts start at their return/count date. Accounting valuation remains weighted average. Unallocated age flags inconsistent historical quantities.</p>
+        <p class="hint">Slow-moving means no dispatch in @age.SlowDays days, or never dispatched with stock at least @age.SlowDays days old. Dispatch includes sales, deliveries and service issues.</p>
+        <div class="table-wrap"><table class="report-table"><thead><tr><th>Product / tracking</th><th>Warehouse</th><th class="numeric">Quantity</th><th class="numeric">0–30</th><th class="numeric">31–60</th><th class="numeric">61–90</th><th class="numeric">Over 90</th><th class="numeric">Unallocated</th><th class="numeric">Value</th><th>Last dispatch</th><th>Slow-moving</th></tr></thead><tbody>
+        @foreach (var row in age.Rows) { <tr><td><button type="button" class="text-button" @onclick="() => DrillProduct(row.ProductId, row.Name)">@row.Sku · @row.Name</button><small>@row.Serial @row.Batch @row.Expiry?.ToString("dd MMM yyyy") · @row.Unit</small></td><td>@row.Location</td><td class="numeric">@row.Quantity.ToString("0.####")</td><td class="numeric">@row.Days30.ToString("0.####")</td><td class="numeric">@row.Days60.ToString("0.####")</td><td class="numeric">@row.Days90.ToString("0.####")</td><td class="numeric">@row.Over90.ToString("0.####")</td><td class="numeric">@row.UnknownAge.ToString("0.####")</td><td class="numeric">@Money(row.Value)</td><td>@(row.LastDispatch?.ToString("dd MMM yyyy") ?? "Never")</td><td>@(row.SlowMoving ? "Yes" : "No")</td></tr> }
+        </tbody></table></div>
+        @if (age.Rows.Count == 0) { <p class="empty">No stock on this date.</p> }
+    </section>
+}
 @code {
     [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
     [Parameter] public string StartView { get; set; } = "Dashboard";
     [Parameter] public EventCallback<Guid> OpenDocument { get; set; }
     [Parameter] public EventCallback<string> Navigate { get; set; }
-    private const string SalesReport = "Sales analysis", RegisterReport = "Day book & ledgers", StockReport = "Stock valuation", MovementsReport = "Stock movements", ReceivablesReport = "Receivables ageing", PayablesReport = "Payables ageing";
+    private const string SalesReport = "Sales analysis", RegisterReport = "Day book & ledgers", StockReport = "Stock valuation", MovementsReport = "Stock movements", ReceivablesReport = "Receivables ageing", PayablesReport = "Payables ageing", StockAgeReport = "Stock ageing & slow-moving";
+    private StockAgeingReport? stockAge;
+    private int slowDays = 90;
     private sealed record Crumb(string Title, string View, SalesGrouping By, int? Account, string Party, string Kind, string Search, Guid Product, string ProductName, DateOnly From, DateOnly To);
     private static DateOnly Today => DateOnly.FromDateTime(DateTime.Now);
     private DateOnly from = new(Today.Year, Today.Month, 1), to = Today;
@@ -244,6 +261,45 @@ else if (busy) { <section class="panel"><p class="empty">Loading…</p></section
     private SalesGrouping salesBy = SalesGrouping.Day;
     private Guid productId;
     private bool busy, live;
+    private string preferenceMessage = "";
+    private bool preferencesLoaded;
+    private string PreferenceKey => Actor.Id + "." + Actor.Branch + "." + StartView;
+    private sealed record ReportPreferences(DateOnly From, DateOnly To, string View, SalesGrouping Grouping, int Account, string Kind);
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (preferencesLoaded || busy) return;
+        preferencesLoaded = true;
+        try
+        {
+            var json = await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<string?>(JS, "sierraPreferenceRead", PreferenceKey);
+            if (string.IsNullOrWhiteSpace(json)) return;
+            var saved = System.Text.Json.JsonSerializer.Deserialize<ReportPreferences>(json);
+            if (saved is null || saved.From > saved.To || saved.To.DayNumber - saved.From.DayNumber > 3660 || !Enum.IsDefined(saved.Grouping)) return;
+            from = saved.From; to = saved.To; salesBy = saved.Grouping;
+            if (StartView == "Reports" && ReportList.Contains(saved.View)) view = saved.View;
+            accountCode = Financial && accounts.Any(a => a.Code == saved.Account) ? saved.Account : 0;
+            kindFilter = Enum.TryParse<DocumentKind>(saved.Kind, out var parsed) && Enum.IsDefined(parsed) ? saved.Kind : "";
+            await Load(); await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception e) when (e is System.Text.Json.JsonException or Microsoft.JSInterop.JSException or InvalidOperationException) { /* Display settings are optional; a corrupt or unavailable store must not stop reports. */ }
+    }
+    private async Task SavePreferences()
+    {
+        preferenceMessage = "";
+        try
+        {
+            var saved = new ReportPreferences(from, to, ReportList.Contains(view) ? view : SalesReport, salesBy, accountCode, kindFilter);
+            await Microsoft.JSInterop.JSRuntimeExtensions.InvokeVoidAsync(JS, "sierraPreferenceWrite", PreferenceKey, System.Text.Json.JsonSerializer.Serialize(saved));
+            preferenceMessage = "Report settings saved for this user on this device.";
+        }
+        catch (Microsoft.JSInterop.JSException) { error = "This device could not save report settings. The report remains available."; }
+    }
+    private async Task ResetPreferences()
+    {
+        preferenceMessage = "";
+        try { await Microsoft.JSInterop.JSRuntimeExtensions.InvokeVoidAsync(JS, "sierraPreferenceRemove", PreferenceKey); preferenceMessage = "Saved report settings cleared."; }
+        catch (Microsoft.JSInterop.JSException) { error = "This device could not clear saved report settings."; }
+    }
     private DateTimeOffset updated = DateTimeOffset.Now;
     private DashboardView? dashboard; private SalesAnalysis? sales; private RegisterReport? register; private StockValuation? stock; private MovementReport? movements; private AgeingReport? ageing;
     private IReadOnlyList<LedgerDefinition> accounts = [];
@@ -251,7 +307,7 @@ else if (busy) { <section class="panel"><p class="empty">Loading…</p></section
     private readonly HashSet<string> expanded = new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource stopping = new(); private int pending; private volatile bool disposed; private bool stale; private Timer? poll;
     private bool Financial => Actor.Permissions.Contains("accounting.read");
-    private string[] ReportList => Financial ? ["Dashboard", SalesReport, RegisterReport, StockReport, ReceivablesReport, PayablesReport] : ["Dashboard", SalesReport, RegisterReport, StockReport];
+    private string[] ReportList => Financial ? ["Dashboard", SalesReport, RegisterReport, StockReport, StockAgeReport, ReceivablesReport, PayablesReport] : ["Dashboard", SalesReport, RegisterReport, StockReport, StockAgeReport];
     private string Root => trail.Count > 0 ? trail[0].View : view;
     private string Title => view switch
     {
@@ -313,6 +369,7 @@ else if (busy) { <section class="panel"><p class="empty">Loading…</p></section
                 case SalesReport: sales = await Reports.Sales(from, to, salesBy); break;
                 case RegisterReport: register = await Reports.Register(new(from, to, accountCode == 0 ? null : accountCode, partyFilter, kindFilter.Length == 0 ? null : Enum.Parse<DocumentKind>(kindFilter), searchFilter, registerPage, 50)); break;
                 case StockReport: stock = await Reports.Stock(to); break;
+                case StockAgeReport: stockAge = await Reports.StockAgeing(to, slowDays); break;
                 case MovementsReport: movements = await Reports.Movements(new(productId, from, to, "", movementPage, 50)); break;
                 case ReceivablesReport: ageing = await Reports.Ageing(to, true); break;
                 case PayablesReport: ageing = await Reports.Ageing(to, false); break;
@@ -380,7 +437,7 @@ else if (busy) { <section class="panel"><p class="empty">Loading…</p></section
         busy = true; error = "";
         try
         {
-            var bytes = await statements.Export(new(view, from, to, salesBy, accountCode == 0 ? null : accountCode, partyFilter, kindFilter, searchFilter, productId == Guid.Empty ? null : productId));
+            var bytes = await statements.Export(new(view, from, to, salesBy, accountCode == 0 ? null : accountCode, partyFilter, kindFilter, searchFilter, productId == Guid.Empty ? null : productId, slowDays));
             await Microsoft.JSInterop.JSRuntimeExtensions.InvokeVoidAsync(JS, "sierraDownload", $"{view.Replace(" & ", "-").Replace(' ', '-')}-{to:yyyy-MM-dd}.xlsx", Convert.ToBase64String(bytes));
         }
         catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }

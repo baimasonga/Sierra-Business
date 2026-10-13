@@ -121,12 +121,15 @@ public sealed partial class PurchasingService
             var line = available.SingleOrDefault(x => x.LineId == entry.LineId) ?? throw new BusinessException("Choose receipt lines that are awaiting a supplier invoice in this branch.");
             if (!line.Receipt.Party.Equals(supplier, StringComparison.OrdinalIgnoreCase)) throw new BusinessException($"Receipt {line.Receipt.Number} is from {line.Receipt.Party}, not {supplier}.");
             if (line.Receipt.BusinessDate > input.Date) throw new BusinessException("The invoice cannot be dated before the goods were received.");
+            await InventoryCost.GuardDate(db,actor.Branch,line.ProductId,input.Date);
             Rules.Positive(entry.Quantity, "Invoiced quantity");
             if (entry.Quantity > line.Outstanding) throw new BusinessException($"Only {line.Outstanding:0.####} {products[line.ProductId].Unit} of {products[line.ProductId].Sku} on {line.Receipt.Number} is still awaiting an invoice.");
             Money2(entry.Amount, $"Invoice amount for {products[line.ProductId].Sku}");
             var cleared = Grni.Clear(line.Value, line.Received, line.Consumed, entry.Quantity, line.Cleared);
             var expected = Grni.Expected(line.Source, line.Received, line.Consumed, entry.Quantity);
-            planned.Add(new(line, products[line.ProductId].Sku, entry.Quantity, expected, entry.Amount, cleared, AccountingEngine.Money((entry.Amount - expected) * line.Rate), 0, 0));
+            var standard = (await InventoryCost.Policy(db,actor.Branch,line.ProductId)).Method == InventoryCostMethod.Standard;
+            var variance = standard ? AccountingEngine.Money(entry.Amount * line.Rate) - cleared : AccountingEngine.Money((entry.Amount - expected) * line.Rate);
+            planned.Add(new(line, products[line.ProductId].Sku, entry.Quantity, expected, entry.Amount, cleared, variance, 0, 0));
         }
         var currencies = planned.Select(x => x.Line.Currency).Distinct().ToList();
         if (currencies.Count != 1) throw new BusinessException("An invoice is in one currency. Match receipts in NLe and receipts in foreign currency on separate invoices.");
@@ -144,6 +147,7 @@ public sealed partial class PurchasingService
             var stock = await db.Movements.Where(x => x.Branch == actor.Branch && x.ProductId == k.ProductId && x.Location == k.Location && x.Serial == k.Serial && x.Batch == k.Batch && x.Expiry == k.Expiry).Select(x => new { x.Quantity, x.Value }).ToListAsync();
             var invoiced = identity.Sum(x => x.Quantity);
             var ratio = Math.Clamp(stock.Sum(x => x.Quantity) / invoiced, 0, 1);
+            if ((await InventoryCost.Policy(db,actor.Branch,k.ProductId)).Method == InventoryCostMethod.Standard) ratio = 0;
             var lines = identity.Select(x => { var toStock = AccountingEngine.Money(x.Variance * ratio); return x with { ToInventory = toStock, ToCost = x.Variance - toStock }; }).ToList();
             var shortfall = stock.Sum(x => x.Value) + lines.Sum(x => x.ToInventory); // a price reduction cannot take stock value below zero
             if (shortfall < 0 && lines.FindIndex(x => x.ToInventory < 0) is var i and >= 0) { lines[i] = lines[i] with { ToInventory = lines[i].ToInventory - shortfall, ToCost = lines[i].ToCost + shortfall }; }
@@ -168,6 +172,7 @@ public sealed partial class PurchasingService
         {
             await OpenDate(db, actor, input.Date);
             var plan = await Match(db, actor, input);
+            if (plan.Currency is string foreignCurrency) await Fx.EnsureOpenCurrencyDate(db, actor.Branch, foreignCurrency, input.Date);
             var number = Rules.Required(input.InvoiceNumber, "Supplier's invoice number", 60);
             var reason = (input.VarianceReason ?? "").Trim();
             if (plan.NeedsReason && reason.Length == 0) throw new BusinessException("The invoice differs from the receipt prices. Enter the reason for the difference (for example the supplier's price change).");

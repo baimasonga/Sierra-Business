@@ -48,13 +48,19 @@ public sealed class PartyService(IDbContextFactory<BusinessDb> factory, IActorSe
         var payload = JsonSerializer.Serialize(input); var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(actor.Branch + actor.Id + "party.save" + payload)));
         await using var db = await factory.CreateDbContextAsync(); await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         var previous = await db.Operations.SingleOrDefaultAsync(x => x.Id == input.OperationId); if (previous is not null) { if (hash != previous.Fingerprint) throw new BusinessException("Operation ID already used with different data or identity."); return previous.ResultId; }
+        var party = await SaveCore(db, actor, input);
+        db.Operations.Add(new() { Id = input.OperationId, ResultId = party.Id, Branch = actor.Branch, Actor = actor.Id, Action = "party.save", Time = DateTimeOffset.UtcNow, Payload = payload, Fingerprint = hash }); await db.SaveChangesAsync(); await tx.CommitAsync(); return party.Id;
+    }
+    internal static async Task<BusinessParty> SaveCore(BusinessDb db, Actor actor, PartyCommand input, bool apply = true)
+    {
+        actor.Demand("catalogue.write");
         var code = Rules.Required(input.Code, "Party code", 40).ToUpperInvariant(); var name = Rules.Required(input.Name, "Party name"); var normalized = name.ToUpperInvariant();
         if (!Enum.IsDefined(input.Type) || input.PaymentDays is < 0 or > 3650 || input.CreditLimit < 0 || input.CreditLimit > 1_000_000_000 || AccountingEngine.Money(input.CreditLimit) != input.CreditLimit) throw new BusinessException("Check party type, payment days (0–3650) and credit limit (up to two decimal places).");
         if (input.Contact.Length > 160 || input.Phone.Length > 60 || input.Email.Length > 160 || input.Address.Length > 200) throw new BusinessException("Contact/address fields exceed their maximum length.");
         if (input.Email.Length > 0 && !System.Net.Mail.MailAddress.TryCreate(input.Email, out _)) throw new BusinessException("Enter a valid email address.");
         if (await db.Parties.AnyAsync(x => x.Branch == actor.Branch && x.Id != input.Id && (x.Code == code || x.NormalizedName == normalized))) throw new BusinessException("Party code or name already exists in this branch.");
         BusinessParty party;
-        if (input.Id is null) { party = new() { Id = Guid.NewGuid(), Branch = actor.Branch }; db.Parties.Add(party); }
+        if (input.Id is null) { party = new() { Id = Guid.NewGuid(), Branch = actor.Branch }; if (apply) db.Parties.Add(party); }
         else { party = await db.Parties.SingleOrDefaultAsync(x => x.Id == input.Id && x.Branch == actor.Branch) ?? throw new BusinessException("Party not found."); if (party.Version != input.ExpectedVersion) throw new BusinessException("Party changed. Refresh before saving."); if (party.Name != name && await db.Documents.AnyAsync(x => x.Branch == actor.Branch && x.Party.ToUpper() == party.NormalizedName)) throw new BusinessException("A party with posted history cannot be renamed. Retain its name to preserve bill matching."); }
         party.Version++; party.Code = code; party.Name = name; party.NormalizedName = normalized; party.Type = input.Type; party.Contact = input.Contact.Trim(); party.Phone = input.Phone.Trim(); party.Email = input.Email.Trim(); party.Address = input.Address.Trim(); party.PaymentDays = input.PaymentDays; party.CreditLimit = input.CreditLimit; party.CreditHold = input.CreditHold;
         if (input.Category is not null) { var category = input.Category.Trim(); if (category.Length > 40) throw new BusinessException("The organisation type is limited to 40 characters."); party.Category = category; }
@@ -67,7 +73,7 @@ public sealed class PartyService(IDbContextFactory<BusinessDb> factory, IActorSe
             foreach (var c in contacts) { if (c.Phone.Length > 60 || c.Email.Length > 160) throw new BusinessException("A contact's phone or email is too long."); if (c.Email.Length > 0 && !System.Net.Mail.MailAddress.TryCreate(c.Email, out _)) throw new BusinessException($"Enter a valid email for {c.Name}."); }
             party.ContactsJson = JsonSerializer.Serialize(contacts);
         }
-        db.Operations.Add(new() { Id = input.OperationId, ResultId = party.Id, Branch = actor.Branch, Actor = actor.Id, Action = "party.save", Time = DateTimeOffset.UtcNow, Payload = payload, Fingerprint = hash }); await db.SaveChangesAsync(); await tx.CommitAsync(); return party.Id;
+        return party;
     }
     private static PartyView View(BusinessParty x) => new(x.Id, x.Version, x.Code, x.Name, x.Type, x.Contact, x.Phone, x.Email, x.Address, x.PaymentDays, x.CreditLimit, x.CreditHold,
         x.Category, x.Tin, JsonSerializer.Deserialize<List<PartyContact>>(string.IsNullOrWhiteSpace(x.ContactsJson) ? "[]" : x.ContactsJson) ?? [], x.Notes);

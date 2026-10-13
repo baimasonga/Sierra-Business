@@ -22,7 +22,7 @@ public sealed class NoFiscalDevice : IFiscalIntegration
     public Task<FiscalResult> Register(FiscalInvoice invoice, CancellationToken cancellationToken = default) => Task.FromResult(new FiscalResult(false, Message: "No fiscal device or service is connected."));
 }
 
-public static class TaxRules
+public static partial class TaxRules
 {
     /// <summary>The product's tax category on a date; products never assigned one are standard-rated.</summary>
     public static async Task<TaxCategory> Category(BusinessDb db, Guid productId, DateOnly date) =>
@@ -159,7 +159,7 @@ public sealed partial class ComplianceService(IDbContextFactory<BusinessDb> fact
         var actor = await Authorize("accounting.write");
         return await Commands.Run(factory, actor, input.OperationId, "tax.category", input, async db =>
         {
-            if (!Enum.IsDefined(input.Category)) throw new BusinessException("Choose standard-rated, zero-rated or exempt.");
+            if (!Enum.IsDefined(input.Category) || input.Category == TaxCategory.Relieved) throw new BusinessException("Choose standard-rated, zero-rated or exempt. Relief belongs to a reviewed recipient certificate and invoice, not every customer buying this product.");
             if (!await db.Products.AnyAsync(x => x.Id == input.ProductId)) throw new BusinessException("Product not found.");
             if (input.From < Today) throw new BusinessException("A tax change takes effect today or later. Posted invoices keep the category they were issued with.");
             var reason = Text(input.Reason, "reason (for example the law or notice)", 200, true);
@@ -170,32 +170,37 @@ public sealed partial class ComplianceService(IDbContextFactory<BusinessDb> fact
             db.TaxAssignments.Add(row); return row.Id;
         });
     }
-    public static string Label(TaxCategory c) => c switch { TaxCategory.ZeroRated => "zero-rated", TaxCategory.Exempt => "exempt", _ => "standard-rated" };
+    public static string Label(TaxCategory c) => c switch { TaxCategory.ZeroRated => "zero-rated", TaxCategory.Exempt => "exempt",TaxCategory.Relieved => "relieved", _ => "standard-rated" };
 
     // ---------------- tax return ----------------
 
     public async Task<TaxReturnReport> TaxReturn(DateOnly from, DateOnly to)
     {
         var actor = await Authorize("accounting.read");
+        await using var db = await factory.CreateDbContextAsync(); return await TaxReturnFor(db,actor,from,to);
+    }
+    private static async Task<TaxReturnReport> TaxReturnFor(BusinessDb db,Actor actor,DateOnly from,DateOnly to)
+    {
         if (to < from) throw new BusinessException("The end date is before the start date.");
         if (to.DayNumber - from.DayNumber > 400) throw new BusinessException("Choose a period of at most 13 months.");
-        await using var db = await factory.CreateDbContextAsync();
         var profile = await TaxRules.Profile(db, actor.Branch);
         var kinds = new[] { DocumentKind.Sale, DocumentKind.ServiceInvoice, DocumentKind.SalesReturn };
-        var docs = await db.Documents.AsNoTracking().Where(x => x.Branch == actor.Branch && kinds.Contains(x.Kind) && x.BusinessDate >= from && x.BusinessDate <= to && !db.Documents.Any(r => r.Reverses == x.Id)).ToListAsync();
+        var docs = await db.Documents.AsNoTracking().Where(x => x.Branch == actor.Branch && (kinds.Contains(x.Kind) || x.Kind == DocumentKind.Reversal && db.Documents.Any(p => p.Id == x.Reverses && kinds.Contains(p.Kind))) && x.BusinessDate >= from && x.BusinessDate <= to).ToListAsync();
+        var parentIds = docs.Where(d => d.Reverses != null).Select(d => d.Reverses!.Value).ToArray(); var parents = await db.Documents.AsNoTracking().Where(d => parentIds.Contains(d.Id) && d.Branch == actor.Branch).ToDictionaryAsync(d => d.Id);
         var ids = docs.Select(x => x.Id).ToList();
         var fiscalRows = (await db.FiscalSubmissions.AsNoTracking().Where(x => ids.Contains(x.DocumentId)).ToListAsync()).ToLookup(x => x.DocumentId);
         var rows = new List<TaxReturnDocument>();
         foreach (var d in docs.OrderBy(x => x.BusinessDate).ThenBy(x => x.Number))
         {
-            using var json = JsonDocument.Parse(d.Detail); var root = json.RootElement;
+            var source = d.Reverses is Guid parent ? parents[parent] : d;
+            using var json = JsonDocument.Parse(source.Detail); var root = json.RootElement;
             var net = TaxRules.Value(root, "Net"); var tax = TaxRules.Value(root, "Tax"); var rate = TaxRules.Value(root, "TaxRate");
             var (s, z, e) = TaxRules.Split(root, net);
-            var sign = d.Kind == DocumentKind.SalesReturn ? -1 : 1;
-            var state = d.Kind == DocumentKind.SalesReturn ? "" : FiscalOf(d, profile, fiscalRows[d.Id]).State switch { FiscalState.Registered => "Registered", FiscalState.Pending => "Pending", FiscalState.Rejected => "Rejected", _ => "" };
-            rows.Add(new(d.Id, Short(d.Number), d.BusinessDate, d.Kind switch { DocumentKind.Sale => "Sale", DocumentKind.ServiceInvoice => "Service invoice", _ => "Sales return" }, d.Party, sign * s, sign * z, sign * e, sign * tax, rate, state));
+            var sign = (source.Kind == DocumentKind.SalesReturn ? -1 : 1)*(d.Reverses is null ? 1 : -1);
+            var state = d.Reverses is not null ? "Cancellation" : d.Kind == DocumentKind.SalesReturn ? "" : FiscalOf(d,profile,fiscalRows[d.Id]).State switch { FiscalState.Registered => "Registered", FiscalState.Pending => "Pending", FiscalState.Rejected => "Rejected", _ => "" };
+            rows.Add(new(d.Id,Short(d.Number),d.BusinessDate,d.Reverses is not null ? source.Kind == DocumentKind.SalesReturn ? "Sales return cancellation" : "Invoice cancellation" : d.Kind switch { DocumentKind.Sale => "Sale",DocumentKind.ServiceInvoice => "Service invoice",_ => "Sales return" },d.Party,sign*s,sign*z,sign*e,sign*tax,rate,state,sign*TaxRules.Value(root,"Relieved")));
         }
-        TaxReturnLine Line(string section, IEnumerable<TaxReturnDocument> r) { var l = r.ToList(); return new(section, l.Sum(x => x.Standard), l.Sum(x => x.ZeroRated), l.Sum(x => x.Exempt), l.Sum(x => x.Tax), l.Count); }
+        TaxReturnLine Line(string section, IEnumerable<TaxReturnDocument> r) { var l = r.ToList(); return new(section,l.Sum(x => x.Standard),l.Sum(x => x.ZeroRated),l.Sum(x => x.Exempt),l.Sum(x => x.Tax),l.Count,l.Sum(x => x.Relieved)); }
         var lines = new[] { Line("Sales and service invoices", rows.Where(x => x.Kind != "Sales return")), Line("Less sales returns", rows.Where(x => x.Kind == "Sales return")), Line("Net for the period", rows) };
         var ledger = (await db.Journal.AsNoTracking().Where(x => ids.Contains(x.DocumentId) && x.Account == Account.TaxPayable).Select(x => new { x.Credit, x.Debit }).ToListAsync()).Sum(x => x.Credit - x.Debit);
         var output = lines[2].Tax;

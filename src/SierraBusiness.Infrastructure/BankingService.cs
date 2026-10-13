@@ -7,7 +7,7 @@ using Microsoft.Extensions.Options;
 using SierraBusiness.Application;
 using SierraBusiness.Domain;
 namespace SierraBusiness.Infrastructure;
-public sealed class BankingService(IDbContextFactory<BusinessDb> factory, IActorSession session, IOptions<TradingOptions> options) : IBankingService
+public sealed partial class BankingService(IDbContextFactory<BusinessDb> factory, IActorSession session, IOptions<TradingOptions> options) : IBankingService
 {
     private async Task<Actor> Authorize(string permission) { var a = await session.CurrentActor(); a.Demand(permission); if (a.Branch != options.Value.Branch || string.IsNullOrWhiteSpace(a.Id)) throw new UnauthorizedAccessException(); return a; }
     private static void Amount(decimal value, bool zero = false) { if (value < 0 || !zero && value == 0 || value > 1_000_000_000 || AccountingEngine.Money(value) != value) throw new BusinessException("Use a positive amount up to one billion with at most two decimal places."); }
@@ -73,12 +73,15 @@ public sealed class BankingService(IDbContextFactory<BusinessDb> factory, IActor
         var cheque = await db.ReceivedCheques.SingleOrDefaultAsync(x => x.Id == input.ChequeId && x.Branch == actor.Branch && !db.Documents.Any(d => d.Reverses == x.SourceDocumentId)) ?? throw new BusinessException("Active cheque not found.");
         var previous = await db.ChequeEvents.Where(x => x.ChequeId == cheque.Id).OrderByDescending(x => x.Version).FirstOrDefaultAsync(); var state = previous?.State ?? ChequeState.Received; var version = previous?.Version ?? 0;
         var source = await db.Documents.SingleAsync(x => x.Id == cheque.SourceDocumentId);
+        var advanceCredit = source.Settlement == "Customer deposit" ? await db.CustomerCredits.SingleOrDefaultAsync(c => c.ReturnId == source.Id) : null;
+        var advanceUsed = advanceCredit is null ? 0 : (await db.CustomerCreditUses.Where(u => u.CreditId == advanceCredit.Id && !db.Documents.Any(r => r.Reverses == u.DocumentId)).ToListAsync()).Sum(u => u.Amount);
         if (input.ExpectedVersion != version || input.Date < (previous?.Date ?? source.BusinessDate) || input.Date < cheque.ChequeDate) throw new BusinessException("Cheque changed or date precedes the cheque/latest event. Refresh and check the date.");
         var bank = previous?.BankAccount ?? input.BankAccount; var next = state; BusinessDocument doc;
         if (input.Action == ChequeAction.Undo)
         {
             actor.Demand("documents.reverse");
             var target = await db.ChequeEvents.Where(x => x.ChequeId == cheque.Id && x.Action != ChequeAction.Undo && !db.Documents.Any(d => d.Reverses == x.DocumentId)).OrderByDescending(x => x.Version).FirstOrDefaultAsync() ?? throw new BusinessException("There is no action left to undo.");
+            if (advanceCredit is not null && advanceUsed > 0 && target.Action != ChequeAction.Bounce) throw new BusinessException("Reverse this cheque deposit's allocations and refunds before undoing its clearance or deposit.");
             if (await db.BillAllocations.AnyAsync(x => x.InvoiceId == target.DocumentId && !db.Documents.Any(d => d.Reverses == x.VoucherId))) throw new BusinessException("Reverse receipts or credit allocations against the bounced cheque bill before undoing its bounce.");
             var original = await db.Documents.SingleAsync(x => x.Id == target.DocumentId); var entries = await db.Journal.Where(x => x.DocumentId == original.Id).ToListAsync();
             doc = Document(actor, input.OperationId, DocumentKind.Reversal, input.Date, cheque.Party, -original.Total, "Cheque action correction", input); doc.Reverses = original.Id;
@@ -98,9 +101,12 @@ public sealed class BankingService(IDbContextFactory<BusinessDb> factory, IActor
                     next = ChequeState.Cleared; posting.AddRange([new((Account)bank, cheque.Amount, 0), new((Account)1030, 0, cheque.Amount)]); break;
                 case ChequeAction.Bounce:
                     if (state == ChequeState.Bounced) throw new BusinessException("This cheque has already bounced.");
-                    next = ChequeState.Bounced; posting.AddRange([new(Account.Receivables, cheque.Amount, 0), new(state == ChequeState.Received ? Account.ChequesInHand : state == ChequeState.Deposited ? (Account)1030 : (Account)bank, 0, cheque.Amount)]); break;
+                    next = ChequeState.Bounced;
+                    if (advanceCredit is not null) posting.AddRange([new(Account.Receivables,advanceUsed,0),new((Account)2400,cheque.Amount-advanceUsed,0),new(state == ChequeState.Received ? Account.ChequesInHand : state == ChequeState.Deposited ? (Account)1030 : (Account)bank,0,cheque.Amount)]);
+                    else posting.AddRange([new(Account.Receivables,cheque.Amount,0),new(state == ChequeState.Received ? Account.ChequesInHand : state == ChequeState.Deposited ? (Account)1030 : (Account)bank,0,cheque.Amount)]); break;
             }
             doc = Document(actor, input.OperationId, next == ChequeState.Bounced ? DocumentKind.ChequeBounce : DocumentKind.ChequeMovement, input.Date, cheque.Party, cheque.Amount, next == ChequeState.Bounced ? "Credit" : next.ToString(), input);
+            if (next == ChequeState.Bounced && advanceCredit is not null) doc.Total = advanceUsed;
             Journal(db, doc, posting.ToArray());
         }
         db.ChequeEvents.Add(new() { Id = Guid.NewGuid(), ChequeId = cheque.Id, DocumentId = doc.Id, Version = version + 1, Action = input.Action, PreviousState = state, State = next, BankAccount = bank, Date = input.Date, Reason = Rules.Required(input.Reason, "Reason / bank reference") }); return doc.Id;
@@ -110,6 +116,7 @@ public sealed class BankingService(IDbContextFactory<BusinessDb> factory, IActor
         if ((input.InvoiceId is null) == (input.RefundAccount is null)) throw new BusinessException("Choose a cash/bank refund receipt or a purchase bill allocation.");
         var credit = await db.SupplierCredits.SingleOrDefaultAsync(x => x.Id == input.CreditId && db.Documents.Any(d => d.Id == x.ReturnId && d.Branch == actor.Branch) && !db.Documents.Any(d => d.Reverses == x.ReturnId)) ?? throw new BusinessException("Supplier credit not found.");
         var source = await db.Documents.SingleAsync(x => x.Id == credit.ReturnId);
+        await Fx.RejectLocalAdvance(db,source.Id);
         var used = (await db.SupplierCreditUses.Where(x => x.CreditId == credit.Id && !db.Documents.Any(d => d.Reverses == x.DocumentId)).ToListAsync()).Sum(x => x.Amount);
         if (input.Amount > credit.Amount - used) throw new BusinessException("Amount exceeds the remaining supplier credit.");
         var doc = Document(actor, input.OperationId, DocumentKind.SupplierCreditUse, date, source.Party, input.Amount, input.InvoiceId is null ? "Supplier refund received" : "Supplier credit allocation", input);

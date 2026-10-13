@@ -133,7 +133,7 @@ public static class PayrollMath
     }
 }
 
-public sealed class PayrollService(IDbContextFactory<BusinessDb> factory, IActorSession session, IOptions<TradingOptions> options) : IPayrollService
+public sealed partial class PayrollService(IDbContextFactory<BusinessDb> factory, IActorSession session, IOptions<TradingOptions> options) : IPayrollService
 {
     private static DateOnly Today => DateOnly.FromDateTime(DateTime.UtcNow);
     private async Task<Actor> Authorize()
@@ -194,6 +194,7 @@ public sealed class PayrollService(IDbContextFactory<BusinessDb> factory, IActor
     // ---------------- payroll runs ----------------
 
     private sealed record RunLine(Employee Employee, PayCalculation Calculation);
+    private static string CalculationFingerprint(IEnumerable<RunLine> lines) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(lines.Select(l => new { Employee = View(l.Employee), l.Calculation })))));
     private async Task<(DateOnly First, PayrollRules? Rules, List<RunLine> Lines)> Build(BusinessDb db, Actor actor, PayrollCommand input)
     {
         var first = new DateOnly(input.Month.Year, input.Month.Month, 1);
@@ -203,11 +204,19 @@ public sealed class PayrollService(IDbContextFactory<BusinessDb> factory, IActor
         if (adjustments.Any(x => (x.Note ?? "").Length > 100)) throw new BusinessException("Adjustment notes are limited to 100 characters.");
         var rules = await PayrollMath.RulesFor(db, actor.Branch, first);
         var loans = await PayrollMath.LoanBalances(db, actor.Branch);
+        var workforce = input.UseWorkforceInputs == true ? await WorkforceStateFor(db, actor) : null;
         var lines = new List<RunLine>();
         foreach (var id in input.EmployeeIds)
         {
             var employee = await db.Employees.SingleOrDefaultAsync(x => x.Id == id && x.Branch == actor.Branch) ?? throw new BusinessException("Employee not found in this branch.");
             var adjustment = adjustments.SingleOrDefault(x => x.EmployeeId == id);
+            if (workforce is not null)
+            {
+                adjustment ??= new(employee.Id);
+                if (adjustment.UnpaidDays != 0) throw new BusinessException("Clear manually entered unpaid days before using attendance and leave, to avoid double deduction.");
+                var time = WorkforceInput(workforce, employee, first);
+                adjustment = adjustment with { UnpaidDays = time.UnpaidDays, Bonus = adjustment.Bonus + time.Earnings, ExtraDeduction = adjustment.ExtraDeduction + time.Deductions, Note = (adjustment.Note ?? "") + "; " + time.Detail };
+            }
             var owed = loans.TryGetValue(employee.Id, out var l) && l.Outstanding > 0 ? Math.Min(l.Installment, l.Outstanding) : 0;
             lines.Add(new(employee, PayrollMath.Calculate(View(employee), rules, first, adjustment is null ? null : adjustment with { Note = adjustment.Note ?? "" }, owed)));
         }
@@ -221,7 +230,7 @@ public sealed class PayrollService(IDbContextFactory<BusinessDb> factory, IActor
         var c = lines.Select(x => x.Calculation).ToList();
         return new(first, lines.Select(x => new PayrollPreviewLine(x.Employee.Id, x.Employee.Code, x.Employee.Name, x.Employee.Department, x.Calculation)).ToArray(),
             c.Sum(x => x.Gross), c.Sum(x => x.Paye), c.Sum(x => x.NassitEmployee), c.Sum(x => x.NassitEmployer), c.Sum(x => x.OtherDeductions), c.Sum(x => x.Net), rules is not null,
-            rules is null ? "Statutory deductions are off: set the PAYE and NASSIT rules under Payroll → Statutory rules." : $"PAYE and NASSIT rules version {rules.Version}, in force from {rules.EffectiveFrom:MMMM yyyy}.");
+            rules is null ? "Statutory deductions are off: set the PAYE and NASSIT rules under Payroll → Statutory rules." : $"PAYE and NASSIT rules version {rules.Version}, in force from {rules.EffectiveFrom:MMMM yyyy}.", CalculationFingerprint(lines));
     }
 
     public Task<Guid> Post(PayrollCommand input) => Execute(input.OperationId, "payroll.post", input, async (db, actor) =>
@@ -229,6 +238,7 @@ public sealed class PayrollService(IDbContextFactory<BusinessDb> factory, IActor
         var first = new DateOnly(input.Month.Year, input.Month.Month, 1); var last = first.AddMonths(1).AddDays(-1);
         if (input.PostingDate <= await PeriodControls.ClosedThrough(db, actor.Branch, options.Value.ClosedThrough) || input.PostingDate > Today || input.PostingDate < last) throw new BusinessException("Post monthly payroll on or after month-end, within an open period and no later than today.");
         var (_, _, lines) = await Build(db, actor, input);
+        if (input.ExpectedCalculation is not null && input.ExpectedCalculation != CalculationFingerprint(lines)) throw new BusinessException("Payroll inputs changed after the preview. Calculate again and review the new amounts before posting.");
         var doc = new BusinessDocument { Id = Guid.NewGuid(), Branch = actor.Branch, Number = $"{actor.Branch}-{options.Value.Device}-PAY-{input.OperationId:N}", Kind = DocumentKind.Payroll, Party = $"Payroll {first:yyyy-MM}", BusinessDate = input.PostingDate, Settlement = "Payroll payable", Detail = JsonSerializer.Serialize(input) };
         foreach (var (employee, c) in lines)
         {

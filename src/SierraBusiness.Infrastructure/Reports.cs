@@ -17,7 +17,7 @@ public sealed class ChangeFeed : IChangeFeed
 }
 
 /// <summary>Read-only reports. Financial figures come from the journal and stock figures from movements, so every total reconciles to its source.</summary>
-public sealed class ReportService(IDbContextFactory<BusinessDb> factory, IActorSession session, IOptions<TradingOptions> options) : IReportService
+public sealed partial class ReportService(IDbContextFactory<BusinessDb> factory, IActorSession session, IOptions<TradingOptions> options) : IReportService
 {
     private static readonly Account[] SalesAccounts = [Account.Sales, ServiceRules.Income];
     private static DateOnly Today => DateOnly.FromDateTime(DateTime.UtcNow);

@@ -2,6 +2,7 @@
 @inject IBusinessService Business
 @inject IServiceProvider Services
 @inject Microsoft.JSInterop.IJSRuntime JS
+<DocumentDraftRecovery @ref="recovery" Scope="tenders" Enabled="CanWrite" Busy="busy" HasDraft="@HasEditorDraft" Current="@RecoveryDraft" OnRestore="RestoreDraft" />
 @if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
 @if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
 
@@ -13,7 +14,7 @@
         <div class="tender-list">
         @foreach (var t in tenders)
         {
-            <button type="button" class="tender-row @(selected?.Id == t.Id ? "selected" : "")" disabled="@busy" @onclick="() => Select(t.Id)">
+            <button type="button" class="tender-row @(selected?.Id == t.Id ? "selected" : "")" disabled="@busy" @onclick="() => ChooseTender(t.Id)">
                 <span class="tender-main"><span class="tender-ref">@t.Reference</span><span class="tender-title">@t.Title</span><span class="tender-inst">@t.Institution</span></span>
                 <span class="tender-side">
                     <span class="status-badge s-@t.Status">@StatusName(t.Status)</span>
@@ -217,7 +218,40 @@
     private bool busy;
     private bool CanWrite => Actor.Permissions.Contains("sales.create");
     private bool CanApprove => Actor.Permissions.Contains("pricing.manage");
-    public bool HasDraft => reference.Length > 0 || draft.Any(x => x.Description.Length > 0 || x.UnitPrice > 0);
+    private DocumentDraftRecovery? recovery;
+    private Guid createOperation = Guid.NewGuid(), bidOperation = Guid.NewGuid();
+    private string originalBid = "";
+    private int editingBidVersion;
+    private List<TenderLineInput> DraftLines => draft.Select(l => new TenderLineInput(l.ProductId == Guid.Empty ? null : l.ProductId, l.Description, l.Quantity, l.Unit, l.SupplierCost, l.Currency, l.Currency == "SLE" ? 1 : l.Rate, l.Landed, l.Margin, l.UnitPrice, l.AlternativeTo == 0 ? null : l.AlternativeTo)).ToList();
+    private string BidJson => System.Text.Json.JsonSerializer.Serialize(DraftLines);
+    private bool HasHeaderDraft => new[] { reference, institution, title, officer, method, notes }.Any(s => s.Length > 0);
+    private bool BidDirty => selected is not null && (BidJson != originalBid || bidReason.Length > 0);
+    private bool HasEditorDraft => CanWrite && (HasHeaderDraft || BidDirty);
+    public bool HasDraft => HasEditorDraft || recovery?.HasRecovery == true;
+    private sealed record TenderRecovery(CreateTenderCommand Header, SaveBidCommand? Bid, bool BidDirty);
+    private DocumentDraft RecoveryDraft => new("tenders", HasHeaderDraft ? createOperation : bidOperation, System.Text.Json.JsonSerializer.Serialize(new TenderRecovery(
+        new(createOperation, reference, institution, title, closing, closingTime?.ToString("HH:mm") ?? "", officer, method, notes),
+        selected is null ? null : new(bidOperation, selected.Id, editingBidVersion, DraftLines, bidReason), BidDirty)));
+    public Task ClearRecovery() => recovery?.Clear() ?? Task.CompletedTask;
+    private Task RestoreDraft(DocumentDraft saved)
+    {
+        var state = System.Text.Json.JsonSerializer.Deserialize<TenderRecovery>(saved.Json) ?? throw new BusinessException("Invalid tender recovery copy.");
+        if (state.Header is null || state.Header.OperationId == Guid.Empty || state.BidDirty && state.Bid is null || saved.OperationId != state.Header.OperationId && saved.OperationId != state.Bid?.OperationId) throw new BusinessException("Invalid tender recovery copy.");
+        if (!CanWrite) throw new UnauthorizedAccessException();
+        if (state.BidDirty && state.Bid is { } bid)
+        {
+            var tender = tenders.SingleOrDefault(t => t.Id == bid.TenderId) ?? throw new BusinessException("The recovered tender is no longer available.");
+            if (!Editable(tender.Status) || (tender.Bids.FirstOrDefault()?.Version ?? 0) != bid.ExpectedVersion) throw new BusinessException("The tender changed since this draft was saved. Keep the recovery copy for review or discard it; the current bid was not overwritten.");
+            if (bid.Lines is null || bid.Lines.Count > 200) throw new BusinessException("Invalid recovered bid lines.");
+            Select(tender.Id);
+            draft = bid.Lines.Select(l => new LineDraft { ProductId = l.ProductId ?? Guid.Empty, Description = l.Description, Quantity = l.Quantity, Unit = l.Unit, SupplierCost = l.SupplierCost, Currency = l.CostCurrency, Rate = l.ExchangeRate, Landed = l.LandedPercent, Margin = l.MarginPercent, UnitPrice = l.UnitPrice, AlternativeTo = l.AlternativeTo ?? 0 }).ToList();
+            bidOperation = bid.OperationId; bidReason = bid.Reason;
+        }
+        var header = state.Header;
+        createOperation = header.OperationId; reference = header.Reference; institution = header.Institution; title = header.Title; closing = header.Closing; closingTime = TimeOnly.TryParse(header.ClosingTime, out var time) ? time : null; officer = header.Officer; method = header.SubmissionMethod; notes = header.Notes;
+        message = "Unfinished tender restored. Review the details before saving.";
+        return Task.CompletedTask;
+    }
     private TenderBidView? ShownBid => selected?.Bids.FirstOrDefault(x => x.Version == shownVersion) ?? selected?.Bids.FirstOrDefault();
     private TenderBidView? Submitted => selected?.Bids.FirstOrDefault(x => x.Version == selected.SubmittedVersion);
     private static bool Final(TenderStatus s) => s is TenderStatus.Won or TenderStatus.Lost or TenderStatus.Cancelled;
@@ -262,7 +296,13 @@
         selected = tenders.First(x => x.Id == id); shownVersion = null; awarded.Clear(); note = bidReason = "";
         var latest = selected.Bids.FirstOrDefault();
         draft = latest is null ? [new()] : latest.Lines.Select(l => new LineDraft { ProductId = l.ProductId ?? Guid.Empty, Description = l.Description, Quantity = l.Quantity, Unit = l.Unit, SupplierCost = l.SupplierCost, Currency = l.CostCurrency, Rate = l.ExchangeRate == 0 ? 1 : l.ExchangeRate, Landed = l.LandedPercent, Margin = l.MarginPercent, UnitPrice = l.UnitPrice, AlternativeTo = l.AlternativeTo ?? 0 }).ToList();
+        originalBid = BidJson; bidOperation = Guid.NewGuid(); editingBidVersion = latest?.Version ?? 0;
         newClosing = selected.Closing;
+    }
+    private async Task ChooseTender(Guid id)
+    {
+        if (BidDirty && !await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<bool>(JS, "confirm", "Discard the unfinished bid before opening this tender?")) return;
+        Select(id);
     }
     private void Fill(LineDraft l)
     {
@@ -277,14 +317,15 @@
 
     private Task Create() => Run(async () =>
     {
-        var id = await Tenders.Create(new(Guid.NewGuid(), reference, institution, title, closing, closingTime?.ToString("HH:mm") ?? "", officer, method, notes));
+        var id = await Tenders.Create(new(createOperation, reference, institution, title, closing, closingTime?.ToString("HH:mm") ?? "", officer, method, notes));
+        createOperation = Guid.NewGuid();
         reference = institution = title = officer = method = notes = ""; closingTime = null;
         await Load(); Select(id); message = "Tender registered. Attach the dossier below and prepare the bid.";
     });
     private Task SaveBid() => Run(async () =>
     {
         var lines = draft.Select(l => new TenderLineInput(l.ProductId == Guid.Empty ? null : l.ProductId, l.Description, l.Quantity, l.Unit, l.SupplierCost, l.Currency, l.Currency == "SLE" ? 1 : l.Rate, l.Landed, l.Margin, l.UnitPrice, l.AlternativeTo == 0 ? null : l.AlternativeTo)).ToList();
-        await Tenders.SaveBid(new(Guid.NewGuid(), selected!.Id, selected.Bids.FirstOrDefault()?.Version ?? 0, lines, bidReason));
+        await Tenders.SaveBid(new(bidOperation, selected!.Id, editingBidVersion, lines, bidReason));
         await After("Bid version saved. It needs price approval before submission.");
     });
     private Task Approve() => Run(async () => { await Tenders.Approve(new(Guid.NewGuid(), selected!.Id, selected.Bids[0].Version, note)); await After("Price approved. Record the submission when the bid is delivered."); });

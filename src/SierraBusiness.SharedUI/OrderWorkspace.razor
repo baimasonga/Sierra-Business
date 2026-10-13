@@ -4,6 +4,7 @@
 @inject IInventoryService Inventory
 @inject IPurchasingService Purchasing
 @inject Microsoft.JSInterop.IJSRuntime JS
+<DocumentDraftRecovery @ref="recovery" Scope="orders" Enabled="@(CanWrite(OrderType.Quotation) || CanWrite(OrderType.PurchaseOrder))" Busy="busy" HasDraft="@HasCreationDraft" Current="@RecoveryDraft" OnRestore="RestoreDraft" />
 <section class="panel"><div class="panel-title"><h2>Quotations and orders</h2><button class="secondary" disabled="@busy" @onclick="Refresh">Refresh</button></div><p>Record quantities and agreed prices, convert a quotation, then receive or invoice an order in parts. Reserve goods in Sales controls. Invoice immediately, or issue a delivery note first and invoice it later from Sales controls.</p><div class="form-grid"><label>Search party / reference<input @bind="search" @bind:event="oninput" /></label><label>Type<select @bind="filter"><option>All</option>@foreach (var type in Enum.GetValues<OrderType>()) { <option value="@type">@Name(type)</option> }</select></label></div></section>
 @if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
 @if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
@@ -45,7 +46,22 @@
     private DateOnly date = DateOnly.FromDateTime(DateTime.UtcNow), dueDate = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30), postDate = DateOnly.FromDateTime(DateTime.UtcNow), billDueDate = DateOnly.FromDateTime(DateTime.UtcNow);
     private decimal quantity = 1, price;
     private Guid productId, operation = Guid.NewGuid(), postOperation = Guid.NewGuid();
-    public bool HasDraft => lines.Count > 0 || party.Length > 0 || reference.Length > 0 || fulfillment.Any(x => x.Quantity != 0 || x.Serial.Length > 0 || x.Batch.Length > 0 || x.Expiry != null);
+    private bool HasCreationDraft => lines.Count > 0 || party.Length > 0 || reference.Length > 0 || productId != Guid.Empty;
+    public bool HasDraft => HasCreationDraft || recovery?.HasRecovery == true || fulfillment.Any(x => x.Quantity != 0 || x.Serial.Length > 0 || x.Batch.Length > 0 || x.Expiry != null);
+    private DocumentDraftRecovery? recovery;
+    private sealed record OrderRecovery(OrderCommand Order, Guid Product, decimal Quantity, decimal Price);
+    private DocumentDraft RecoveryDraft => new("orders", operation, System.Text.Json.JsonSerializer.Serialize(new OrderRecovery(new(operation, type, party, date, dueDate, reference, lines.ToList(), Currency: currency), productId, quantity, price)));
+    public Task ClearRecovery() => recovery?.Clear() ?? Task.CompletedTask;
+    private Task RestoreDraft(DocumentDraft saved)
+    {
+        var state = System.Text.Json.JsonSerializer.Deserialize<OrderRecovery>(saved.Json) ?? throw new BusinessException("Invalid order recovery copy.");
+        if (!Enum.IsDefined(state.Order.Type) || !CanWrite(state.Order.Type)) throw new UnauthorizedAccessException("You cannot create this order type.");
+        if (state.Order.OperationId != saved.OperationId || state.Order.Lines is null || state.Order.Lines.Count > 200 || state.Order.Lines.Any(l => !products.Any(p => p.Id == l.ProductId))) throw new BusinessException("The recovered order contains unavailable products. Keep the recovery copy or discard it.");
+        operation = saved.OperationId; type = state.Order.Type; party = state.Order.Party; date = state.Order.Date; dueDate = state.Order.DueDate; reference = state.Order.Reference; currency = state.Order.Currency ?? "";
+        lines.Clear(); lines.AddRange(state.Order.Lines); productId = products.Any(p => p.Id == state.Product) ? state.Product : Guid.Empty; quantity = state.Quantity; price = state.Price;
+        message = "Unfinished quotation/order restored. Review it before saving.";
+        return Task.CompletedTask;
+    }
     private bool CanWrite(OrderType value) => Actor.Permissions.Contains(value == OrderType.PurchaseOrder ? "inventory.receive" : "sales.create");
     private static string Name(OrderType type) => type switch { OrderType.SalesOrder => "Sales order", OrderType.PurchaseOrder => "Purchase order", _ => type.ToString() };
     private static string Status(OrderView o) => o.Closed ? "Closed" : o.ConvertedTo != null ? "Converted" : o.Type == OrderType.Quotation ? "Quotation" : o.Lines.All(x => x.Fulfilled == x.Quantity) ? "Fulfilled" : o.Lines.Any(x => x.Fulfilled > 0) ? "Part fulfilled" : "Open";

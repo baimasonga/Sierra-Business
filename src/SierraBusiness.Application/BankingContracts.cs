@@ -20,9 +20,21 @@ public sealed record OpenTillCommand(Guid OperationId, int AccountCode, decimal 
 public sealed record CloseTillCommand(Guid OperationId, Guid ShiftId, decimal ExpectedMovement, decimal Counted, string Note);
 public sealed record TillMovementView(string Number, string Actor, decimal Received, decimal Paid);
 public sealed record TillView(Guid Id, string Cashier, int AccountCode, DateTimeOffset Opened, decimal OpeningCount, decimal OpeningBook, decimal Movement, decimal Expected, DateTimeOffset? Closed, decimal? Counted, decimal? Variance, string Note, IReadOnlyList<TillMovementView> Movements);
+public enum TradeAdvanceKind { CustomerDeposit, SupplierAdvance }
+public sealed record AdvanceCheque(string Number,string Bank,DateOnly Date,Guid? BookId = null);
+public sealed record TradeAdvanceCommand(Guid OperationId, TradeAdvanceKind Kind, Guid PartyId, int FundsAccount, decimal Amount, string Reference,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] AdvanceCheque? Cheque = null);
+public sealed record TradeAdvanceView(Guid CreditId, Guid DocumentId, TradeAdvanceKind Kind, string Number, string Party, DateOnly Date, decimal Amount, decimal Remaining,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ChequeState? ChequeStatus = null);
 public interface IBankingService
 {
+    Task<Guid> PostForeignAdvance(ForeignAdvanceCommand input);
+    Task<IReadOnlyList<ForeignAdvanceView>> ForeignAdvances();
+    Task<ForeignAdvanceUsePreview> PreviewForeignAdvanceUse(ForeignAdvanceUseCommand input);
+    Task<Guid> UseForeignAdvance(ForeignAdvanceUseCommand input);
     Task<BankingSnapshot> Read();
+    Task<Guid> PostAdvance(TradeAdvanceCommand input);
+    Task<IReadOnlyList<TradeAdvanceView>> Advances();
     Task<Guid> Import(ImportStatementCommand input);
     Task<Guid> VoidStatement(VoidStatementCommand input);
     Task<Guid> RegisterCheque(RegisterChequeCommand input);

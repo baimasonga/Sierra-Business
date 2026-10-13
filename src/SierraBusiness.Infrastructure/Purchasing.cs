@@ -35,6 +35,7 @@ public static partial class Fx
     }
     public static async Task<(decimal Source, decimal Carrying)> Outstanding(BusinessDb db, BusinessDocument bill, ForeignBill foreign)
     {
+        if (ServiceRules.IsReceivable(bill)) return await OutstandingAt(db, bill, foreign, DateOnly.FromDateTime(DateTime.UtcNow));
         var settled = (await db.BillAllocations.Where(x => x.InvoiceId == bill.Id && !db.Documents.Any(r => r.Reverses == x.VoucherId)).ToListAsync()).Sum(x => x.Amount);
         var returned = (await db.ReturnAllocations.Where(x => x.OriginalDocumentId == bill.Id && !db.Documents.Any(r => r.Reverses == x.ReturnDocumentId)).ToListAsync()).Sum(x => x.BillCredit);
         var carrying = bill.Total - settled - returned;
@@ -44,7 +45,7 @@ public static partial class Fx
     }
     public static async Task RejectLocalSettlement(BusinessDb db, Guid billId)
     {
-        if (await db.ForeignBills.AnyAsync(x => x.DocumentId == billId)) throw new BusinessException("This bill is owed in a foreign currency. Pay it under Purchasing & imports → Foreign-currency bills so the exchange difference is recorded.");
+        if (await db.ForeignBills.AnyAsync(x => x.DocumentId == billId)) throw new BusinessException("Use Foreign exchange to settle this foreign-currency bill and record its exchange difference.");
     }
     [GeneratedRegex("^[A-Z]{3}$")] private static partial Regex Code();
 }
@@ -122,7 +123,7 @@ public sealed partial class PurchasingService(IDbContextFactory<BusinessDb> fact
     {
         var actor = await Authorize("accounting.read");
         await using var db = await factory.CreateDbContextAsync();
-        var bills = await (from f in db.ForeignBills join d in db.Documents on f.DocumentId equals d.Id where d.Branch == actor.Branch && !db.Documents.Any(r => r.Reverses == d.Id) select new { f, d }).ToListAsync();
+        var bills = await (from f in db.ForeignBills join d in db.Documents on f.DocumentId equals d.Id where d.Branch == actor.Branch && d.Kind != DocumentKind.Sale && !db.Documents.Any(r => r.Reverses == d.Id) select new { f, d }).ToListAsync();
         var result = new List<ForeignBillView>();
         foreach (var x in bills)
         {
@@ -139,10 +140,14 @@ public sealed partial class PurchasingService(IDbContextFactory<BusinessDb> fact
         {
             await OpenDate(db, actor, input.Date);
             var bill = await db.Documents.SingleOrDefaultAsync(x => x.Id == input.BillId && x.Branch == actor.Branch && !db.Documents.Any(r => r.Reverses == x.Id)) ?? throw new BusinessException("Bill not found.");
+            if (ServiceRules.IsReceivable(bill)) throw new BusinessException("Receive customer invoice money through Foreign exchange; this action pays suppliers.");
             var foreign = await db.ForeignBills.SingleOrDefaultAsync(x => x.DocumentId == bill.Id) ?? throw new BusinessException("This bill is in NLe; pay it with a payment voucher under Accounting.");
             if (input.Date < bill.BusinessDate) throw new BusinessException("Payment cannot be dated before the bill.");
+            await Fx.EnsureBillDate(db, bill, foreign, input.Date);
             Money2(input.SourceAmount, $"Amount in {foreign.Currency}"); Money2(input.LocalPaid, "NLe paid");
             if (!await db.LedgerAccounts.AnyAsync(x => x.Id == input.FundsAccount && x.CashOrBank)) throw new BusinessException("Pay from a cash or bank account.");
+            var bankCost = await Fx.BankWithdrawalCost(db, actor.Branch, input.FundsAccount, foreign.Currency, input.Date, input.SourceAmount);
+            if (bankCost is decimal expected && input.LocalPaid != expected) throw new BusinessException($"Currency bank carrying value is NLe {expected:N2}. Review that bank value before paying.");
             var (sourceOutstanding, carryingOutstanding) = await Fx.Outstanding(db, bill, foreign);
             if (input.SourceAmount > sourceOutstanding) throw new BusinessException($"Only {foreign.Currency} {sourceOutstanding:N2} is outstanding on this bill.");
             // Final settlement clears the exact remaining carrying amount so no rounding residue is left on the payable.
@@ -216,10 +221,12 @@ public sealed partial class PurchasingService(IDbContextFactory<BusinessDb> fact
         foreach (var identity in identities)
         {
             var key = identity.Key;
+            await InventoryCost.GuardDate(db,actor.Branch,key.ProductId,input.Date);
             var onHand = await db.Movements.Where(x => x.Branch == actor.Branch && x.ProductId == key.ProductId && x.Location == key.Location && x.Serial == key.Serial && x.Batch == key.Batch && x.Expiry == key.Expiry).SumAsync(x => x.Quantity);
             var received = identity.Sum(x => x.l.m.Quantity);
             var ratio = received <= 0 ? 0 : Math.Clamp(onHand / received, 0, 1);
-            foreach (var (l, i) in identity) { var toStock = AccountingEngine.Money(amounts[i] * ratio); plan[i] = (l.m, l.Sku, weights[i], amounts[i], toStock, amounts[i] - toStock); }
+            var standard = (await InventoryCost.Policy(db,actor.Branch,key.ProductId)).Method == InventoryCostMethod.Standard;
+            foreach (var (l, i) in identity) { var toStock = standard ? 0 : AccountingEngine.Money(amounts[i] * ratio); plan[i] = (l.m, l.Sku, weights[i], amounts[i], toStock, amounts[i] - toStock); }
         }
         return new(localTotal, sourceTotal, rate, currency, plan);
     }

@@ -413,23 +413,27 @@ public sealed class BusinessDb(DbContextOptions<BusinessDb> options) : IdentityD
     }
     private List<Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry> NewHistory() =>
         ChangeTracker.Entries().Where(x => x.State == EntityState.Added && HistoryProtection.ProtectedTypes.Contains(x.Entity.GetType())).ToList();
+    internal bool PendingNotification { get; set; }
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder) => optionsBuilder.AddInterceptors(CommittedChangeInterceptor.Instance);
+    internal void NotifyCommitted() { if (!PendingNotification) return; PendingNotification = false; ChangeNotifier.Raise(); }
+    private void NotifySaved() { if (Database.CurrentTransaction is null) ChangeNotifier.Raise(); else PendingNotification = true; }
     // Every save that adds posted history also appends a seal to the tamper-evidence chain, atomically in the same save.
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
-        GuardHistory(); if (SyncApplyingOrigin is null) BankingRules.CaptureTillEntries(this).GetAwaiter().GetResult();
+        GuardHistory(); Fx.GuardCurrencyBankJournal(this).GetAwaiter().GetResult(); if (SyncApplyingOrigin is null) BankingRules.CaptureTillEntries(this).GetAwaiter().GetResult();
         HistoryProtection.NormalizeTimes(this);
         var history = NewHistory(); if (history.Count > 0) HistoryProtection.AddCommitSeal(this, history);
         var saved = base.SaveChanges(acceptAllChangesOnSuccess);
-        if (history.Count > 0) ChangeNotifier.Raise();
+        if (history.Count > 0) NotifySaved();
         return saved;
     }
     public override async Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
     {
-        GuardHistory(); if (SyncApplyingOrigin is null) await BankingRules.CaptureTillEntries(this, cancellationToken).ConfigureAwait(false);
+        GuardHistory(); await Fx.GuardCurrencyBankJournal(this).ConfigureAwait(false); if (SyncApplyingOrigin is null) await BankingRules.CaptureTillEntries(this, cancellationToken).ConfigureAwait(false);
         HistoryProtection.NormalizeTimes(this);
         var history = NewHistory(); if (history.Count > 0) await HistoryProtection.AddCommitSealAsync(this, history, cancellationToken).ConfigureAwait(false);
         var saved = await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken).ConfigureAwait(false);
-        if (history.Count > 0) ChangeNotifier.Raise(); // listeners debounce, so a transaction committing just after this is picked up
+        if (history.Count > 0) NotifySaved();
         return saved;
     }
 }

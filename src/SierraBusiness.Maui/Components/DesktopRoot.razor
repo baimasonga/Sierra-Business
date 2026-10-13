@@ -19,7 +19,7 @@ else if (actor is not null)
 else
 {
     <div class="login-body"><main class="login-panel">
-        <div class="brand"><span class="brand-mark">S</span><div>SIERRA<span>BUSINESS OS</span></div></div>
+        <div class="brand"><img class="brand-logo" src="branding/rokela-logo.png" alt="Rokela Business Admin" /></div>
         <p class="eyebrow">WINDOWS DESKTOP</p>
         <p>@Company.Name · <button class="text-button" @onclick="() => companiesOpen = true">Change company</button></p>
         <h1>@(firstRun ? "Set up your business." : "Welcome back.")</h1>
@@ -42,7 +42,7 @@ else
                 }
                 <button class="primary" disabled="@busy">@(busy ? "Please wait…" : firstRun ? "Create owner account" : "Sign in")</button>
             </form>
-            <p class="hint">No internet connection is required for local transactions. Central synchronization is not yet available.</p>
+            <p class="hint">Local transactions work offline. Your records are stored on this computer.</p>
         }
     </main></div>
 }

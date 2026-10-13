@@ -9,7 +9,7 @@ using SierraBusiness.Infrastructure;
 namespace SierraBusiness.Desktop;
 
 /// <summary>Identity password hashes stay local. Sessions are in memory, expire, and recheck claims on every command.</summary>
-public sealed class LocalAccountService(IServiceScopeFactory scopes, IOptions<TradingOptions> options, TimeProvider clock) : IActorSession
+public sealed class LocalAccountService(IServiceScopeFactory scopes, IOptions<TradingOptions> options, TimeProvider clock, DesktopStore? store = null) : IActorSession
 {
     private readonly SemaphoreSlim setupGate = new(1, 1);
     private string? userId, securityStamp;
@@ -70,7 +70,9 @@ public sealed class LocalAccountService(IServiceScopeFactory scopes, IOptions<Tr
         if (user is null || await users.IsLockedOutAsync(user) || await users.GetSecurityStampAsync(user) != securityStamp)
         { SignOut(); throw new UnauthorizedAccessException("This session is no longer valid. Sign in again."); }
         var claims = await users.GetClaimsAsync(user);
-        return new Actor(user.Id, claims.FirstOrDefault(x => x.Type == "branch")?.Value ?? "", claims.Where(x => x.Type == "permission").Select(x => x.Value).ToHashSet());
+        var permissions = claims.Where(x => x.Type == "permission").Select(x => x.Value).ToHashSet();
+        if (store is not null && CompanyPeriodService.IsArchive(store.DirectoryPath)) permissions.RemoveWhere(p => !p.EndsWith(".read", StringComparison.Ordinal) && p != "backups.create");
+        return new Actor(user.Id, claims.FirstOrDefault(x => x.Type == "branch")?.Value ?? "", permissions);
     }
 
     public void SignOut() { userId = securityStamp = null; expires = default; }

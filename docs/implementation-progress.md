@@ -236,3 +236,19 @@ Fixed special-character password handling in the Windows Supabase launcher and o
 ### Functional UI verification — 2026-10-05
 
 Release integration suite: 287 passed, zero failed, six live-provider tests skipped. Authenticated HTTP workflows passed. Interactive checks covered all 46 navigation screens and representative catalogue, sales, receipt, held-sale, payment, customer, stock and accounting actions in an isolated SQLite company. Updated the HTTP smoke-test workspace assertion and made its provider/sync settings explicitly isolated. See [functional verification](ui-functional-verification-2026-10-05.md) for observed results and remaining interactive acceptance limits.
+
+## Latest continuation — 8 October 2026
+
+The 0.30.0 installer and checksum were checked; see [trade advances](trade-advances-0.30.0.md). Subsequent source work adds [financial ratios](financial-ratios-2026-10-08.md). See the [Windows Tally comparison](windows-tally-feature-comparison-2026-10-08.md) for remaining scope. Android and manufacturing are excluded. Older entries below/above describe their historical release, not current completeness.
+
+## Source continuation verification — 10 October 2026
+
+### Group company reporting
+
+The Financial statements screen now aggregates matching NLe company/branch snapshots into profit-and-loss and balance-sheet reports, with member contributions, explicit account mapping, saved reporting sets and Excel/source export. The targeted run passed 21 tests (nine new consolidation tests and twelve existing regression tests), with zero failures or skips. Intercompany eliminations and company-data splitting remain open. See [workflow, controls and evidence](group-company-reporting-2026-10-10.md).
+
+Workforce attendance, leave and configurable pay heads; advanced accounting groups, cost centres, scenarios and interest; and foreign-currency invoices, settlements, bank transactions and paired closing valuation are implemented in the current working tree. The resumed focused run passed 46 tests. The full integration regression passed 355, failed zero and skipped six unavailable live SQL Server/PostgreSQL checks (361 total). This is source verification, not a new Windows package release. See [coverage and remaining scope](payroll-accounting-fx-continuation-2026-10-10.md).
+
+## Release continuation — 11 October 2026
+
+Windows 0.32.0 implements the authorized period, inventory, banking/import and group-adjustment workflows. The immutable source snapshot passed 380 Release tests with zero failures and six skipped live SQL Server/PostgreSQL tests. Authenticated HTTP workflows and the offline Windows capture/OCR smoke check passed. Native publish, installer compilation and all 26 release artifact checks passed. The installer is unsigned. Native visual, physical peripheral, clean-machine and two-device acceptance remain unverified; execution policy blocked isolated UI-preview startup without a specific reason. See [scope and evidence](remaining-features-0.32.0.md).

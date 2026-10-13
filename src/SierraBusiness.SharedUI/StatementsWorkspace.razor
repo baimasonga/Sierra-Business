@@ -5,11 +5,32 @@
 <div class="view-toggle report-tabs" role="tablist">
     @foreach (var t in Tabs) { <button type="button" role="tab" class="@(tab == t ? "active" : "")" aria-selected="@(tab == t)" @onclick="() => Open(t)">@t</button> }
 </div>
+@if (tab == "Group company reporting") { <ConsolidationWorkspace /> }
+else {
 <section class="panel">
     <div class="panel-title"><h2>@tab</h2>@if (tab != "Year-end close") { <button class="secondary" disabled="@busy" @onclick="Export">Export to Excel</button> }</div>
     @if (tab != "Year-end close")
     {
         <div class="report-period">@if (tab != "Balance sheet") { <label>From<input type="date" @bind="from" @bind:after="Load" /></label> }<label>@(tab == "Balance sheet" ? "As at" : "To")<input type="date" @bind="to" @bind:after="Load" /></label></div>
+    }
+    @if (tab == "Comparative statements")
+    {
+        <div class="report-period">
+            <label>Statement<select @bind="comparisonKind" @bind:after="Load">@foreach (var name in new[] { "Profit and loss", "Balance sheet", "Cash flow", "Funds flow" }) { <option>@name</option> }</select></label>
+            <label>Comparison from<input type="date" @bind="comparisonFrom" @bind:after="Load" /></label>
+            <label>Comparison to<input type="date" @bind="comparisonTo" @bind:after="Load" /></label>
+        </div>
+        <p class="hint">Balance sheets compare the two end dates. Percentage change uses the absolute comparison amount; a zero comparison amount shows N/A.</p>
+        @if (comparison is { } report)
+        {
+            <div class="table-wrap"><table class="report-table"><thead><tr><th>Account / measure</th><th class="numeric">Current</th><th class="numeric">Comparison</th><th class="numeric">Change</th><th class="numeric">Change %</th></tr></thead><tbody>
+            @foreach (var section in report.Rows.GroupBy(r => r.Section))
+            {
+                <tr><th colspan="5">@section.Key</th></tr>
+                @foreach (var row in section) { <tr class="@(row.Total ? "total-row" : "")"><td>@row.Label</td><td class="numeric">@row.Current.ToString("N2")</td><td class="numeric">@row.Previous.ToString("N2")</td><td class="numeric">@row.Change.ToString("N2")</td><td class="numeric">@(row.ChangePercent is decimal change ? $"{change:N2}%" : "N/A")</td></tr> }
+            }
+            </tbody></table></div>
+        }
     }
     @if (tab == "Profit and loss" && pl is { } p) { @Table(p.Rows) }
     else if (tab == "Balance sheet" && bs is { } b)
@@ -29,6 +50,14 @@
         <div class="compliance-grid"><div><h3>Sources of funds</h3>@Table(f.Sources)<p><strong>Total @f.TotalSources.ToString("N2")</strong></p></div><div><h3>Uses of funds</h3>@Table(f.Uses)<p><strong>Total @f.TotalUses.ToString("N2")</strong></p></div></div>
         <p class="check-line">@(f.TotalSources == f.TotalUses ? "✓ Sources equal uses" : "⚠ Difference")</p>
     }
+    else if (tab == "Financial ratios" && ratios is { } r)
+    {
+        <p class="hint">Period measures are not annualised. Opening balances are before @r.From.ToString("dd MMM yyyy"); closing balances are at @r.To.ToString("dd MMM yyyy"). N/A means the denominator is zero or negative.</p>
+        <div class="table-wrap"><table class="report-table"><thead><tr><th>Ratio and formula</th><th class="numeric">Numerator (NLe)</th><th class="numeric">Denominator (NLe)</th><th class="numeric">Result</th></tr></thead><tbody>
+        @foreach (var row in r.Rows) { <tr><td><strong>@row.Name</strong><br /><small>@row.Formula</small></td><td class="numeric">@row.Numerator.ToString("N2")</td><td class="numeric">@row.Denominator.ToString("N2")</td><td class="numeric">@(row.Value is decimal value ? $"{value:N2}{(row.Percentage ? "%" : " times")}" : "N/A")</td></tr> }
+        </tbody></table></div>
+        <p class="hint">Current and quick ratios require current/non-current account classifications and are not included.</p>
+    }
     else if (tab == "Year-end close")
     {
         <p class="hint">Closing a year locks every posting up to its last day and moves that year's profit to retained earnings in the balance sheet. Reports for the year are unchanged. Close only after the accounts are final.</p>
@@ -38,9 +67,15 @@
             <tbody>@foreach (var y in years) { <tr><td>@y.YearEnd.ToString("dd MMM yyyy")</td><td class="numeric">@y.Profit.ToString("N2")</td><td>@y.ClosedBy, @y.Closed.ToLocalTime().ToString("dd MMM yyyy")</td><td>@y.Reason</td></tr> }</tbody></table></div>
     }
 </section>
+}
 @code {
     [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
-    private static readonly string[] Tabs = ["Profit and loss", "Balance sheet", "Cash flow", "Funds flow", "Year-end close"];
+    private static readonly string[] Tabs = ["Profit and loss", "Balance sheet", "Cash flow", "Funds flow", "Financial ratios", "Comparative statements", "Group company reporting", "Year-end close"];
+    private ComparativeStatement? comparison;
+    private string comparisonKind = "Profit and loss";
+    private DateOnly comparisonFrom = new(DateTime.Now.Year - 1, 1, 1), comparisonTo = DateOnly.FromDateTime(DateTime.Now).AddYears(-1);
+    private ComparisonRequest ComparisonQuery => new(comparisonKind, from, to, comparisonFrom, comparisonTo);
+    private FinancialRatios? ratios;
     private string tab = "Profit and loss", error = "", message = "", reason = "";
     private bool busy;
     private DateOnly from = new(DateTime.Now.Year, 1, 1), to = DateOnly.FromDateTime(DateTime.Now), yearEnd = new(DateTime.Now.Year - 1, 12, 31);
@@ -51,6 +86,8 @@
     private async Task Load()
     {
         busy = true; error = "";
+        ratios = null;
+        comparison = null; pl = null; bs = null; cf = null; ff = null;
         try
         {
             switch (tab)
@@ -59,6 +96,9 @@
                 case "Balance sheet": bs = await Statements.BalanceSheet(to); break;
                 case "Cash flow": cf = await Statements.CashFlow(from, to); break;
                 case "Funds flow": ff = await Statements.FundsFlow(from, to); break;
+                case "Financial ratios": ratios = await Statements.Ratios(from, to); break;
+                case "Comparative statements": comparison = await Statements.Compare(ComparisonQuery); break;
+                case "Group company reporting": break;
                 default: years = await Statements.YearEnds(); break;
             }
         }
@@ -68,7 +108,7 @@
     private async Task Export()
     {
         busy = true; error = "";
-        try { var bytes = await Statements.Export(new(tab, from, to)); await Microsoft.JSInterop.JSRuntimeExtensions.InvokeVoidAsync(JS, "sierraDownload", $"{tab} {to:yyyy-MM-dd}.xlsx", Convert.ToBase64String(bytes)); }
+        try { var bytes = tab == "Comparative statements" ? await Statements.ExportComparison(ComparisonQuery) : await Statements.Export(new(tab, from, to)); await Microsoft.JSInterop.JSRuntimeExtensions.InvokeVoidAsync(JS, "sierraDownload", $"{tab} {to:yyyy-MM-dd}.xlsx", Convert.ToBase64String(bytes)); }
         catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException) { error = ex.Message; }
         finally { busy = false; }
     }

@@ -3,7 +3,8 @@
 @inject IFinanceService Finance
 @if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
 @if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
-<div class="tabs" role="tablist">@foreach (var t in new[] { "Statement formats", "Cheques issued", "Cash drawers" }) { <button role="tab" aria-selected="@(tab == t)" class="@(tab == t ? "tab active" : "tab")" @onclick="() => tab = t">@t</button> }</div>
+<div class="tabs" role="tablist">@foreach (var t in new[] { "Statement formats", "Cheques issued", "Cheque books & printing", "Cash drawers" }) { <button role="tab" aria-selected="@(tab == t)" class="@(tab == t ? "tab active" : "tab")" @onclick="() => tab = t">@t</button> }</div>
+@if (tab == "Cheque books & printing") { <ChequePrintingWorkspace /> }
 @if (tab == "Statement formats")
 {
     <section class="panel"><h2>Import a bank's own statement file</h2>
@@ -53,6 +54,7 @@ else if (tab == "Cheques issued")
         <section class="panel"><h2>Write a cheque</h2>
             <div class="form-grid">
                 <label>Drawn on<select @bind="chequeBank">@foreach (var a in Banks.Where(x => x.Code != 1000)) { <option value="@a.Code">@a.Code · @a.Name</option> }</select></label>
+                <label>Cheque book<select @bind="chequeBookId" @bind:after="ChooseBook"><option value="@Guid.Empty">Enter a number manually</option>@foreach (var b in chequeBooks.Where(b => b.Active && b.NextNumber is not null)) { <option value="@b.Id">@b.Name · next @b.NextNumber</option> }</select></label>
                 <label>Cheque number<input maxlength="30" @bind="chequeNumber" /></label><label>Payee<input maxlength="160" list="cheque-payees" @bind="payee" /></label>
                 <label>Date<input type="date" @bind="chequeDate" /></label><label>Amount<input type="number" min="0.01" step="0.01" @bind="chequeAmount" /></label>
                 <label>Pays<select @bind="billId"><option value="@Guid.Empty">An expense (no supplier bill)</option>@foreach (var b in SupplierBills) { <option value="@b.Id">@b.Party · @b.Number · @b.Outstanding.ToString("N2")</option> }</select></label>
@@ -64,7 +66,7 @@ else if (tab == "Cheques issued")
         </section>
     }
 }
-else
+else if (tab == "Cash drawers")
 {
     <section class="panel"><h2>Cash drawers</h2>
         <p class="hint">When a drawer has cashiers assigned, only they (and till managers) can open it. A drawer with nobody assigned is open to every cashier.</p>
@@ -83,6 +85,7 @@ else
     private DateOnly chequeDate = DateOnly.FromDateTime(DateTime.Now), actionDate = DateOnly.FromDateTime(DateTime.Now);
     private IReadOnlyList<BankFormatView> formats = []; private IReadOnlyList<StatementLineInput> preview = []; private IReadOnlyList<IssuedChequeView> cheques = []; private IReadOnlyList<DrawerAssignment> drawers = [];
     private FinanceSnapshot? finance; private Draft draft = new();
+    private Guid chequeBookId; private IReadOnlyList<ChequeBookView> chequeBooks = [];
     private bool CanWrite => Actor.Permissions.Contains("accounting.write");
     private IEnumerable<LedgerDefinition> Banks => finance?.Accounts.Where(x => x.CashOrBank) ?? [];
     private IEnumerable<LedgerDefinition> Expenses => finance?.Accounts.Where(x => x.Group == LedgerGroup.Expense) ?? [];
@@ -92,7 +95,7 @@ else
     private async Task Load()
     {
         formats = await Extras.Formats(); drawers = await Extras.Drawers();
-        if (Actor.Permissions.Contains("accounting.read")) { cheques = await Extras.IssuedCheques(); finance = await Finance.Read(DateOnly.MinValue, DateOnly.FromDateTime(DateTime.UtcNow)); }
+        if (Actor.Permissions.Contains("accounting.read")) { cheques = await Extras.IssuedCheques(); chequeBooks = await Extras.ChequeBooks(); finance = await Finance.Read(DateOnly.MinValue, DateOnly.FromDateTime(DateTime.UtcNow)); }
         if (Banks.Any() && !Banks.Any(x => x.Code == account)) account = Banks.First().Code;
         if (drawers.Count > 0 && !drawers.Any(x => x.AccountCode == drawer)) drawer = drawers[0].AccountCode;
     }
@@ -105,9 +108,10 @@ else
     private Task Issue() => Run(async () =>
     {
         var allocations = billId == Guid.Empty ? new List<BillSettlement>() : [new(billId, chequeAmount)];
-        await Extras.IssueCheque(new(Guid.NewGuid(), chequeBank, payee, chequeNumber, chequeDate, chequeAmount, allocations, billId == Guid.Empty ? expense : null, narration));
+        await Extras.IssueCheque(new(Guid.NewGuid(), chequeBank, payee, chequeNumber, chequeDate, chequeAmount, allocations, billId == Guid.Empty ? expense : null, narration, chequeBookId == Guid.Empty ? null : chequeBookId));
         message = $"Cheque {chequeNumber} recorded and the payment posted."; chequeNumber = payee = narration = ""; chequeAmount = 0; billId = Guid.Empty; await Load();
     });
     private Task Act(IssuedChequeView c, IssuedChequeState state) => Run(async () => { await Extras.ActOnIssuedCheque(new(Guid.NewGuid(), c.Id, state, actionDate, actionReason)); message = $"Cheque {c.Number} marked {state.ToString().ToLowerInvariant()}."; actionReason = ""; await Load(); });
+    private void ChooseBook() { var book = chequeBooks.SingleOrDefault(b => b.Id == chequeBookId); if (book is not null) { chequeBank = book.BankAccount; chequeNumber = book.NextNumber ?? ""; } }
     private Task Assign(bool assign) => Run(async () => { await Extras.AssignDrawer(new(Guid.NewGuid(), drawer, cashier, assign)); message = assign ? $"{cashier} assigned." : $"{cashier} removed."; cashier = ""; await Load(); });
 }

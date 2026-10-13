@@ -112,7 +112,7 @@
     private async Task Open(ExceptionRow row) { if (row.DocumentId is Guid id) await OpenDocument.InvokeAsync(id); }
     private Task Export() => Run(async () =>
     {
-        var bytes = await Controls.Export(from, to); var name = $"Sierra Business - exceptions and audit {from:yyyy-MM-dd} to {to:yyyy-MM-dd}.xlsx";
+        var bytes = await Controls.Export(from, to); var name = $"Rokela Business Admin - exceptions and audit {from:yyyy-MM-dd} to {to:yyyy-MM-dd}.xlsx";
         if (Services.GetService(typeof(IFileExport)) is IFileExport export) { message = "Saved to " + await export.Save(name, bytes) + "."; return; }
         await Microsoft.JSInterop.JSRuntimeExtensions.InvokeVoidAsync(JS, "sierraDownload", name, Convert.ToBase64String(bytes));
         message = "Downloaded " + name + ".";

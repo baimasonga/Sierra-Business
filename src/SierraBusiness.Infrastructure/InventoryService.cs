@@ -9,7 +9,7 @@ using SierraBusiness.Application;
 using SierraBusiness.Domain;
 namespace SierraBusiness.Infrastructure;
 public sealed class StockLocation { public string Code { get; set; } = ""; public string Name { get; set; } = ""; }
-public sealed class InventoryService(IDbContextFactory<BusinessDb> factory, IActorSession session, IOptions<TradingOptions> options) : IInventoryService
+public sealed partial class InventoryService(IDbContextFactory<BusinessDb> factory, IActorSession session, IOptions<TradingOptions> options) : IInventoryService
 {
     private async Task<Actor> Authorize(bool write = false)
     {
@@ -76,7 +76,8 @@ public sealed class InventoryService(IDbContextFactory<BusinessDb> factory, IAct
         var matches = await db.Movements.Where(x => x.Branch == actor.Branch && x.Location == input.From && x.ProductId == product.Id && x.Serial == serial && x.Batch == batch && x.Expiry == input.Expiry).ToListAsync();
         var available = matches.Sum(x => x.Quantity);
         if (available - await CommerceRules.Reserved(db, actor.Branch, product.Id, input.From, serial, batch, input.Expiry) < input.Quantity) throw new BusinessException("Insufficient stock in the source warehouse and tracking identity.");
-        var cost = available == input.Quantity ? matches.Sum(x => x.Value) : AccountingEngine.Money(matches.Sum(x => x.Value) / available * input.Quantity);
+        await InventoryCost.GuardDate(db,actor.Branch,product.Id,DateOnly.FromDateTime(DateTime.UtcNow));
+        var cost = await InventoryCost.Issue(db,actor.Branch,product.Id,input.From,serial,batch,input.Expiry,input.Quantity,matches);
         var doc = Document(actor, input.OperationId, DocumentKind.StockTransfer, input.Reason, input);
         db.Documents.Add(doc);
         db.Movements.Add(new() { Id = Guid.NewGuid(), DocumentId = doc.Id, ProductId = product.Id, Branch = actor.Branch, Location = input.From, Serial = serial, Batch = batch, Expiry = input.Expiry, Quantity = -input.Quantity, Value = -cost });
@@ -116,8 +117,9 @@ public sealed class InventoryService(IDbContextFactory<BusinessDb> factory, IAct
         var difference = input.CountedQuantity - available; if (difference == 0) throw new BusinessException("The count matches the book quantity. No adjustment is needed.");
         if (serial is not null && difference > 0 && await db.Movements.AnyAsync(x => x.Serial == serial)) throw new BusinessException("Serial already exists in stock history. Use a transfer, return or reversal instead of a surplus count.");
         decimal adjustment;
-        if (difference > 0) { Rules.Positive(input.SurplusUnitCost, "Surplus unit cost"); adjustment = AccountingEngine.Money(difference * input.SurplusUnitCost); }
-        else adjustment = input.CountedQuantity == 0 ? -value : -AccountingEngine.Money(-difference * value / available);
+        await InventoryCost.GuardDate(db,actor.Branch,product.Id,DateOnly.FromDateTime(DateTime.UtcNow));
+        if (difference > 0) { Rules.Positive(input.SurplusUnitCost, "Surplus unit cost"); if ((await InventoryCost.Policy(db,actor.Branch,product.Id)) is { Method: InventoryCostMethod.Standard } standard && input.SurplusUnitCost != standard.StandardUnitCost) throw new BusinessException("Use this product's configured standard unit cost for surplus counts."); adjustment = AccountingEngine.Money(difference * input.SurplusUnitCost); }
+        else adjustment = -await InventoryCost.Issue(db,actor.Branch,product.Id,input.Location,serial,batch,input.Expiry,-difference,matches);
         var doc = Document(actor, input.OperationId, DocumentKind.StockCount, input.Reason, input); doc.Total = adjustment; db.Documents.Add(doc);
         db.Movements.Add(new() { Id = Guid.NewGuid(), DocumentId = doc.Id, ProductId = product.Id, Branch = actor.Branch, Location = input.Location, Serial = serial, Batch = batch, Expiry = input.Expiry, Quantity = difference, Value = adjustment });
         if (adjustment != 0)

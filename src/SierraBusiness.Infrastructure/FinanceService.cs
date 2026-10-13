@@ -8,7 +8,7 @@ using SierraBusiness.Application;
 using SierraBusiness.Domain;
 namespace SierraBusiness.Infrastructure;
 
-public sealed class FinanceService(IDbContextFactory<BusinessDb> factory, IActorSession session, IOptions<TradingOptions> options) : IFinanceService
+public sealed partial class FinanceService(IDbContextFactory<BusinessDb> factory, IActorSession session, IOptions<TradingOptions> options) : IFinanceService
 {
     private async Task<Actor> Authorize(bool write = false)
     {
@@ -27,19 +27,46 @@ public sealed class FinanceService(IDbContextFactory<BusinessDb> factory, IActor
     }
     public Task<Guid> CreateLedger(LedgerInput input) => Execute(input.OperationId, "ledger.create", input, async (db, actor) =>
     {
+        await CreateLedgerCore(db, input); return Guid.NewGuid();
+    });
+    internal static async Task<LedgerAccount> CreateLedgerCore(BusinessDb db, LedgerInput input, bool apply = true)
+    {
         if (input.Code is < 6000 or > 999999 || !Enum.IsDefined(input.Group)) throw new BusinessException("Custom ledger codes must be 6000–999999 and use a valid group.");
         if (input.CashOrBank && input.Group != LedgerGroup.Asset) throw new BusinessException("Cash/bank accounts must be assets.");
         if (await db.LedgerAccounts.AnyAsync(x => x.Id == input.Code)) throw new BusinessException("Ledger code already exists.");
-        db.LedgerAccounts.Add(new() { Id = input.Code, Name = Rules.Required(input.Name, "Ledger name"), Group = input.Group, CashOrBank = input.CashOrBank });
-        return Guid.NewGuid();
-    });
-    public async Task<Guid> PostVoucher(VoucherCommand input) => await Controls.Guard(factory, await session.CurrentActor(), () => Execute(input.OperationId, "voucher.post", input, async (db, actor) =>
+        var account = new LedgerAccount { Id = input.Code, Name = Rules.Required(input.Name, "Ledger name"), Group = input.Group, CashOrBank = input.CashOrBank };
+        if (apply) db.LedgerAccounts.Add(account); return account;
+    }
+    public async Task<Guid> PostVoucher(VoucherCommand input) => await Controls.Guard(factory, await session.CurrentActor(), () => Execute(input.OperationId, "voucher.post", input, (db, actor) => PostVoucherCore(db, actor, input)));
+    internal async Task<Guid> PostVoucherCore(BusinessDb db, Actor actor, VoucherCommand input)
     {
         await OpenDate(db, actor.Branch, input.Date);
         if (Controls.Backdated(await Controls.Current(db, actor.Branch), input.Date) is { } late)
             await Controls.Gate(db, actor, Controls.Voucher, input with { ApprovalId = null }, input.ApprovalId, input.OperationId, [late with { Detail = $"{input.Type} voucher {late.Detail}" }], $"{input.Type} voucher · {input.Date:dd MMM yyyy} · NLe {input.Lines.Sum(x => x.Debit):N2} · {input.Narration.Trim()}");
         if (!Enum.IsDefined(input.Type) || input.Lines is null || input.Lines.Count is < 2 or > 200 || input.Allocations is null || input.Allocations.Count > 200) throw new BusinessException("Enter a valid voucher with 2–200 lines.");
+        if (input.AllocationSource?.Length > 20000) throw new BusinessException("Cost centre allocation details are too large.");
+        if (input.AllocationSource is string classSource && classSource.TrimStart().StartsWith('{'))
+        {
+            try
+            {
+                using var sourceJson = JsonDocument.Parse(classSource);
+                if (sourceJson.RootElement.TryGetProperty(nameof(UseAllocationClassCommand.ClassId), out _))
+                {
+                    var request = JsonSerializer.Deserialize<UseAllocationClassCommand>(classSource)!;
+                    var savedClass = (await ProductivityFor(db, actor.Branch)).Classes.SingleOrDefault(c => c.Id == request.ClassId) ?? throw new BusinessException("Allocation class not found.");
+                    ClassAllocation(request, savedClass); CheckShares(savedClass.Shares, await StructureFor(db, actor.Branch));
+                }
+            }
+            catch (JsonException) { throw new BusinessException("Cost centre allocation details contain invalid JSON. Review the allocation again."); }
+        }
         var narration = Rules.Required(input.Narration, "Narration", 200);
+        if (input.ExternalReference is string reference)
+        {
+            if (reference != Rules.Required(reference,"External voucher reference",80).ToUpperInvariant()) throw new BusinessException("Use a trimmed uppercase external voucher reference.");
+            var earlier = await db.Operations.AsNoTracking().Where(o => o.Branch == actor.Branch && o.Action == "voucher.post" && o.Payload.Contains(nameof(VoucherCommand.ExternalReference))).ToListAsync();
+            var ids = earlier.Where(o => JsonSerializer.Deserialize<VoucherCommand>(o.Payload)?.ExternalReference == reference).Select(o => o.ResultId).ToArray();
+            if (await db.Documents.AnyAsync(d => ids.Contains(d.Id) && !db.Documents.Any(r => r.Reverses == d.Id))) throw new BusinessException("This external voucher reference was already posted. Reconcile the existing voucher before importing another.");
+        }
         var accounts = await db.LedgerAccounts.ToDictionaryAsync(x => x.Id);
         foreach (var line in input.Lines)
         {
@@ -54,6 +81,26 @@ public sealed class FinanceService(IDbContextFactory<BusinessDb> factory, IActor
         AccountingEngine.Balanced(input.Lines.Select(x => new Posting((Account)x.AccountCode, x.Debit, x.Credit)).ToList());
         var funds = input.Lines.Where(x => accounts[x.AccountCode].CashOrBank).ToArray();
         var other = input.Lines.Where(x => !accounts[x.AccountCode].CashOrBank).ToArray();
+        if (input.ChequeIssue is { } cheque)
+        {
+            var number = Rules.Required(cheque.ChequeNumber, "Cheque number", 30).ToUpperInvariant(); var payee = Rules.Required(cheque.Payee, "Payee", 160);
+            if (cheque.OperationId != input.OperationId || cheque.Date != input.Date || cheque.Amount != total || input.Type != VoucherType.Payment || funds.Length != 1 || funds[0].AccountCode != cheque.BankAccount || cheque.BankAccount == 1000 || input.StatementRowId is not null) throw new BusinessException("Cheque details must match this one-bank payment voucher.");
+            if (await db.IssuedCheques.AnyAsync(c => c.Branch == actor.Branch && c.BankAccount == cheque.BankAccount && c.Number == number)) throw new BusinessException("That cheque number was already issued from this bank.");
+            await BankingExtrasService.ValidateBook(db, actor, cheque, number);
+            db.IssuedCheques.Add(new IssuedCheque { Id = new Guid(MD5.HashData(Encoding.UTF8.GetBytes(input.OperationId.ToString("N") + "cheque"))), Branch = actor.Branch, BankAccount = cheque.BankAccount, Number = number, Payee = payee, Date = cheque.Date, Amount = cheque.Amount, Actor = actor.Id });
+        }
+        BankStatementRow? sourceRow = null;
+        if (input.StatementRowId is Guid rowId)
+        {
+            if (input.Type is not (VoucherType.Payment or VoucherType.Receipt) || funds.Length != 1) throw new BusinessException("Statement rows create one-bank payments or receipts.");
+            sourceRow = await db.BankStatementRows.SingleOrDefaultAsync(r => r.Id == rowId && db.BankStatements.Any(s => s.Id == r.StatementId && s.Branch == actor.Branch && s.AccountCode == funds[0].AccountCode) && !db.BankStatementVoids.Any(v => v.StatementId == r.StatementId)) ?? throw new BusinessException("Active statement row not found for this bank.");
+            if (sourceRow.Date != input.Date || sourceRow.Amount != funds[0].Debit - funds[0].Credit) throw new BusinessException("The voucher date and signed bank amount must equal the reviewed statement row.");
+            if (await db.BankMatches.AnyAsync(m => m.StatementRowId == rowId && !db.BankMatchCancellations.Any(c => c.MatchId == m.Id))) throw new BusinessException("This statement row already has a reviewed match.");
+            var token = rowId.ToString();
+            var previousSources = await db.Operations.Where(o => o.Branch == actor.Branch && o.Action == "voucher.post" && o.Payload.Contains(token)).ToListAsync();
+            var previousIds = previousSources.Where(o => JsonSerializer.Deserialize<VoucherCommand>(o.Payload)?.StatementRowId == rowId).Select(o => o.ResultId).ToArray();
+            if (await db.Documents.AnyAsync(d => previousIds.Contains(d.Id) && !db.Documents.Any(r => r.Reverses == d.Id))) throw new BusinessException("A voucher was already created from this row. Match that voucher or reverse it before creating another.");
+        }
         switch (input.Type)
         {
             case VoucherType.Payment:
@@ -89,9 +136,14 @@ public sealed class FinanceService(IDbContextFactory<BusinessDb> factory, IActor
             db.BillAllocations.Add(new() { Id = Guid.NewGuid(), VoucherId = doc.Id, InvoiceId = invoice.Id, Amount = allocation.Amount });
         }
         db.Documents.Add(doc);
-        foreach (var line in input.Lines) db.Journal.Add(new() { Id = Guid.NewGuid(), DocumentId = doc.Id, Branch = actor.Branch, Account = (Account)line.AccountCode, Debit = line.Debit, Credit = line.Credit, CostCentre = line.CostCentre.Trim() });
+        if (input.ChequeIssue is not null) db.IssuedCheques.Local.Single(c => c.Id == new Guid(MD5.HashData(Encoding.UTF8.GetBytes(input.OperationId.ToString("N") + "cheque")))).VoucherId = doc.Id;
+        foreach (var line in input.Lines)
+        {
+            var entry = new JournalLine { Id = Guid.NewGuid(), DocumentId = doc.Id, Branch = actor.Branch, Account = (Account)line.AccountCode, Debit = line.Debit, Credit = line.Credit, CostCentre = line.CostCentre.Trim() }; db.Journal.Add(entry);
+            if (sourceRow is not null && accounts[line.AccountCode].CashOrBank) db.BankMatches.Add(new BankMatch { Id = Guid.NewGuid(), Branch = actor.Branch, JournalLineId = entry.Id, StatementRowId = sourceRow.Id, ClearedDate = sourceRow.Date, StatementReference = sourceRow.Reference });
+        }
         return doc.Id;
-    }));
+    }
     public Task<Guid> Reconcile(BankMatchCommand input) => Execute(input.OperationId, "bank.reconcile", input, async (db, actor) =>
     {
         var line = await db.Journal.SingleOrDefaultAsync(x => x.Id == input.JournalLineId && x.Branch == actor.Branch) ?? throw new BusinessException("Bank entry not found.");

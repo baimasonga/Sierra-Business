@@ -5,7 +5,9 @@
     <UseMaui>true</UseMaui>
     <SingleProject>true</SingleProject>
     <RootNamespace>SierraBusiness.Maui</RootNamespace>
-    <ApplicationTitle>Sierra Business</ApplicationTitle>
+    <ApplicationTitle>Rokela Business Admin</ApplicationTitle>
+    <Product>Rokela Business Admin</Product>
+    <AssemblyTitle>Rokela Business Admin</AssemblyTitle>
     <ApplicationId>com.sierrabusiness.desktop</ApplicationId>
     <ApplicationDisplayVersion>0.1.0</ApplicationDisplayVersion>
     <ApplicationVersion>1</ApplicationVersion>
@@ -27,7 +29,8 @@
     <PackageReference Include="Microsoft.AspNetCore.Components.WebView.Maui" />
     <ProjectReference Include="../SierraBusiness.Desktop/SierraBusiness.Desktop.csproj" />
     <ProjectReference Include="../SierraBusiness.SharedUI/SierraBusiness.SharedUI.csproj" />
-    <MauiIcon Include="Resources/AppIcon/appicon.svg" Color="#163e34" />
+    <MauiIcon Include="Resources/AppIcon/rokela.png" />
+    <Content Include="../SierraBusiness.Web/wwwroot/branding/**/*" Link="wwwroot/branding/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../SierraBusiness.Web/wwwroot/app.css" Link="wwwroot/app.css" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../SierraBusiness.Web/wwwroot/print.js" Link="wwwroot/print.js" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../SierraBusiness.Web/wwwroot/forms.js" Link="wwwroot/forms.js" CopyToOutputDirectory="PreserveNewest" />

@@ -16,7 +16,8 @@ public sealed record IssuePartCommand(Guid OperationId, Guid JobId, DateOnly Dat
 public sealed record ReturnPartCommand(Guid OperationId, Guid JobId, Guid IssueDocumentId, decimal Quantity, string Reason);
 public sealed record CoverageCommand(Guid OperationId, Guid JobId, ServiceBilling Billing, bool CoversParts = true, bool CoversLabour = true, string Reason = "");
 public sealed record CompleteServiceCommand(Guid OperationId, Guid JobId, DateOnly Completed, string Resolution, string AcceptedBy, List<string> ChecklistDone);
-public sealed record CloseServiceCommand(Guid OperationId, Guid JobId, DateOnly Date, PaymentMethod? Payment = null, string? PaymentReference = null, string? Bank = null, DateOnly? PaymentDate = null, DateOnly? DueDate = null);
+public sealed record CloseServiceCommand(Guid OperationId, Guid JobId, DateOnly Date, PaymentMethod? Payment = null, string? PaymentReference = null, string? Bank = null, DateOnly? PaymentDate = null, DateOnly? DueDate = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] Guid? ReliefGrantId = null);
 public sealed record SupplierClaimCommand(Guid OperationId, Guid JobId, string Supplier, string Reference, string Note = "");
 public sealed record SupplierClaimOutcomeCommand(Guid OperationId, Guid JobId, string Outcome, string Note = "");
 

@@ -8,7 +8,7 @@ namespace SierraBusiness.Infrastructure;
 /// <summary>A closed financial year: its profit moves to retained earnings in the balance sheet and the period is locked. Append-only.</summary>
 public sealed class YearEndClosure { public Guid Id { get; set; } public string Branch { get; set; } = ""; public DateOnly YearEnd { get; set; } public decimal Profit { get; set; } public string Reason { get; set; } = ""; public string Actor { get; set; } = ""; public DateTimeOffset Time { get; set; } }
 
-public sealed class StatementsService(IDbContextFactory<BusinessDb> factory, IActorSession session, IOptions<TradingOptions> options) : IStatementsService
+public sealed partial class StatementsService(IDbContextFactory<BusinessDb> factory, IActorSession session, IOptions<TradingOptions> options) : IStatementsService
 {
     private async Task<Actor> Authorize(string permission = "accounting.read")
     {
@@ -42,6 +42,34 @@ public sealed class StatementsService(IDbContextFactory<BusinessDb> factory, IAc
         rows.Add(new("Expenses", "Total expenses", null, expenses, true));
         rows.Add(new("Result", income - expenses >= 0 ? "Net profit" : "Net loss", null, income - expenses, true));
         return new(from, to, rows, income, expenses, income - expenses);
+    }
+
+    public async Task<FinancialRatios> Ratios(DateOnly from, DateOnly to)
+    {
+        var actor = await Authorize();
+        if (to < from) throw new BusinessException("The end date is before the start date.");
+        await using var db = await factory.CreateDbContextAsync();
+        var (accounts, lines) = await Load(db, actor.Branch, to);
+        var byId = accounts.ToDictionary(x => x.Id);
+        var period = lines.Where(l => l.Date >= from).ToList();
+        decimal Balance(LedgerGroup group, bool opening = false) => lines
+            .Where(l => byId[l.Account].Group == group && (!opening || l.Date < from)).Sum(l => l.Debit - l.Credit);
+        var income = -period.Where(l => byId[l.Account].Group == LedgerGroup.Income).Sum(l => l.Debit - l.Credit);
+        var sales = period.Where(l => l.Account == (int)Account.Sales || l.Account == (int)ServiceRules.Income).Sum(l => l.Credit - l.Debit);
+        var cost = period.Where(l => l.Account == (int)Account.CostOfSales).Sum(l => l.Debit - l.Credit);
+        var profit = Profit(period, byId);
+        var assets = Balance(LedgerGroup.Asset);
+        var liabilities = -Balance(LedgerGroup.Liability);
+        var equity = -Balance(LedgerGroup.Equity) + Profit(lines, byId);
+        var averageAssets = (Balance(LedgerGroup.Asset, true) + assets) / 2;
+        return new(from, to, [
+            new("Gross margin", "(Net sales and service income − cost of sales) / net sales and service income × 100", sales - cost, sales, true),
+            new("Net profit margin", "Period net profit / total period income × 100", profit, income, true),
+            new("Return on average assets", "Period net profit / average of opening and closing total assets × 100", profit, averageAssets, true),
+            new("Asset turnover", "Net sales and service income / average of opening and closing total assets", sales, averageAssets, false),
+            new("Liabilities to assets", "Closing total liabilities / closing total assets × 100", liabilities, assets, true),
+            new("Liabilities to equity", "Closing total liabilities / closing equity including accumulated profit", liabilities, equity, false)
+        ]);
     }
 
     public async Task<BalanceSheet> BalanceSheet(DateOnly asAt)
@@ -173,6 +201,22 @@ public sealed class StatementsService(IDbContextFactory<BusinessDb> factory, IAc
         var reports = new ReportService(factory, session, options);
         switch (q.Report)
         {
+            case "Stock ageing & slow-moving":
+            {
+                var r = await reports.StockAgeing(q.To, q.SlowDays);
+                return WorkbookWriter.Write([("Stock ageing", [["As at", q.To.ToString("yyyy-MM-dd"), "Slow-moving days", r.SlowDays.ToString()], ["SKU", "Product", "Warehouse", "Serial", "Batch", "Expiry", "Unit", "Quantity", "0-30 days", "31-60 days", "61-90 days", "Over 90 days", "Unallocated age", "Carrying value", "Last dispatch", "Slow moving"],
+                    .. r.Rows.Select(x => (IReadOnlyList<string>)[x.Sku, x.Name, x.Location, x.Serial ?? "", x.Batch ?? "", x.Expiry?.ToString("yyyy-MM-dd") ?? "", x.Unit, x.Quantity.ToString("0.####"), x.Days30.ToString("0.####"), x.Days60.ToString("0.####"), x.Days90.ToString("0.####"), x.Over90.ToString("0.####"), x.UnknownAge.ToString("0.####"), M(x.Value), x.LastDispatch?.ToString("yyyy-MM-dd") ?? "Never", x.SlowMoving ? "Yes" : "No"])])]);
+            }
+            case "Financial ratios":
+            {
+                var r = await Ratios(q.From, q.To);
+                return WorkbookWriter.Write([("Financial ratios", [
+                    [$"Financial ratios {q.From:yyyy-MM-dd} to {q.To:yyyy-MM-dd}"],
+                    ["Period measures are not annualised. N/A means a zero or negative denominator."],
+                    ["Ratio", "Formula", "Numerator (NLe)", "Denominator (NLe)", "Value", "Unit"],
+                    .. r.Rows.Select(x => (IReadOnlyList<string>)[x.Name, x.Formula, M(x.Numerator), M(x.Denominator), x.Value?.ToString("0.00") ?? "N/A", x.Percentage ? "%" : "times"])
+                ])]);
+            }
             case "Profit and loss": { var p = await ProfitAndLoss(q.From, q.To); return WorkbookWriter.Write([("Profit and loss", Rows($"Profit and loss {q.From:dd MMM yyyy} – {q.To:dd MMM yyyy}", p.Rows))]); }
             case "Balance sheet": { var b = await BalanceSheet(q.To); return WorkbookWriter.Write([("Balance sheet", Rows($"Balance sheet at {q.To:dd MMM yyyy}", b.Rows))]); }
             case "Cash flow":

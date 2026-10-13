@@ -1,6 +1,7 @@
 @inject IBusinessService Business
 @inject IBankingService Banking
 @inject IFinanceService Finance
+@if (CanWrite) { <StatementVoucherWorkspace @ref="statementVoucher" /> }
 <section class="panel"><h2>Banking and supplier credits</h2><p>Import a statement, review each match, and track received cheques through clearance. These records do not initiate bank transfers.</p><button disabled="@busy" @onclick="Refresh">Refresh balances</button></section>
 @if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
 @if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
@@ -26,6 +27,7 @@
 @code {
     [Parameter] public Actor Actor { get; set; } = default!;
     private IReadOnlyList<DocumentView> legacyDocuments = []; private BankingSnapshot? snapshot; private FinanceSnapshot? report;
+    private StatementVoucherWorkspace? statementVoucher;
     private bool busy, refund = true; private bool CanWrite => Actor.Permissions.Contains("accounting.write");
     private IEnumerable<LedgerDefinition> Funds => report?.Accounts.Where(x => x.CashOrBank) ?? [];
     private string error = "", message = "", csv = "", reviewedCsv = "", reference = "", voidReason = "", chequeReference = "", chequeBank = "", chequeReason = "", creditReason = "", legacyId = "";
@@ -33,7 +35,7 @@
     private decimal opening, closing, chequeAmount, creditAmount; private Guid invoice, credit, supplierBill;
     private DateOnly chequeDate = DateOnly.FromDateTime(DateTime.UtcNow), actionDate = DateOnly.FromDateTime(DateTime.UtcNow);
     private IReadOnlyList<StatementLineInput> preview = []; private readonly Dictionary<Guid, Guid> matches = [];
-    public bool HasDraft => csv.Length > 0 || chequeReference.Length > 0 || chequeAmount != 0 || creditAmount != 0 || chequeReason.Length > 0 || voidReason.Length > 0 || reference.Length > 0 || creditReason.Length > 0 || legacyId.Length > 0 || invoice != Guid.Empty || opening != 0 || closing != 0;
+    public bool HasDraft => statementVoucher?.HasDraft == true || csv.Length > 0 || chequeReference.Length > 0 || chequeAmount != 0 || creditAmount != 0 || chequeReason.Length > 0 || voidReason.Length > 0 || reference.Length > 0 || creditReason.Length > 0 || legacyId.Length > 0 || invoice != Guid.Empty || opening != 0 || closing != 0;
     protected override Task OnInitializedAsync() => Refresh();
     private async Task Load() { snapshot = await Banking.Read(); var state = await Business.Read(Actor); legacyDocuments = state.Documents.Where(x => x.Kind == DocumentKind.Sale && x.Settlement == "Cheque" && !state.Documents.Any(d => d.Reverses == x.Id) && !snapshot.Cheques.Any(c => c.SourceDocumentId == x.Id)).ToArray(); report = await Finance.Read(DateOnly.MinValue, DateOnly.FromDateTime(DateTime.UtcNow)); foreach (var row in snapshot.Rows) matches.TryAdd(row.Id, Guid.Empty); }
     private Task Refresh() => Run(Load);

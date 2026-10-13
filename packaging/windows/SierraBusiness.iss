@@ -14,21 +14,23 @@
 
 [Setup]
 AppId={{FCDE1608-8326-49E7-855D-35ED950294CC}
-AppName=Sierra Business
+AppName=Rokela Business Admin
 AppVersion={#AppVersion}
-AppPublisher=Sierra Business
-DefaultDirName={localappdata}\Programs\Sierra Business
-DefaultGroupName=Sierra Business
+AppPublisher=Rokela Business Admin
+DefaultDirName={localappdata}\Programs\Rokela Business Admin
+DefaultGroupName=Rokela Business Admin
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.17763
 OutputDir={#OutputDir}
-OutputBaseFilename=SierraBusiness-Setup-x64
+OutputBaseFilename=RokelaBusinessAdmin-Setup-x64
+UsePreviousGroup=no
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=rokela.ico
 UninstallDisplayIcon={app}\SierraBusiness.Maui.exe
 CloseApplications=yes
 RestartApplications=no
@@ -42,19 +44,24 @@ Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 Source: "{#WebView2Installer}"; DestDir: "{tmp}"; DestName: "MicrosoftEdgeWebView2RuntimeInstallerX64.exe"; Flags: deleteafterinstall
 
 [Icons]
-Name: "{group}\Sierra Business"; Filename: "{app}\SierraBusiness.Maui.exe"; WorkingDir: "{app}"
-Name: "{group}\Uninstall Sierra Business"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Sierra Business"; Filename: "{app}\SierraBusiness.Maui.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{group}\Rokela Business Admin"; Filename: "{app}\SierraBusiness.Maui.exe"; WorkingDir: "{app}"
+Name: "{group}\Uninstall Rokela Business Admin"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\Rokela Business Admin"; Filename: "{app}\SierraBusiness.Maui.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [UninstallDelete]
 ; The embedded browser's cache that versions before 0.26.1 kept beside the program. Business data and backups live elsewhere and are kept.
 Type: filesandordirs; Name: "{app}\SierraBusiness.Maui.exe.WebView2"
 
+[InstallDelete]
+Type: files; Name: "{autodesktop}\Sierra Business.lnk"
+Type: files; Name: "{userprograms}\Sierra Business\Sierra Business.lnk"
+Type: files; Name: "{userprograms}\Sierra Business\Uninstall Sierra Business.lnk"
+
 [Run]
-Filename: "{app}\SierraBusiness.Maui.exe"; Description: "Open Sierra Business"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\SierraBusiness.Maui.exe"; Description: "Open Rokela Business Admin"; Flags: nowait postinstall skipifsilent
 
 [Code]
-// 0.26.1: Setup and uninstall cannot replace or remove program files while Sierra Business is still running, including a copy that has
+// 0.26.1: Setup and uninstall cannot replace or remove program files while Rokela Business Admin is still running, including a copy that has
 // stopped responding (Windows' own close request does not reach a frozen window). Find it and, with the user's agreement, end it.
 function AppRunning(): Boolean;
 var Code: Integer;
@@ -68,7 +75,7 @@ begin
   Result := True;
   while AppRunning() do
   begin
-    case MsgBox('Sierra Business is still running.' + #13#10#13#10 +
+    case MsgBox('Rokela Business Admin is still running.' + #13#10#13#10 +
                 'Yes: close it yourself first, then continue.' + #13#10 +
                 'No: end it now (use this if it is not responding; posted records are safe, unsaved typing is lost).' + #13#10 +
                 'Cancel: stop.', mbConfirmation, MB_YESNOCANCEL) of
@@ -110,11 +117,11 @@ begin
   if (CurStep = ssPostInstall) and (not HasWebView2()) then
   begin
     if not Exec(ExpandConstant('{tmp}\MicrosoftEdgeWebView2RuntimeInstallerX64.exe'), '/silent /install', '', SW_HIDE, ewWaitUntilTerminated, Code) then
-      RaiseException('Windows could not start the included WebView2 runtime installer. Run Sierra Business Setup again.');
+      RaiseException('Windows could not start the included WebView2 runtime installer. Run Rokela Business Admin Setup again.');
     if (Code <> 0) and (Code <> 3010) then
-      RaiseException(Format('WebView2 installation failed (code %d). Restart Windows and run Sierra Business Setup again.', [Code]));
+      RaiseException(Format('WebView2 installation failed (code %d). Restart Windows and run Rokela Business Admin Setup again.', [Code]));
     if not HasWebView2() then
-      RaiseException('WebView2 is not available yet. Restart Windows and run Sierra Business Setup again.');
+      RaiseException('WebView2 is not available yet. Restart Windows and run Rokela Business Admin Setup again.');
   end;
 end;
 

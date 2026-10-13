@@ -12,6 +12,22 @@ namespace SierraBusiness.IntegrationTests;
 /// <summary>Drives the 0.24.0 screens: create a price rule, read the financial statements, write a cheque.</summary>
 public sealed class SmallerGapsScreenTests : IAsyncLifetime
 {
+    [Fact] public void ComparativeStatementDatesAndExportWork()
+    {
+        var screen = context.Render<StatementsWorkspace>(p => p.Add(x => x.Actor, owner));
+        screen.WaitForAssertion(() => Assert.Contains("Total income", screen.Markup));
+        screen.FindAll("button").Single(b => b.TextContent == "Comparative statements").Click();
+        screen.WaitForAssertion(() => Assert.Contains("Net profit / loss", screen.Markup));
+        screen.Find("select").Change("Balance sheet");
+        screen.WaitForAssertion(() => Assert.Contains("Total assets", screen.Markup));
+        screen.FindAll("button").Single(b => b.TextContent == "Export to Excel").Click();
+        screen.WaitForAssertion(() => Assert.Contains(context.JSInterop.Invocations, i => i.Identifier == "sierraDownload" && i.Arguments[0]!.ToString()!.StartsWith("Comparative statements", StringComparison.Ordinal)));
+        screen.FindAll("input[type=date]")[0].Change("2027-01-01");
+        screen.WaitForAssertion(() => Assert.Contains("Each comparison period must end", screen.Markup));
+        screen.FindAll("input[type=date]")[1].Change("2026-01-01");
+        screen.WaitForAssertion(() => Assert.Contains("Each comparison period must end", screen.Markup));
+        Assert.DoesNotContain("Total assets", screen.Markup);
+    }
     private readonly string path = Path.Combine(Path.GetTempPath(), $"sierra-gaps-ui-{Guid.NewGuid():N}.db");
     private readonly BunitContext context = new();
     private Factory factory = null!;
@@ -53,6 +69,12 @@ public sealed class SmallerGapsScreenTests : IAsyncLifetime
         statements.WaitForAssertion(() => Assert.Contains("✓ Balanced", statements.Markup));
         statements.FindAll("button").First(b => b.TextContent == "Cash flow").Click();
         statements.WaitForAssertion(() => Assert.Contains("✓ Reconciled", statements.Markup));
+        statements.FindAll("button").First(b => b.TextContent == "Financial ratios").Click();
+        statements.WaitForAssertion(() => Assert.Contains("Gross margin", statements.Markup));
+        Assert.Contains("50.00%", statements.Markup);
+        Assert.Contains("not annualised", statements.Markup);
+        statements.FindAll("button").First(b => b.TextContent == "Export to Excel").Click();
+        statements.WaitForAssertion(() => Assert.Contains(context.JSInterop.Invocations, x => x.Identifier == "sierraDownload"));
 
         var banking = context.Render<BankingToolsWorkspace>(p => p.Add(x => x.Actor, owner));
         banking.WaitForAssertion(() => Assert.Contains("Debit and credit columns", banking.Markup));

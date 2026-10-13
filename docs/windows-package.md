@@ -1,5 +1,7 @@
 # Windows application and single-package delivery
 
+Latest form-fix installer: **0.27.1**, `artifacts/windows/0.27.1/SierraBusiness-Setup-x64.exe`. All 288 integration tests passed (six live-provider skips), offline OCR and native publishing passed, and the installer checksum was independently verified. See [form picker fixes and acceptance limits](form-pickers-0.27.1.md).
+
 ## Installer rebuild — 2026-10-05
 
 Rebuilt 0.27.0 from the current workspace, including the latest integrity fixes and shared UI. Installer: `artifacts/windows/0.27.0/SierraBusiness-Setup-x64.exe`, 285,033,123 bytes. Independently verified SHA-256: `2960D4478DCF640248F834F802D64C9F81DFDBDD3BDD23B9F3C696A5F983985B` (also in the adjacent `SHA256SUMS.txt`).
@@ -112,3 +114,7 @@ On success, download the workflow artifact containing the installer and SHA-256 
 
 
 
+
+## Release continuation — 11 October 2026
+
+Windows 0.32.0 implements the authorized period, inventory, banking/import and group-adjustment workflows. The immutable source snapshot passed 380 Release tests with zero failures and six skipped live SQL Server/PostgreSQL tests. Authenticated HTTP workflows and the offline Windows capture/OCR smoke check passed. Native publish, installer compilation and all 26 release artifact checks passed. The installer is unsigned. Native visual, physical peripheral, clean-machine and two-device acceptance remain unverified; execution policy blocked isolated UI-preview startup without a specific reason. See [scope and evidence](remaining-features-0.32.0.md).

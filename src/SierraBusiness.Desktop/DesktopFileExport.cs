@@ -1,11 +1,11 @@
 using SierraBusiness.Application;
 namespace SierraBusiness.Desktop;
 
-/// <summary>Saves generated files (templates, error workbooks) to Documents\Sierra Business, where Excel can open them.</summary>
+/// <summary>Saves generated files (templates, error workbooks) to Documents\Rokela Business Admin, where Excel can open them.</summary>
 public sealed class DesktopFileExport : IFileExport
 {
     private readonly string folder;
-    public DesktopFileExport() : this(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Sierra Business")) { }
+    public DesktopFileExport() : this(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Rokela Business Admin")) { }
     public DesktopFileExport(string folder) => this.folder = folder;
     public async Task<string> Save(string fileName, byte[] content)
     {

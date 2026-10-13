@@ -244,8 +244,9 @@
                                     <label>Payment date<input type="date" @bind="paymentDate" /></label>
                                 }
                                 @if (settlement == "Credit") { <label>Due date<input type="date" @bind="dueDate" /></label> }
+                                <TaxReliefSelector Actor="Actor" Customer="@j.Customer" Date="closeDate" @bind-Value="reliefGrantId" Disabled="busy" />
                             </div>
-                            <button class="primary" disabled="@busy" @onclick="Close">Close and invoice NLe @((j.PartsCharge + j.LabourCharge + Tax(j)).ToString("N2"))</button>
+                            <button class="primary" disabled="@busy" @onclick="Close">Close and invoice NLe @((j.PartsCharge+j.LabourCharge+(reliefGrantId is null ? Tax(j) : 0)).ToString("N2"))</button>
                         }
                         else
                         {
@@ -424,7 +425,8 @@
     private bool CanWrite => Actor.Permissions.Contains("sales.create") || Actor.Permissions.Contains("inventory.receive");
     private bool CanClose => Actor.Permissions.Contains("sales.create");
     private bool CanPlan => Actor.Permissions.Contains("sales.create");
-    public bool HasDraft => problem.Length > 0 || resolution.Length > 0 || acceptedBy.Length > 0 || diagnosis.Length > 0 || planChecklist.Length > 0 || done.Count > 0;
+    private Guid? reliefGrantId;
+    public bool HasDraft => reliefGrantId is not null || problem.Length > 0 || resolution.Length > 0 || acceptedBy.Length > 0 || diagnosis.Length > 0 || planChecklist.Length > 0 || done.Count > 0;
     private ServiceJobView? Selected => data?.Jobs.FirstOrDefault(x => x.Id == selectedId);
     private ServiceableUnit? Unit => data?.Units.FirstOrDefault(x => Key(x.ProductId, x.Serial) == unitKey);
     private ServicePartOption? Part => data?.Parts.FirstOrDefault(x => x.ProductId == partId);
@@ -477,7 +479,7 @@
         billing = j.Coverage?.Billing ?? (j.WarrantyActive ? ServiceBilling.Warranty : ServiceBilling.Chargeable); coversParts = j.Coverage?.CoversParts ?? true; coversLabour = j.Coverage?.CoversLabour ?? true;
         labourEngineer = j.Engineer; labourDate = completed = closeDate = paymentDate = Today; dueDate = null; settlement = "Cash"; paymentReference = bank = "";
         partId = returnIssue = Guid.Empty; partQuantity = returnQuantity = 1; partPrice = 0;
-        completeOperation = Guid.NewGuid(); closeOperation = Guid.NewGuid(); issueOperation = Guid.NewGuid();
+        completeOperation = Guid.NewGuid(); closeOperation = Guid.NewGuid(); reliefGrantId = null; issueOperation = Guid.NewGuid();
         serviceFiscal = null; _ = LoadFiscal(j);
     }
     private void ChooseUnit() { if (Unit is { } u) customer = u.Customer; }
@@ -515,8 +517,8 @@
     {
         var j = Selected!; var charge = j.PartsCharge + j.LabourCharge > 0;
         PaymentMethod? payment = !charge || settlement == "Credit" ? null : Enum.Parse<PaymentMethod>(settlement);
-        await Desk.Close(new(closeOperation, j.Id, closeDate, payment, payment is PaymentMethod.Cheque or PaymentMethod.BankTransfer ? paymentReference : null, payment is PaymentMethod.Cheque or PaymentMethod.BankTransfer ? bank : null, payment is PaymentMethod.Cheque or PaymentMethod.BankTransfer ? paymentDate : null, charge && payment is null ? dueDate : null));
-        closeOperation = Guid.NewGuid();
+        await Desk.Close(new(closeOperation,j.Id,closeDate,payment,payment is PaymentMethod.Cheque or PaymentMethod.BankTransfer ? paymentReference : null,payment is PaymentMethod.Cheque or PaymentMethod.BankTransfer ? bank : null,payment is PaymentMethod.Cheque or PaymentMethod.BankTransfer ? paymentDate : null,charge && payment is null ? dueDate : null,reliefGrantId));
+        closeOperation = Guid.NewGuid(); reliefGrantId = null;
         await After(charge ? "Job closed and invoiced. Print the service report and invoice for the customer." : "Job closed at no charge.");
     });
     private async Task Cancel()

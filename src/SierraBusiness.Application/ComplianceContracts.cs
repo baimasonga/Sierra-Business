@@ -1,7 +1,7 @@
 namespace SierraBusiness.Application;
 
 /// <summary>Specification Skill 23 (0.20.0): Sierra Leone configuration and compliance. Rates, identifiers and formats are settings with history, never code.</summary>
-public enum TaxCategory { Standard, ZeroRated, Exempt }
+public enum TaxCategory { Standard, ZeroRated, Exempt, Relieved }
 
 /// <summary>A company identifier printed on documents, for example TIN, GST registration number or business registration number.</summary>
 public sealed record CompanyIdentifier(string Label, string Value, bool OnInvoices = true);
@@ -41,8 +41,8 @@ public sealed record ProductTaxView(Guid ProductId, string Sku, string Name, str
 public sealed record SetTaxCategory(Guid OperationId, Guid ProductId, TaxCategory Category, DateOnly From, string Reason);
 
 /// <summary>Tax summary for a period, for preparing the GST return. Amounts are in the functional currency.</summary>
-public sealed record TaxReturnLine(string Section, decimal Standard, decimal ZeroRated, decimal Exempt, decimal Tax, int Documents);
-public sealed record TaxReturnDocument(Guid DocumentId, string Number, DateOnly Date, string Kind, string Party, decimal Standard, decimal ZeroRated, decimal Exempt, decimal Tax, decimal Rate, string Fiscal);
+public sealed record TaxReturnLine(string Section, decimal Standard, decimal ZeroRated, decimal Exempt, decimal Tax, int Documents,decimal Relieved = 0);
+public sealed record TaxReturnDocument(Guid DocumentId, string Number, DateOnly Date, string Kind, string Party, decimal Standard, decimal ZeroRated, decimal Exempt, decimal Tax, decimal Rate, string Fiscal,decimal Relieved = 0);
 public sealed record TaxReturnReport(DateOnly From, DateOnly To, string TaxName, IReadOnlyList<TaxReturnLine> Lines, decimal OutputTax, IReadOnlyList<TaxReturnDocument> Documents, ReconciliationCheck Check);
 
 // ---------------- fiscal device / service ----------------
@@ -67,6 +67,15 @@ public sealed record FiscalRunResult(int Tried, int Registered, int StillPending
 
 public interface IComplianceService
 {
+    Task<Guid> RecordInputTax(InputTaxCommand input);
+    Task<IReadOnlyList<InputTaxSource>> InputTaxSources();
+    Task<TaxFilingPreview> PreviewTaxFiling(DateOnly from,DateOnly to);
+    Task<Guid> RecordTaxFiling(TaxFilingCommand input);
+    Task<IReadOnlyList<TaxFilingView>> TaxFilings();
+    Task<Guid> RecordReliefGrant(TaxReliefGrantCommand input);
+    Task<IReadOnlyList<TaxReliefGrantView>> ReliefGrants();
+    Task<NetTaxReturnReport> NetTaxReturn(DateOnly from, DateOnly to);
+    Task<byte[]> ExportNetTaxReturn(DateOnly from, DateOnly to);
     Task<PrintSetup> PrintSetup();
     Task<CompanyProfile> Profile();
     Task<Guid> SaveProfile(SaveCompanyProfile input);

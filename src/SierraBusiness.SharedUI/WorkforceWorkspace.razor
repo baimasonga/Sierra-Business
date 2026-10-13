@@ -1,0 +1,104 @@
+@inject IPayrollService Payroll
+@using Microsoft.JSInterop
+@inject Microsoft.JSInterop.IJSRuntime JS
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
+@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+<section class="panel">
+    <h2>Attendance and leave administration</h2>
+    <p>Record actual work, grant leave explicitly and review requests. Missing attendance is not assumed to be an unpaid absence. Payroll uses these records only when you select Use attendance leave and pay heads on Run payroll.</p>
+    <div class="form-grid"><label>Report month<input type="month" @bind="MonthText" @bind:after="Refresh" /></label></div>
+    <button type="button" class="secondary" disabled="@busy" @onclick="Refresh">Refresh attendance and leave</button>
+    <button type="button" class="secondary" disabled="@(busy || data is null)" @onclick="Export">Export attendance and leave</button>
+</section>
+<div class="view-toggle report-tabs" role="tablist">
+    @foreach (var t in new[] { "Attendance", "Leave balances", "Leave requests", "Pay heads" }) { <button type="button" role="tab" aria-selected="@(tab == t)" class="@(tab == t ? "active" : "")" @onclick="() => Open(t)">@t</button> }
+</div>
+@if (data is null) { <p>Loading workforce records…</p> }
+else if (employees.Count == 0) { <p>Add an employee on Employees before recording attendance or leave.</p> }
+else if (tab == "Attendance")
+{
+    <section class="panel"><h2>Record a day</h2><div class="form-grid">
+        <label>Employee<select @bind="attendanceEmployee" @bind:after="EditDay">@EmployeeOptions</select></label>
+        <label>Attendance date<input type="date" @bind="date" @bind:after="EditDay" /></label>
+        <label>Status<select @bind="status">@foreach (var s in Enum.GetValues<AttendanceStatus>()) { <option value="@s">@Name(s)</option> }</select></label>
+        <label>Regular hours<input type="number" min="0" max="24" step="0.25" @bind="hours" /></label>
+        <label>Overtime hours<input type="number" min="0" max="24" step="0.25" @bind="overtime" /></label>
+        <label>Attendance note<input maxlength="160" @bind="attendanceNote" /></label>
+    </div><p class="hint">Unpaid absence and rest days require zero hours. Half day unpaid deducts half a calendar day. Approved leave dates are managed in Leave requests.</p>
+    <button type="button" class="primary" disabled="@busy" @onclick="SaveDay">Save attendance day</button></section>
+    <section class="panel"><h2>Recorded attendance</h2><div class="table-wrap"><table><thead><tr><th>Date</th><th>Employee</th><th>Status</th><th>Hours</th><th>Overtime</th><th>Note</th><th></th></tr></thead><tbody>
+        @foreach (var a in data.Attendance) { <tr><td>@a.Date.ToString("dd MMM yyyy")</td><td>@a.Employee</td><td>@Name(a.Status)</td><td>@a.Hours</td><td>@a.OvertimeHours</td><td>@a.Note</td><td><button class="text-button" @onclick="() => SelectDay(a)">Edit day</button></td></tr> }
+    </tbody></table></div></section>
+}
+else if (tab == "Leave balances")
+{
+    <section class="panel"><h2>Grant leave entitlement</h2><p>Enter the total entitlement for this employee, leave type and year. This replaces the prior grant after a version check. Approved dates consume it; cancellation restores it. No statutory allowance or automatic accrual is assumed.</p><div class="form-grid">
+        <label>Employee<select @bind="leaveEmployee" @bind:after="EditBalance">@EmployeeOptions</select></label>
+        <label>Leave year<input type="number" min="2000" max="9998" @bind="year" @bind:after="EditBalance" /></label>
+        <label>Paid leave type<select @bind="balanceKind" @bind:after="EditBalance">@foreach (var kind in Enum.GetValues<LeaveKind>().Where(k => k != LeaveKind.Unpaid)) { <option value="@kind">@kind</option> }</select></label>
+        <label>Total granted days<input type="number" min="0" max="366" step="1" @bind="granted" /></label><label>Entitlement reason<input maxlength="160" @bind="grantReason" /></label>
+    </div><button class="primary" type="button" disabled="@busy" @onclick="SaveBalance">Save leave entitlement</button></section>
+    <section class="panel"><h2>Balances for @month.Year</h2><div class="table-wrap"><table><thead><tr><th>Employee</th><th>Type</th><th>Granted</th><th>Approved days</th><th>Remaining</th></tr></thead><tbody>@foreach (var b in data.Balances) { <tr><td>@b.Employee</td><td>@b.Kind</td><td>@b.Granted</td><td>@b.Used</td><td>@b.Remaining</td></tr> }</tbody></table></div></section>
+}
+else if (tab == "Leave requests")
+{
+    <section class="panel"><h2>Request leave</h2><div class="form-grid">
+        <label>Employee<select @bind="requestEmployee">@EmployeeOptions</select></label><label>Type<select @bind="requestKind">@foreach (var kind in Enum.GetValues<LeaveKind>()) { <option value="@kind">@kind</option> }</select></label>
+        <label>First date<input type="date" @bind="leaveFrom" /></label><label>Last date<input type="date" @bind="leaveTo" /></label><label>Request reason<input maxlength="160" @bind="requestReason" /></label>
+    </div><p>Choose the weekdays to charge. Holidays are not automatically excluded; use separate requests if a holiday should not be charged. Whole-day leave is supported.</p>
+    @foreach (var day in Enum.GetValues<DayOfWeek>()) { <label class="check"><input type="checkbox" checked="@weekdays.Contains(day)" @onchange="e => SetWeekday(day, e.Value is true)" />@day</label> }
+    <button class="primary" type="button" disabled="@busy" @onclick="Request">Submit leave request</button></section>
+    <section class="panel"><h2>Review requests</h2><label>Decision reason<input maxlength="160" @bind="decisionReason" /></label><div class="table-wrap"><table><thead><tr><th>Employee</th><th>Type</th><th>Dates</th><th>Days</th><th>Status</th><th>Reason</th><th>Action</th></tr></thead><tbody>
+    @foreach (var r in data.Requests) { <tr><td>@r.Employee</td><td>@r.Kind</td><td>@string.Join(", ", r.Days.Select(d => d.ToString("dd MMM yyyy")))</td><td>@r.Days.Count</td><td>@r.Status</td><td>@r.Reason<br />@r.DecisionReason</td><td>
+        @if (r.Status == LeaveStatus.Pending) { <button class="text-button" disabled="@busy" @onclick="() => Decide(r, LeaveStatus.Approved)">Approve</button><button class="text-button" disabled="@busy" @onclick="() => Decide(r, LeaveStatus.Rejected)">Reject</button> }
+        @if (r.Status is LeaveStatus.Pending or LeaveStatus.Approved) { <button class="text-button" disabled="@busy" @onclick="() => Decide(r, LeaveStatus.Cancelled)">Cancel request</button> }
+    </td></tr> }
+    </tbody></table></div></section>
+}
+else if (tab == "Pay heads")
+{
+    <section class="panel"><h2>@(headId is null ? "New pay head" : "Edit pay head")</h2><p>Taxable earnings add to bonus pay; after-tax deductions add to other deductions. BASIC and ALLOWANCES are prorated for employment and unpaid days. DAYS is paid calendar days; HOURS and OVERTIME_HOURS come from recorded attendance. Missing attendance means zero recorded hours.</p>
+    <div class="form-grid"><label>Name<input maxlength="80" @bind="headName" /></label><label>Type<select @bind="headKind">@foreach (var k in Enum.GetValues<PayHeadKind>()) { <option value="@k">@(k == PayHeadKind.TaxableEarning ? "Taxable earning" : "After tax deduction")</option> }</select></label>
+    <label>Applies to<select @bind="headEmployee"><option value="@Guid.Empty">All employees</option>@EmployeeOptions</select></label>
+    <label>Formula<input maxlength="240" @bind="formula" placeholder="OVERTIME_HOURS * 25" /></label><label>Effective from<input type="date" @bind="headFrom" /></label><label>Effective to optional<input type="date" @bind="headTo" /></label><label class="check"><input type="checkbox" @bind="headActive" />Active</label></div>
+    <p class="hint">Use numbers, variables, + - * / and parentheses. Examples: BASIC * 0.05 or HOURS * 20. Start on a month’s first day; finish on a month’s last day. A change cannot start within a posted payroll period.</p>
+    <button type="button" class="primary" disabled="@busy" @onclick="SaveHead">Save pay head</button><button type="button" class="secondary" disabled="@busy" @onclick="NewHead">New pay head</button></section>
+    <section class="panel"><h2>Pay heads</h2><div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Formula</th><th>Period</th><th>Applies to</th><th>Active</th><th></th></tr></thead><tbody>@foreach (var h in data.PayHeads) { <tr><td>@h.Name · v@h.Version</td><td>@h.Kind</td><td>@h.Formula</td><td>@h.From to @h.To</td><td>@(h.EmployeeId is Guid id ? employees.SingleOrDefault(e => e.Id == id)?.Name : "All employees")</td><td>@h.Active</td><td><button class="text-button" @onclick="() => EditHead(h)">Edit pay head</button></td></tr> }</tbody></table></div></section>
+}
+@code {
+    private WorkforceSnapshot? data; private IReadOnlyList<EmployeeView> employees = [];
+    private string tab = "Attendance", error = "", message = ""; private bool busy;
+    private DateOnly month = new(DateTime.Today.Year, DateTime.Today.Month, 1), date = DateOnly.FromDateTime(DateTime.Today);
+    private DateTime MonthText { get => month.ToDateTime(TimeOnly.MinValue); set => month = new(value.Year, value.Month, 1); }
+    private Guid attendanceEmployee, leaveEmployee, requestEmployee; private int attendanceVersion, balanceVersion, year = DateTime.Today.Year;
+    private AttendanceStatus status; private decimal hours = 8, overtime, granted; private string attendanceNote = "", grantReason = "", requestReason = "", decisionReason = "", headName = "", formula = "";
+    private LeaveKind balanceKind, requestKind; private DateOnly leaveFrom = DateOnly.FromDateTime(DateTime.Today), leaveTo = DateOnly.FromDateTime(DateTime.Today);
+    private readonly HashSet<DayOfWeek> weekdays = [DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday];
+    private Guid attendanceOperation = Guid.NewGuid(), balanceOperation = Guid.NewGuid(), requestOperation = Guid.NewGuid(), decisionOperation = Guid.NewGuid(), headOperation = Guid.NewGuid();
+    private Guid? headId; private Guid headEmployee; private int headVersion; private PayHeadKind headKind; private bool headActive = true; private DateOnly headFrom = new(DateTime.Today.Year, DateTime.Today.Month, 1); private DateOnly? headTo;
+    private string attendanceBaseline = "", headBaseline = ""; private decimal grantedBaseline;
+    private string AttendanceValues => System.Text.Json.JsonSerializer.Serialize(new { status, hours, overtime, attendanceNote });
+    private string HeadValues => System.Text.Json.JsonSerializer.Serialize(new { headName, formula, headKind, headEmployee, headActive, headFrom, headTo });
+    public bool HasDraft => attendanceBaseline.Length > 0 && AttendanceValues != attendanceBaseline || granted != grantedBaseline || grantReason.Length > 0 || requestReason.Length > 0 || decisionReason.Length > 0 || headBaseline.Length > 0 && HeadValues != headBaseline;
+    private RenderFragment EmployeeOptions => @<text>@foreach (var e in employees) { <option value="@e.Id">@e.Code · @e.Name</option> }</text>;
+    private static string Name(AttendanceStatus s) => s switch { AttendanceStatus.HalfDayUnpaid => "Half day unpaid", AttendanceStatus.UnpaidAbsence => "Unpaid absence", AttendanceStatus.RestDay => "Rest day", _ => "Present" };
+    protected override Task OnInitializedAsync() => Run(async () => { await Load(); if (employees.Count > 0) { attendanceEmployee = leaveEmployee = requestEmployee = employees[0].Id; await EditDayCore(); await EditBalanceCore(); } headBaseline = HeadValues; });
+    private async Task Load() { employees = (await Payroll.Read()).Employees; data = await Payroll.Workforce(month); }
+    private Task Refresh() => Run(Load);
+    private async Task Run(Func<Task> action) { if (busy) return; busy = true; error = message = ""; try { await action(); } catch (Exception e) when (e is BusinessException or UnauthorizedAccessException or Microsoft.JSInterop.JSException) { error = e.Message; } catch { error = "Workforce action could not complete. Refresh the register before retrying."; } finally { busy = false; } }
+    private async Task Open(string t) { if (t == tab) return; if (HasDraft && !await JS.InvokeAsync<bool>("confirm", "Leave this editor with unsaved workforce changes?")) return; tab = t; error = message = ""; }
+    private Task EditDay() => Run(EditDayCore);
+    private async Task EditDayCore() { var source = date.Year == month.Year && date.Month == month.Month ? data : await Payroll.Workforce(date); var a = source?.Attendance.SingleOrDefault(a => a.EmployeeId == attendanceEmployee && a.Date == date); attendanceVersion = a?.Version ?? 0; status = a?.Status ?? AttendanceStatus.Present; hours = a?.Hours ?? 8; overtime = a?.OvertimeHours ?? 0; attendanceNote = a?.Note ?? ""; attendanceOperation = Guid.NewGuid(); attendanceBaseline = AttendanceValues; }
+    private async Task SelectDay(AttendanceView a) { if (AttendanceValues != attendanceBaseline && !await JS.InvokeAsync<bool>("confirm", "Discard unsaved attendance edits?")) return; await Run(async () => { attendanceEmployee = a.EmployeeId; date = a.Date; await EditDayCore(); }); }
+    private Task SaveDay() => Run(async () => { await Payroll.SaveAttendance(new(attendanceOperation, attendanceEmployee, date, attendanceVersion, status, hours, overtime, attendanceNote)); await Load(); await EditDayCore(); message = "Attendance saved with its revision."; });
+    private Task EditBalance() => Run(EditBalanceCore);
+    private async Task EditBalanceCore() { if (year < 2000 || year > DateTime.Today.Year + 3) throw new BusinessException("Choose a leave year within the supported planning period."); var source = year == month.Year ? data : await Payroll.Workforce(new DateOnly(year, month.Month, 1)); var b = source?.Balances.SingleOrDefault(b => b.EmployeeId == leaveEmployee && b.Year == year && b.Kind == balanceKind); balanceVersion = b?.Version ?? 0; granted = b?.Granted ?? 0; grantedBaseline = granted; grantReason = ""; balanceOperation = Guid.NewGuid(); }
+    private Task SaveBalance() => Run(async () => { await Payroll.SetLeaveEntitlement(new(balanceOperation, leaveEmployee, year, balanceKind, balanceVersion, granted, grantReason)); await Load(); await EditBalanceCore(); message = "Leave entitlement saved."; });
+    private void SetWeekday(DayOfWeek d, bool value) { if (value) weekdays.Add(d); else weekdays.Remove(d); }
+    private Task Request() => Run(async () => { if (leaveFrom > leaveTo || leaveTo.DayNumber - leaveFrom.DayNumber > 366) throw new BusinessException("Choose a leave range of at most one year."); var days = Enumerable.Range(0, leaveTo.DayNumber - leaveFrom.DayNumber + 1).Select(i => leaveFrom.AddDays(i)).Where(d => weekdays.Contains(d.DayOfWeek)).ToList(); await Payroll.RequestLeave(new(requestOperation, requestEmployee, requestKind, days, requestReason)); requestOperation = Guid.NewGuid(); requestReason = ""; await Load(); message = "Leave request saved for review."; });
+    private Task Decide(LeaveRequestView r, LeaveStatus decision) => Run(async () => { await Payroll.DecideLeave(new(decisionOperation, r.Id, r.Version, decision, decisionReason)); decisionOperation = Guid.NewGuid(); decisionReason = ""; await Load(); message = "Leave decision saved."; });
+    private void NewHead() { headId = null; headVersion = 0; headName = formula = ""; headKind = PayHeadKind.TaxableEarning; headEmployee = Guid.Empty; headActive = true; headFrom = month; headTo = null; headOperation = Guid.NewGuid(); headBaseline = HeadValues; }
+    private async Task EditHead(PayHeadView h) { if (HeadValues != headBaseline && !await JS.InvokeAsync<bool>("confirm", "Discard unsaved pay-head edits?")) return; headId = h.Id; headVersion = h.Version; headName = h.Name; formula = h.Formula; headKind = h.Kind; headEmployee = h.EmployeeId ?? Guid.Empty; headActive = h.Active; headFrom = h.From; headTo = h.To; headOperation = Guid.NewGuid(); headBaseline = HeadValues; }
+    private Task SaveHead() => Run(async () => { await Payroll.SavePayHead(new(headOperation, headId, headVersion, headName, headKind, formula, headFrom, headTo, headEmployee == Guid.Empty ? null : headEmployee, headActive)); await Load(); NewHead(); message = "Pay head saved. Preview payroll with workforce inputs before posting."; });
+    private Task Export() => Run(async () => { var bytes = await Payroll.ExportWorkforce(month); await JS.InvokeVoidAsync("sierraDownload", $"Attendance-leave-{month:yyyy-MM}.xlsx", Convert.ToBase64String(bytes)); });
+}

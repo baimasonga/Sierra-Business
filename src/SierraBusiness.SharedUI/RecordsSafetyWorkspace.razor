@@ -1,5 +1,6 @@
 @inject IServiceProvider Services
 @inject Microsoft.JSInterop.IJSRuntime JS
+@if (Actor.Permissions.Contains("users.manage")) { <CompanyPeriodWorkspace /> }
 @if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
 @if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
 
@@ -7,7 +8,7 @@
 {
     <section class="panel">
         <div class="panel-title"><h2>Record integrity</h2>@if (report is not null) { <span class="pill">@(report.Ok ? "Verified" : "Needs investigation")</span> }</div>
-        <p>Posted sales, purchases, payments, stock movements and journals are sealed in a chain when they are saved. Checking the chain shows whether anything was changed, deleted or added outside Sierra Business, for example with a database tool.</p>
+        <p>Posted sales, purchases, payments, stock movements and journals are sealed in a chain when they are saved. Checking the chain shows whether anything was changed, deleted or added outside Rokela Business Admin, for example with a database tool.</p>
         <button class="secondary" disabled="@busy" @onclick="Verify">@(busy && verifying ? "Checking every record…" : "Check records now")</button>
         @if (report is not null)
         {
@@ -24,7 +25,7 @@
     <section class="panel">
         <div class="panel-title"><h2>Automatic backups</h2><span class="pill">@(settings?.Automatic == true ? "On" : "Off")</span></div>
         <p class="hint">@automaticStatus</p>
-        <label class="check"><input type="checkbox" @bind="automatic" /> Back up automatically while Sierra Business is open</label>
+        <label class="check"><input type="checkbox" @bind="automatic" /> Back up automatically while Rokela Business Admin is open</label>
         <div class="form-grid">
             <label>Every (hours)<input type="number" min="1" max="168" @bind="intervalHours" /></label>
             <label>Automatic backups to keep<input type="number" min="1" max="365" @bind="keep" /></label>
@@ -67,6 +68,8 @@ else if (backups is null)
     <div class="notice">Backups are made by the Windows desktop application on the computer that holds the records.</div>
 }
 
+@if (Actor.Permissions.Contains("users.manage") && Actor.Permissions.Contains("accounting.read") && Services.GetService(typeof(IStatementsService)) is IStatementsService) { <CompanySearchWorkspace /> }
+@if (Actor.Permissions.Contains("users.manage") && Actor.Permissions.Contains("backups.create") && Services.GetService(typeof(ICloudBackupManager)) is ICloudBackupManager) { <GoogleBackupWorkspace OnImported="ReloadBackupList" @ref="cloudWorkspace" /> }
 @code {
     [Parameter, EditorRequired] public Actor Actor { get; set; } = default!;
     [Parameter] public EventCallback OnRestored { get; set; }
@@ -80,7 +83,8 @@ else if (backups is null)
     private int intervalHours = 24, keep = 14;
     private string copyFolder = "", confirmation = "", error = "", message = "", automaticStatus = "";
     private bool CanRestore => Actor.Permissions.Contains("users.manage");
-    public bool HasDraft => chosen is not null && confirmation.Length > 0;
+    private GoogleBackupWorkspace? cloudWorkspace;
+    public bool HasDraft => cloudWorkspace?.HasDraft == true || chosen is not null && confirmation.Length > 0 || settings is not null && (automatic != settings.Automatic || intervalHours != settings.IntervalHours || keep != settings.KeepAutomatic || copyFolder != settings.CopyFolder);
     private static string KindLabel(string kind) => kind switch { "auto" => "Automatic", "manual" => "Manual", "before-upgrade" => "Before upgrade", "before-restore" => "Before restore", _ => kind };
 
     protected override async Task OnInitializedAsync()
@@ -94,6 +98,7 @@ else if (backups is null)
         settings = await backups!.Settings(); automatic = settings.Automatic; intervalHours = settings.IntervalHours; keep = settings.KeepAutomatic; copyFolder = settings.CopyFolder;
         files = (await backups.List()).ToList(); automaticStatus = await backups.AutomaticStatus();
     }
+    private async Task ReloadBackupList() { if (backups is not null) { files = (await backups.List()).ToList(); automaticStatus = await backups.AutomaticStatus(); } }
     private async Task Run(Func<Task> action)
     {
         if (busy) return; busy = true; error = message = "";

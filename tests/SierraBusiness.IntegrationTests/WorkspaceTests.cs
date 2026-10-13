@@ -90,6 +90,18 @@ public sealed class WorkspaceTests
     }
     private sealed class SuggestionInventory : IInventoryService
     {
+        public Task<IReadOnlyList<InventoryCostPolicy>> CostPolicies() => throw new NotImplementedException();
+        public Task<Guid> WriteDown(InventoryWriteDownCommand input) => throw new NotImplementedException();
+        public Task<Guid> SetCostPolicy(InventoryCostCommand input) => throw new NotImplementedException();
+        public Task<InventoryValuationReport> Valuation(InventoryValuationRequest input) => throw new NotImplementedException();
+        public Task<byte[]> ExportValuation(InventoryValuationRequest input) => throw new NotImplementedException();
+        public Task<IReadOnlyList<ConsignmentSiteView>> ConsignmentSites() => throw new NotImplementedException();
+        public Task<Guid> SaveConsignmentSite(ConsignmentSiteCommand input) => throw new NotImplementedException();
+        public Task<Guid> ReceiveCustody(CustodyReceiveCommand input) => throw new NotImplementedException();
+        public Task<Guid> ReturnCustody(CustodyReturnCommand input) => throw new NotImplementedException();
+        public Task<IReadOnlyList<CustodyStockView>> CustodyStock() => throw new NotImplementedException();
+        public Task<IReadOnlyList<PendingDeliveryView>> PendingDeliveries() => throw new NotImplementedException();
+        public Task<Guid> RejectDelivery(DeliveryRejectionCommand input) => throw new NotImplementedException();
         public BatchSuggestionCommand? Request; public bool Fail; public IReadOnlyList<BatchPick> Picks = [];
         public Task<IReadOnlyList<BatchPick>> SuggestBatches(BatchSuggestionCommand input) { Request = input; if (Fail) throw new BusinessException("Unavailable batches"); return Task.FromResult(Picks); }
         public Task<IReadOnlyList<LocationView>> Locations() => throw new NotImplementedException();

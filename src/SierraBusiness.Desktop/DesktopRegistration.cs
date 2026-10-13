@@ -12,6 +12,10 @@ public static class DesktopRegistration
     {
         var store = new DesktopStore(dataDirectory);
         services.AddSingleton(_ => store);
+        var companyFolder = new DirectoryInfo(Path.GetFullPath(dataDirectory));
+        var companyRoot = companyFolder.Parent?.Name == "Companies" && Guid.TryParseExact(companyFolder.Name, "N", out _) ? companyFolder.Parent.Parent!.FullName : companyFolder.FullName;
+        services.TryAddSingleton(new CompanyDirectory(companyRoot));
+        services.AddTransient<ICompanyPeriodService, CompanyPeriodService>();
         services.AddSingleton(TimeProvider.System);
         services.AddOptions<TradingOptions>().Configure(options =>
         {
@@ -34,6 +38,7 @@ public static class DesktopRegistration
         services.AddDbContextFactory<BusinessDb>(o =>
         {
             o.UseSqlite(store.ConnectionString);
+            o.AddInterceptors(new CompanyArchiveInterceptor(dataDirectory));
             if (sync.Role == SyncRole.Branch) o.AddInterceptors(new SyncCaptureInterceptor(SyncRole.Branch, branch)); // changes queue for head office in the same save
         });
         services.AddIdentityCore<IdentityUser>(o =>
@@ -45,6 +50,8 @@ public static class DesktopRegistration
         }).AddEntityFrameworkStores<BusinessDb>();
         services.AddSingleton<LocalAccountService>();
         services.AddSingleton<IActorSession>(sp => sp.GetRequiredService<LocalAccountService>());
+        services.AddSingleton<ISaleDraftRecovery>(sp => new DesktopSaleDraftRecovery(dataDirectory, sp.GetRequiredService<IActorSession>(), sp.GetRequiredService<IDbContextFactory<BusinessDb>>()));
+        services.AddSingleton<IDocumentDraftRecovery>(sp => new DesktopDocumentDraftRecovery(dataDirectory, sp.GetRequiredService<IActorSession>(), sp.GetRequiredService<IDbContextFactory<BusinessDb>>()));
         services.AddTransient<IPosService, PosService>();
         services.AddTransient<IBankingService, BankingService>();
         services.AddTransient<ICommerceService, CommerceService>();
@@ -59,6 +66,7 @@ public static class DesktopRegistration
         services.AddTransient<IPeriodService, PeriodService>();
         services.AddTransient<DesktopBackupService>();
         services.AddTransient<IBackupManager, DesktopBackupManager>();
+        services.AddTransient<ICloudBackupManager, GoogleDriveBackupManager>();
         services.AddTransient<IIntegrityService, IntegrityService>();
         services.AddTransient<IImportService, SierraBusiness.Infrastructure.Imports.ImportService>();
         services.AddSingleton<IFileExport, DesktopFileExport>();

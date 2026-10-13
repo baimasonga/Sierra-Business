@@ -44,7 +44,7 @@ function Invoke-Signing([string[]]$Files) {
     if (!$signing) { return }
     $timestamp = if ($env:SIERRA_SIGN_TIMESTAMP) { $env:SIERRA_SIGN_TIMESTAMP } else { 'http://timestamp.digicert.com' }
     foreach ($file in $Files) {
-        $arguments = @('sign', '/fd', 'SHA256', '/tr', $timestamp, '/td', 'SHA256', '/d', 'Sierra Business')
+        $arguments = @('sign', '/fd', 'SHA256', '/tr', $timestamp, '/td', 'SHA256', '/d', 'Rokela Business Admin')
         if ($env:SIERRA_SIGN_THUMBPRINT) { $arguments += @('/sha1', $env:SIERRA_SIGN_THUMBPRINT) } else { $arguments += @('/f', $env:SIERRA_SIGN_PFX, '/p', $env:SIERRA_SIGN_PFX_PASSWORD) }
         & $signTool @arguments $file | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "Code signing failed for $(Split-Path -Leaf $file)." }
@@ -75,25 +75,30 @@ try {
     & $dotnet publish src\SierraBusiness.Maui\SierraBusiness.Maui.csproj -c Release -f net10.0-windows10.0.19041.0 -p:RuntimeIdentifierOverride=win-x64 -p:WindowsPackageType=None -p:WindowsAppSDKSelfContained=true --self-contained true -p:PublishTrimmed=false "-p:ApplicationDisplayVersion=$Version" "-p:Version=$Version" -o $staging
     if ($LASTEXITCODE -ne 0) { throw 'Native Windows publish failed; no installer will be produced.' }
     if (!(Test-Path -LiteralPath (Join-Path $staging 'SierraBusiness.Maui.exe'))) { throw 'Native application executable missing from publish output.' }
+    $backupWorkerStaging = Join-Path $staging 'BackupWorker'
+    & $dotnet publish src\SierraBusiness.BackupWorker\SierraBusiness.BackupWorker.csproj -c Release -r win-x64 --self-contained true -p:PublishTrimmed=false "-p:Version=$Version" -o $backupWorkerStaging
+    if ($LASTEXITCODE -ne 0) { throw 'Closed-app backup worker publish failed.' }
+    Copy-Item -LiteralPath (Join-Path $root 'scripts\install-backup-task.ps1') -Destination $backupWorkerStaging
+    Invoke-Signing @((Join-Path $backupWorkerStaging 'SierraBusiness.BackupWorker.exe'))
     Invoke-Signing @((Join-Path $staging 'SierraBusiness.Maui.exe'))
     foreach ($runtime in (Get-ChildItem -LiteralPath $VisualCppRuntimeDirectory -Filter '*.dll' -File)) {
         $signature = Get-AuthenticodeSignature -LiteralPath $runtime.FullName
         if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { throw 'Visual C++ runtime signature verification failed.' }
         Copy-Item -LiteralPath $runtime.FullName -Destination $staging
     }
-    foreach ($required in @('wwwroot\print.js', 'wwwroot\capture.css', 'OcrData\eng.traineddata', 'x64\tesseract50.dll', 'x64\leptonica-1.82.0.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')) {
+    foreach ($required in @('wwwroot\branding\rokela-logo.png', 'wwwroot\branding\rokela-icon.png', 'wwwroot\print.js', 'wwwroot\forms.js', 'wwwroot\capture.css', 'OcrData\eng.traineddata', 'x64\tesseract50.dll', 'x64\leptonica-1.82.0.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')) {
         if (!(Test-Path -LiteralPath (Join-Path $staging $required))) { throw "Offline OCR dependency missing: $required" }
     }
     if ((Get-FileHash (Join-Path $staging 'OcrData\eng.traineddata') -Algorithm SHA256).Hash -ne '7D4322BD2A7749724879683FC3912CB542F19906C83BCC1A52132556427170B2') { throw 'English OCR model checksum mismatch.' }
     if (Get-ChildItem -LiteralPath $staging -Recurse -File | Where-Object { $_.Name -match '\.db($|-)|credentials' }) { throw 'Refusing to package local databases or credentials.' }
     & $InnoCompiler "/DPublishDir=$staging" "/DOutputDir=$output" "/DWebView2Installer=$WebView2Installer" "/DAppVersion=$Version" (Join-Path $root 'packaging\windows\SierraBusiness.iss')
     if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed.' }
-    $installer = Join-Path $output 'SierraBusiness-Setup-x64.exe'
+    $installer = Join-Path $output 'RokelaBusinessAdmin-Setup-x64.exe'
     if (!(Test-Path -LiteralPath $installer)) { throw 'Installer output not found.' }
     Invoke-Signing @($installer)
     if (!$signing) { Write-Output 'Unsigned build: set SIERRA_SIGN_THUMBPRINT or SIERRA_SIGN_PFX to sign the application and installer.' }
     $hash = Get-FileHash -LiteralPath $installer -Algorithm SHA256
-    "$($hash.Hash)  SierraBusiness-Setup-x64.exe" | Set-Content -LiteralPath (Join-Path $output 'SHA256SUMS.txt')
+    "$($hash.Hash)  RokelaBusinessAdmin-Setup-x64.exe" | Set-Content -LiteralPath (Join-Path $output 'SHA256SUMS.txt')
     Write-Output "Created: $installer"
     Write-Output 'Test install, launch, offline trade, restart, upgrade and uninstall on a clean Windows machine before distribution.'
 } finally { Pop-Location }

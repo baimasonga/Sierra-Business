@@ -2,7 +2,7 @@ using Microsoft.JSInterop;
 using SierraBusiness.Application;
 namespace SierraBusiness.SharedUI;
 
-/// <summary>Saving and previewing stored originals in either host (desktop: Documents\Sierra Business; browser: download).</summary>
+/// <summary>Saving and previewing stored originals in either host (desktop: Documents\Rokela Business Admin; browser: download).</summary>
 public static class DocumentFiles
 {
     public static async Task<string> Save(IServiceProvider services, IJSRuntime js, DocumentContent file)

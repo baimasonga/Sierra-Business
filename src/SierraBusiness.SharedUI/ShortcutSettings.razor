@@ -1,0 +1,51 @@
+@inject Microsoft.JSInterop.IJSRuntime JS
+@if (Visible)
+{
+    <section class="panel" aria-label="Keyboard shortcuts">
+        <h2>Keyboard shortcuts</h2>
+        <p class="hint">Function keys work inside the workspace. Alt+N, Alt+R and Alt+G remain available. Ctrl+S posts an invoice or receipt with added lines. Every action also has a button.</p>
+        @if (message.Length > 0) { <p role="status">@message</p> }
+        <div class="form-grid"><label>New sale<select @bind="sale">@Options</select></label><label>Receive stock<select @bind="receive">@Options</select></label><label>Search screens<select @bind="search">@Options</select></label></div>
+        <button type="button" class="secondary" @onclick="Save">Save keyboard shortcuts</button><button type="button" class="secondary" @onclick="Reset">Restore default shortcuts</button>
+    </section>
+}
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter, EditorRequired] public string UserKey { get; set; } = "";
+    [Parameter] public EventCallback<ShortcutPreferences> Changed { get; set; }
+    private string sale = "F2", receive = "F3", search = "F4", message = "";
+    private bool loaded;
+    private string Key => UserKey + ".shortcuts";
+    private static RenderFragment Options => @<text>@foreach (var key in ShortcutPreferences.Allowed) { <option value="@key">@(key.Length == 0 ? "None" : key)</option> }</text>;
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (loaded) return; loaded = true;
+        try
+        {
+            var json = await Microsoft.JSInterop.JSRuntimeExtensions.InvokeAsync<string?>(JS, "sierraPreferenceRead", Key);
+            if (!string.IsNullOrWhiteSpace(json) && System.Text.Json.JsonSerializer.Deserialize<ShortcutPreferences>(json) is { Valid: true } saved) { sale = saved.NewSale; receive = saved.ReceiveStock; search = saved.SearchScreens; }
+        }
+        catch (Exception e) when (e is Microsoft.JSInterop.JSException or System.Text.Json.JsonException or InvalidOperationException) { /* Defaults still work in C# when browser preferences are unavailable. */ }
+        try { await Apply(); await InvokeAsync(StateHasChanged); }
+        catch (Microsoft.JSInterop.JSException) { message = "Browser shortcuts are unavailable; the navigation buttons remain available."; }
+    }
+    private async Task Apply()
+    {
+        var settings = new ShortcutPreferences(sale, receive, search);
+        await Changed.InvokeAsync(settings);
+        await Microsoft.JSInterop.JSRuntimeExtensions.InvokeVoidAsync(JS, "sierraConfigureShortcuts", (object)new[] { sale, receive, search });
+    }
+    private async Task Save()
+    {
+        var settings = new ShortcutPreferences(sale, receive, search);
+        if (!settings.Valid) { message = "Choose a different function key for each action, or None."; return; }
+        try { await Microsoft.JSInterop.JSRuntimeExtensions.InvokeVoidAsync(JS, "sierraPreferenceWrite", Key, System.Text.Json.JsonSerializer.Serialize(settings)); await Apply(); message = "Keyboard shortcuts saved for this user on this device."; }
+        catch (Microsoft.JSInterop.JSException) { message = "This device could not save keyboard shortcuts."; }
+    }
+    private async Task Reset()
+    {
+        sale = "F2"; receive = "F3"; search = "F4";
+        try { await Microsoft.JSInterop.JSRuntimeExtensions.InvokeVoidAsync(JS, "sierraPreferenceRemove", Key); await Apply(); message = "Default keyboard shortcuts restored."; }
+        catch (Microsoft.JSInterop.JSException) { message = "This device could not clear saved keyboard shortcuts."; }
+    }
+}

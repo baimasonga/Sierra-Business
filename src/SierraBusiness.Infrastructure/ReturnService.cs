@@ -36,9 +36,10 @@ public sealed class ReturnService(IDbContextFactory<BusinessDb> factory, IActorS
         var movements = await db.Movements.AsNoTracking().Where(x => x.Branch == actor.Branch).ToListAsync(); var products = await db.Products.AsNoTracking().ToDictionaryAsync(x => x.Id);
         var deliveryLinks = await db.DeliveryInvoices.Where(x => db.Documents.Any(d => d.Id == x.InvoiceId && d.Branch == actor.Branch && !db.Documents.Any(r => r.Reverses == d.Id))).ToListAsync();
         movements.AddRange(deliveryLinks.SelectMany(link => movements.Where(m => m.DocumentId == link.DeliveryId).Select(m => new Movement { DocumentId = link.InvoiceId, ProductId = m.ProductId, Location = m.Location, Serial = m.Serial, Batch = m.Batch, Expiry = m.Expiry, Quantity = m.Quantity, Value = m.Value })).ToList());
+        foreach (var link in deliveryLinks) movements.AddRange((await DeliveryRejections.Movements(db,actor.Branch,link.DeliveryId)).Select(m => new Movement { DocumentId = link.InvoiceId,ProductId = m.ProductId,Location = m.Location,Serial = m.Serial,Batch = m.Batch,Expiry = m.Expiry,Quantity = m.Quantity,Value = m.Value }));
         var returns = await db.ReturnAllocations.AsNoTracking().Where(x => db.Documents.Any(d => d.Id == x.OriginalDocumentId && d.Branch == actor.Branch) && !db.Documents.Any(d => d.Reverses == x.ReturnDocumentId)).ToListAsync();
         return docs.OrderByDescending(x => x.BusinessDate).Select(d => new ReturnableDocument(d.Id, d.Number, d.Party, d.Kind == DocumentKind.Sale, movements.First(x => x.DocumentId == d.Id).Location,
-            movements.Where(x => x.DocumentId == d.Id).GroupBy(x => new { x.ProductId, x.Serial, x.Batch, x.Expiry }).Select(g => new ReturnableLine(g.Key.ProductId, products[g.Key.ProductId].Name, g.Key.Serial, g.Key.Batch, g.Key.Expiry, Math.Abs(g.Sum(x => x.Quantity)), returns.Where(x => x.OriginalDocumentId == d.Id && x.ProductId == g.Key.ProductId && x.Serial == g.Key.Serial && x.Batch == g.Key.Batch && x.Expiry == g.Key.Expiry).Sum(x => x.Quantity))).ToArray())).ToArray();
+            movements.Where(x => x.DocumentId == d.Id).GroupBy(x => new { x.ProductId, x.Serial, x.Batch, x.Expiry }).Where(g => g.Sum(x => x.Quantity) != 0).Select(g => new ReturnableLine(g.Key.ProductId, products[g.Key.ProductId].Name, g.Key.Serial, g.Key.Batch, g.Key.Expiry, Math.Abs(g.Sum(x => x.Quantity)), returns.Where(x => x.OriginalDocumentId == d.Id && x.ProductId == g.Key.ProductId && x.Serial == g.Key.Serial && x.Batch == g.Key.Batch && x.Expiry == g.Key.Expiry).Sum(x => x.Quantity))).ToArray())).ToArray();
     }
     public async Task<Guid> Post(ReturnCommand input) { var actor = await Authorize(true); return await Controls.Guard(factory, actor, () => PostCore(actor, input)); }
     private async Task<Guid> PostCore(Actor actor, ReturnCommand input)
@@ -51,6 +52,11 @@ public sealed class ReturnService(IDbContextFactory<BusinessDb> factory, IActorS
         var original = await db.Documents.SingleOrDefaultAsync(x => x.Id == input.OriginalDocumentId && x.Branch == actor.Branch) ?? throw new BusinessException("Original document not found.");
         if (original.Kind is not DocumentKind.Sale and not DocumentKind.Receipt || await db.Documents.AnyAsync(x => x.Reverses == original.Id)) throw new BusinessException("Only unreversed sales and goods receipts can be returned.");
         var sale = original.Kind == DocumentKind.Sale;
+        if (!sale)
+        {
+            var claims = await db.Operations.AsNoTracking().Where(o => o.Branch == actor.Branch && o.Action == "tax.input.claim" && !db.Documents.Any(r => r.Reverses == o.ResultId)).ToListAsync(); if (claims.Any(o => JsonSerializer.Deserialize<InputTaxCommand>(o.Payload) is { Stock: true } claim && claim.PaymentDocumentId == original.Id)) throw new BusinessException("Reverse the active stock input-tax claim before returning goods from this receipt, so the supplier credit and recovered tax stay consistent.");
+        }
+        if (await db.ForeignBills.SingleOrDefaultAsync(f => f.DocumentId == original.Id) is { } foreignBill) await Fx.EnsureBillDate(db, original, foreignBill, date);
         if (sale && original.Settlement == "Cheque" && input.Disposition == ReturnDisposition.Original) throw new BusinessException("Choose cash/bank refund or customer credit; cheque instruments are managed in Banking.");
         if (!Enum.IsDefined(input.Disposition) || (!sale && input.Disposition == ReturnDisposition.CustomerCredit || sale && input.Disposition == ReturnDisposition.SupplierCredit)) throw new BusinessException("Select a valid return settlement.");
         if (sale && input.Disposition == ReturnDisposition.CustomerCredit && original.Party.Equals("Walk-in", StringComparison.OrdinalIgnoreCase)) throw new BusinessException("Customer credit requires a named customer.");
@@ -63,6 +69,7 @@ public sealed class ReturnService(IDbContextFactory<BusinessDb> factory, IActorS
         bool Taxed(Guid product) => categories is null || categories.GetValueOrDefault(product, TaxCategory.Standard) == TaxCategory.Standard;
         var movements = await db.Movements.Where(x => x.Branch == actor.Branch).ToListAsync();
         var source = movements.Where(x => x.DocumentId == (originalRequest.DeliveryId ?? original.Id)).ToList();
+        if (originalRequest.DeliveryId is Guid deliveryId) source.AddRange(await DeliveryRejections.Movements(db,actor.Branch,deliveryId));
         var returned = await db.ReturnAllocations.Where(x => x.OriginalDocumentId == original.Id && !db.Documents.Any(r => r.Reverses == x.ReturnDocumentId)).ToListAsync();
         var doc = new BusinessDocument { Id = Guid.NewGuid(), Branch = actor.Branch, Number = $"{actor.Branch}-{options.Value.Device}-RET-{input.OperationId:N}", Kind = sale ? DocumentKind.SalesReturn : DocumentKind.PurchaseReturn, Party = original.Party, BusinessDate = date, Settlement = original.Settlement, Detail = JsonSerializer.Serialize(new { Request = input, Reason = Rules.Required(input.Reason, "Reason") }) };
         decimal net = 0, tax = 0, cost = 0;
@@ -102,7 +109,8 @@ public sealed class ReturnService(IDbContextFactory<BusinessDb> factory, IActorS
             if (!sale)
             {
                 if (available - await CommerceRules.Reserved(db, actor.Branch, line.ProductId, matching[0].Location, serial, batch, line.Expiry) < line.Quantity) throw new BusinessException("Insufficient stock in the original warehouse for a purchase return.");
-                returnCost = available == line.Quantity ? stock.Sum(x => x.Value) : AccountingEngine.Money(stock.Sum(x => x.Value) / available * line.Quantity);
+                await InventoryCost.GuardDate(db,actor.Branch,line.ProductId,date);
+                returnCost = await InventoryCost.Issue(db,actor.Branch,line.ProductId,matching[0].Location,serial,batch,line.Expiry,line.Quantity,stock);
             }
             // Tax is allocated across all returns at invoice level, with full-return residual correction below.
             var refundTax = sale && Taxed(line.ProductId) && originalTaxable != 0 ? AccountingEngine.Money(taxTotal * refundNet / originalTaxable) : 0;
@@ -136,7 +144,7 @@ public sealed class ReturnService(IDbContextFactory<BusinessDb> factory, IActorS
         doc.Total = -refund;
         doc.Detail = sale && categories is not null
             ? JsonSerializer.Serialize(new { Request = input, Net = net, Tax = tax, BillCredit = billCredit, RefundOrCredit = refund - billCredit, Taxable = thisTaxable,
-                ZeroRated = returned.Where(x => x.ReturnDocumentId == doc.Id && categories.GetValueOrDefault(x.ProductId) == TaxCategory.ZeroRated).Sum(x => x.Net), Exempt = returned.Where(x => x.ReturnDocumentId == doc.Id && categories.GetValueOrDefault(x.ProductId) == TaxCategory.Exempt).Sum(x => x.Net) })
+                ZeroRated = returned.Where(x => x.ReturnDocumentId == doc.Id && categories.GetValueOrDefault(x.ProductId) == TaxCategory.ZeroRated).Sum(x => x.Net),Exempt = returned.Where(x => x.ReturnDocumentId == doc.Id && categories.GetValueOrDefault(x.ProductId) == TaxCategory.Exempt).Sum(x => x.Net),Relieved = returned.Where(x => x.ReturnDocumentId == doc.Id && categories.GetValueOrDefault(x.ProductId) == TaxCategory.Relieved).Sum(x => x.Net) })
             : JsonSerializer.Serialize(new { Request = input, Net = net, Tax = tax, BillCredit = billCredit, RefundOrCredit = refund - billCredit });
         db.Documents.Add(doc);
         var posting = new List<Posting>();

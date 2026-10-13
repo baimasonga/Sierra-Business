@@ -1,0 +1,40 @@
+@inject IBankingService Banking
+@inject IFinanceService Finance
+@inject IPartyService Parties
+@if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }@if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
+@if (finance is null) { <p>Loading refundable currency advances…</p> }
+else
+{
+    @if (CanWrite)
+    {
+        <section class="panel"><h2>Refundable foreign-currency advance</h2><p>Record a customer's deposit or a supplier advance in currency units, dated today. Configure the currency's dated exchange rate in Foreign exchange first. Refundable balances participate in closing valuation; non-refundable goods prepayments need their own accounting policy.</p><div class="form-grid">
+        <label>Advance type<select @bind="kind" @bind:after="ClearParty"><option value="@TradeAdvanceKind.CustomerDeposit">Customer deposit</option><option value="@TradeAdvanceKind.SupplierAdvance">Supplier advance</option></select></label><label>Registered party<select @bind="partyId"><option value="@Guid.Empty">Choose party</option>@foreach (var p in parties.Where(p => kind == TradeAdvanceKind.CustomerDeposit ? p.Type != PartyType.Supplier : p.Type != PartyType.Customer)) { <option value="@p.Id">@p.Name</option> }</select></label><label>Currency code<input maxlength="3" @bind="currency" /></label><label>Currency amount<input type="number" min="0.01" step="0.01" @bind="sourceAmount" /></label><label>Cash or bank<select @bind="funds">@foreach (var a in finance.Accounts.Where(a => a.CashOrBank)) { <option value="@a.Code">@a.Code · @a.Name</option> }</select></label><label>Local cash/bank amount, zero for currency bank<input type="number" min="0" step="0.01" @bind="localAmount" /></label><label>Advance reference<input maxlength="160" @bind="reference" /></label></div><button class="primary" disabled="@busy" @onclick="Post">Record refundable currency advance</button></section>
+    }
+    <section class="panel"><h2>Currency advance register</h2><button class="secondary" disabled="@busy" @onclick="Refresh">Refresh currency advances</button><div class="table-wrap"><table><thead><tr><th>Party and document</th><th>Type</th><th>Original units</th><th>Remaining units</th><th>Local carrying</th><th></th></tr></thead><tbody>@foreach (var a in advances) { <tr><td>@a.Party · @a.Number</td><td>@a.Kind</td><td>@a.OriginalSource.ToString("N2") @a.Currency</td><td>@a.RemainingSource.ToString("N2") @a.Currency</td><td>@a.LocalCarrying.ToString("N2") NLe</td><td>@if (CanWrite && a.RemainingSource > 0) { <button class="text-button" @onclick="() => Choose(a)">Allocate or refund currency</button> }</td></tr> }</tbody></table></div></section>
+    @if (CanWrite && selected is not null)
+    {
+        <section class="panel"><h2>Review allocation or refund · @selected.Party</h2><div class="form-grid"><label>Action<select @bind="refund" @bind:after="Invalidate"><option value="false">Allocate to invoice</option><option value="true">Refund</option></select></label><label>Currency units to use<input type="number" min="0.01" step="0.01" @bind="useAmount" @bind:after="Invalidate" /></label>
+        @if (refund) { <label>Refund cash/bank<select @bind="refundAccount" @bind:after="Invalidate">@foreach (var a in finance.Accounts.Where(a => a.CashOrBank)) { <option value="@a.Code">@a.Name</option> }</select></label><label>Local refund amount, zero for currency bank<input type="number" min="0" step="0.01" @bind="localRefund" @bind:after="Invalidate" /></label> }
+        else { <label>Outstanding bill<select @bind="billId" @bind:after="Invalidate"><option value="@Guid.Empty">Choose bill</option>@foreach (var b in finance.Bills.Where(b => b.Receivable == (selected.Kind == TradeAdvanceKind.CustomerDeposit) && b.Party.Equals(selected.Party,StringComparison.OrdinalIgnoreCase))) { <option value="@b.Id">@b.Number · @b.Outstanding.ToString("N2") NLe</option> }</select></label> }
+        <label>Allocation or refund reference<input maxlength="160" @bind="useReference" @bind:after="Invalidate" /></label></div><button class="secondary" disabled="@busy" @onclick="Review">Review currency advance use</button>
+        @if (preview is not null) { <p>Remaining currency @preview.SourceRemaining.ToString("N2") · Advance carrying used @preview.CreditCarryingUsed.ToString("N2") NLe</p><table><thead><tr><th>Ledger</th><th>Debit</th><th>Credit</th></tr></thead><tbody>@foreach (var l in preview.Lines) { <tr><td>@l.AccountCode</td><td>@l.Debit.ToString("N2")</td><td>@l.Credit.ToString("N2")</td></tr> }</tbody></table><button class="primary" disabled="@busy" @onclick="Use">Post reviewed currency allocation or refund</button> }
+        <button class="text-button" disabled="@busy" @onclick="Cancel">Cancel draft use</button></section>
+    }
+}
+@code {
+    [Parameter] public Actor Actor { get; set; } = default!; private bool CanWrite => Actor.Permissions.Contains("accounting.write");
+    private FinanceSnapshot? finance; private IReadOnlyList<PartyView> parties = []; private IReadOnlyList<ForeignAdvanceView> advances = []; private ForeignAdvanceView? selected; private ForeignAdvanceUsePreview? preview; private ForeignAdvanceUseCommand? reviewed;
+    private bool busy, refund; private string currency = "USD", reference = "", useReference = "", error = "", message = ""; private TradeAdvanceKind kind; private Guid partyId,billId,operation = Guid.NewGuid(),useOperation = Guid.NewGuid(); private int funds = 1000,refundAccount = 1000; private decimal sourceAmount,localAmount,useAmount,localRefund;
+    public bool HasDraft => partyId != Guid.Empty || sourceAmount != 0 || localAmount != 0 || reference.Length > 0 || selected is not null;
+    protected override Task OnInitializedAsync() => Refresh();
+    private async Task Load() { var today = DateOnly.FromDateTime(DateTime.UtcNow); finance = await Finance.Read(today,today); parties = await Parties.Read(); advances = await Banking.ForeignAdvances(); }
+    private Task Refresh() => Run(Load);
+    private void ClearParty() => partyId = Guid.Empty;
+    private void Invalidate() { preview = null; reviewed = null; }
+    private void Choose(ForeignAdvanceView a) { selected = a; useAmount = a.RemainingSource; billId = Guid.Empty; refund = false; localRefund = 0; useReference = ""; useOperation = Guid.NewGuid(); Invalidate(); }
+    private void Cancel() { selected = null; useReference = ""; useAmount = 0; Invalidate(); }
+    private Task Post() => Run(async () => { await Banking.PostForeignAdvance(new(operation,kind,partyId,DateOnly.FromDateTime(DateTime.UtcNow),currency,sourceAmount,funds,localAmount,reference)); operation = Guid.NewGuid(); partyId = Guid.Empty; sourceAmount = localAmount = 0; reference = ""; await Load(); message = "Refundable currency advance posted with its currency units and local carrying value."; });
+    private Task Review() => Run(async () => { if (selected is null) throw new BusinessException("Choose an advance."); var request = new ForeignAdvanceUseCommand(useOperation,selected.CreditId,DateOnly.FromDateTime(DateTime.UtcNow),useAmount,refund ? null : billId,refund ? refundAccount : null,refund ? localRefund : 0,useReference); preview = await Banking.PreviewForeignAdvanceUse(request); reviewed = request with { ExpectedCalculation = preview.CalculationFingerprint }; });
+    private Task Use() => Run(async () => { if (reviewed is null) throw new BusinessException("Review the currency calculation first."); await Banking.UseForeignAdvance(reviewed); Cancel(); await Load(); message = "Currency advance use posted with any realized exchange difference."; });
+    private async Task Run(Func<Task> work) { if (busy) return; busy = true; error = message = ""; try { await work(); } catch (Exception e) when (e is BusinessException or UnauthorizedAccessException) { error = e.Message; } catch { error = "The currency advance operation could not complete. Refresh posted documents before retrying."; } finally { busy = false; } }
+}

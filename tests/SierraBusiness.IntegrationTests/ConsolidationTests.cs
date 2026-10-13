@@ -1,0 +1,149 @@
+using Bunit;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using SierraBusiness.Application;
+using SierraBusiness.Domain;
+using SierraBusiness.Infrastructure;
+using SierraBusiness.SharedUI;
+using Xunit;
+namespace SierraBusiness.IntegrationTests;
+
+public sealed class ConsolidationTests
+{
+    private readonly Session session = new();
+    private static readonly DateOnly From = new(2026, 1, 1), To = DateOnly.FromDateTime(DateTime.UtcNow);
+    private StatementsService Service => new(new Factory(new DbContextOptionsBuilder<BusinessDb>().UseSqlite("Data Source=:memory:").Options), session, Options.Create(new TradingOptions()));
+    private static CompanyReportSnapshot Member(string name, decimal factor = 1) => new(1, Guid.NewGuid(), name, "FREETOWN", "NLe", From, To, DateTimeOffset.UtcNow,
+        [new(1000, "Cash", LedgerGroup.Asset, 80 * factor, 180 * factor), new(2000, "Payables", LedgerGroup.Liability, -20 * factor, -20 * factor), new(3000, "Capital", LedgerGroup.Equity, 0, -100 * factor), new(4000, "Sales", LedgerGroup.Income, -100 * factor, -100 * factor), new(5000, "Costs", LedgerGroup.Expense, 40 * factor, 40 * factor)]);
+
+    [Fact] public async Task ProfitAndBalanceSheetRetainEveryMemberContribution()
+    {
+        var members = new[] { Member("One"), Member("Two", 2) };
+        var pl = await Service.Consolidate(new("Profit and loss", members, []));
+        var profit = pl.Rows.Single(r => r.Section == "Result"); Assert.Equal(new decimal[] { 60, 120 }, profit.Contributions); Assert.Equal(180, profit.Amount);
+        var bs = await Service.Consolidate(new("Balance sheet", members, [])); Assert.Equal(0, bs.BalanceDifference);
+        Assert.Equal(540, bs.Rows.Single(r => r.Section == "Assets" && r.Total).Amount); Assert.Equal(480, bs.Rows.Single(r => r.Section == "Equity" && r.Total).Amount);
+        Assert.Equal(180, bs.Rows.Single(r => r.Label == "Accumulated profit / loss").Amount);
+    }
+    [Fact] public async Task DifferingChartsNeedExplicitCompatibleMapping()
+    {
+        var one = Member("One"); var two = Member("Two", 2);
+        two = two with { Accounts = two.Accounts.Select(a => a.Code == 4000 ? a with { Name = "Trading revenue", Code = 4010 } : a).ToArray() };
+        var result = await Service.Consolidate(new("Profit and loss", [one, two], [new(two.SourceId, 4010, 4000, "Sales")]));
+        Assert.Equal(300, result.Rows.Single(r => r.AccountCode == 4000).Amount);
+        await Assert.ThrowsAsync<BusinessException>(() => Service.Consolidate(new("Profit and loss", [one, two], [new(two.SourceId, 4010, 1000, "Cash")])));
+        var renamed = one with { SourceId = Guid.NewGuid(), Company = "Other", Accounts = one.Accounts.Select(a => a.Code == 4000 ? a with { Name = "Other revenue" } : a).ToArray() };
+        await Assert.ThrowsAsync<BusinessException>(() => Service.Consolidate(new("Profit and loss", [one, renamed], [])));
+    }
+    [Fact] public async Task DuplicateLineageAndMismatchedDatesAreRejected()
+    {
+        var one = Member("One"); var two = Member("Two");
+        await Assert.ThrowsAsync<BusinessException>(() => Service.Consolidate(new("Balance sheet", [one, one with { Company = "Renamed clone" }], [])));
+        await Assert.ThrowsAsync<BusinessException>(() => Service.Consolidate(new("Balance sheet", [one, two with { From = From.AddDays(1) }], [])));
+        await Assert.ThrowsAsync<BusinessException>(() => Service.Consolidate(new("Cash flow", [one, two], [])));
+    }
+    [Fact] public async Task IntercompanyReviewOnlyProposesExactReciprocalBalances()
+    {
+        var debit = Member("Buying member", 2.5m); var credit = Member("Selling member");
+        var query = new ConsolidationRequest("Profit and loss", [debit, credit], []);
+        var pair = new IntercompanyPair("IC-1", debit.SourceId, 5000, credit.SourceId, 4000, "Dedicated reciprocal trading accounts reviewed");
+        var proposal = Assert.Single(await Service.ReviewIntercompany(new(query, [pair]))); Assert.True(proposal.Matched); Assert.NotNull(proposal.Adjustment);
+        var result = await Service.Consolidate(query with { Adjustments = [proposal.Adjustment!] }); Assert.Equal((await Service.Consolidate(query)).Rows.Single(r => r.Section == "Result").Amount, result.Rows.Single(r => r.Section == "Result").Amount);
+        var unmatched = query with { Members = [Member("Buying member", 2) with { SourceId = debit.SourceId }, credit] };
+        Assert.Null(Assert.Single(await Service.ReviewIntercompany(new(unmatched, [pair]))).Adjustment);
+        await Assert.ThrowsAsync<BusinessException>(() => Service.ReviewIntercompany(new(query, [pair, pair with { Reference = "IC-2" }])));
+    }
+    [Fact] public async Task PortableCompanySearchRespectsLineageLimitsAndOwnerPermission()
+    {
+        var index = new CompanySearchIndex(1,Guid.NewGuid(),"Company A","FREETOWN",DateTimeOffset.UtcNow,[new("Product","PAPER","Office paper",null,null),new("Document","INV-1","Paper customer",To,50)]);
+        var second = index with { SourceId = Guid.NewGuid(), Company = "Company B", Entries = [new("Party","CUS-1","Paper shop",null,null)] };
+        var hits = await Service.SearchCompanies(new("paper",[index,second])); Assert.Equal(3,hits.Count); Assert.Equal(2,hits.Select(h => h.SourceId).Distinct().Count());
+        await Assert.ThrowsAsync<BusinessException>(() => Service.SearchCompanies(new("paper",[index,index with { Company = "Renamed" }])));
+        session.Actor = session.Actor with { Permissions = new HashSet<string> { "accounting.read","business.read" } };
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Service.SearchCompanies(new("paper",[index])));
+    }
+    [Fact] public async Task ReviewedEliminationsRemainSeparateAndBalanceBothStatements()
+    {
+        var members = new[] { Member("One"),Member("Two",2) };
+        var adjustments = new[] { new ConsolidationAdjustment("BALANCE-ELIM",To,"Eliminate reviewed reciprocal balances",[new(2000,20,0),new(1000,0,20)]),new ConsolidationAdjustment("TRADE-ELIM",To,"Eliminate reviewed internal revenue and expense",[new(4000,50,0),new(5000,0,50)]) };
+        var query = new ConsolidationRequest("Balance sheet",members,[],adjustments);
+        var report = await Service.Consolidate(query); Assert.True(report.HasAdjustments); Assert.Equal(0,report.BalanceDifference); var assets = report.Rows.Single(r => r.Section == "Assets" && r.Total); Assert.Equal(new decimal[] {180,360,-20},assets.Contributions); Assert.Equal(520,assets.Amount);
+        var pl = await Service.Consolidate(query with { Statement = "Profit and loss" }); Assert.Equal(-50,pl.Rows.Single(r => r.AccountCode == 4000).Contributions.Last()); Assert.Equal(180,pl.Rows.Single(r => r.Section == "Result").Amount);
+        Assert.Equal(180,members[0].Accounts.Single(a => a.Code == 1000).ClosingBalance);
+        await Assert.ThrowsAsync<BusinessException>(() => Service.Consolidate(query with { Adjustments = [adjustments[0],adjustments[0]] }));
+        await Assert.ThrowsAsync<BusinessException>(() => Service.Consolidate(query with { Adjustments = [adjustments[0] with { Lines = [new(2000,21,0),new(1000,0,20)] }] }));
+        await Assert.ThrowsAsync<BusinessException>(() => Service.Consolidate(query with { Adjustments = [adjustments[0] with { Lines = [new(8888,20,0),new(1000,0,20)] }] }));
+        await Assert.ThrowsAsync<BusinessException>(() => Service.Consolidate(query with { Adjustments = [adjustments[0] with { Date = From.AddDays(-1) }] }));
+    }
+    [Fact] public async Task MalformedSnapshotsAndMappingsCannotProduceReports()
+    {
+        var one = Member("One"); var two = Member("Two");
+        await Assert.ThrowsAsync<BusinessException>(() => Service.ValidateCompanySnapshot(one with { Accounts = one.Accounts.Skip(1).ToArray() }));
+        await Assert.ThrowsAsync<BusinessException>(() => Service.ValidateCompanySnapshot(one with { Currency = "USD" }));
+        await Assert.ThrowsAsync<BusinessException>(() => Service.ValidateCompanySnapshot(one with { Accounts = [.. one.Accounts, one.Accounts[0]] }));
+        await Assert.ThrowsAsync<BusinessException>(() => Service.ValidateCompanySnapshot(one with { Accounts = one.Accounts.Select(a => a with { ClosingBalance = decimal.MinValue }).ToArray() }));
+        await Assert.ThrowsAsync<BusinessException>(() => Service.Consolidate(new("Profit and loss", [one, two], [new(one.SourceId, 9999, 4000, "Sales")])));
+        await Assert.ThrowsAsync<BusinessException>(() => Service.Consolidate(new("Profit and loss", [one, two], [new(one.SourceId, 4000, 4000, "Sales"), new(one.SourceId, 4000, 4000, "Sales")])));
+    }
+    [Fact] public async Task RevokedPermissionsAndOtherBranchBlockReportsAndExports()
+    {
+        var query = new ConsolidationRequest("Profit and loss", [Member("One"), Member("Two")], []);
+        session.Actor = new("reader", "FREETOWN", new HashSet<string> { "business.read" });
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Service.Consolidate(query)); await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Service.ExportConsolidation(query));
+        session.Actor = new("owner", "OTHER", BusinessPermissions.All.ToHashSet()); await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Service.CompanySnapshot("Other", From, To));
+    }
+    [Fact] public async Task WorkbookIncludesSourcesAndMemberTotals()
+    {
+        var bytes = await Service.ExportConsolidation(new("Profit and loss", [Member("One"), Member("Two")], []));
+        using var zip = new System.IO.Compression.ZipArchive(new MemoryStream(bytes)); Assert.NotNull(zip.GetEntry("xl/worksheets/sheet1.xml")); Assert.NotNull(zip.GetEntry("xl/worksheets/sheet2.xml"));
+        using var reader = new StreamReader(zip.GetEntry("xl/worksheets/sheet1.xml")!.Open()); var text = reader.ReadToEnd(); Assert.Contains("Group total", text); Assert.Contains("intercompany eliminations", text);
+    }
+    [Fact] public async Task SnapshotUsesPostedHistoryAndStableSourceDespiteRenaming()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "rokela-group-" + Guid.NewGuid().ToString("N") + ".db");
+        try
+        {
+            var factory = new Factory(new DbContextOptionsBuilder<BusinessDb>().UseSqlite("Data Source=" + path + ";Pooling=False").Options);
+            await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db);
+            var options = Options.Create(new TradingOptions()); var finance = new FinanceService(factory, session, options); var service = new StatementsService(factory, session, options);
+            await finance.CreateLedger(new(Guid.NewGuid(), 6001, "Other income", LedgerGroup.Income));
+            await finance.PostVoucher(new(Guid.NewGuid(), VoucherType.Journal, From.AddDays(-1), "Opening", [new(1000, 100, 0), new(3000, 0, 100)], []));
+            var sale = await finance.PostVoucher(new(Guid.NewGuid(), VoucherType.Receipt, To, "Revenue", [new(1000, 60, 0), new(6001, 0, 60)], []));
+            var snapshot = await service.CompanySnapshot("One", From, To); var cash = snapshot.Accounts.Single(a => a.Code == 1000); Assert.Equal(60, cash.PeriodBalance); Assert.Equal(160, cash.ClosingBalance);
+            Assert.Equal(snapshot.SourceId, (await service.CompanySnapshot("Renamed", From, To)).SourceId);
+            await new BusinessService(factory, options).Reverse(session.Actor, new(Guid.NewGuid(), sale, "Undo revenue"));
+            var reversed = await service.CompanySnapshot("One", From, To); Assert.Equal(0, reversed.Accounts.Single(a => a.Code == 6001).PeriodBalance);
+        }
+        finally { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); File.Delete(path); }
+    }
+    [Fact] public void ScreenLoadsMembersBuildsReportsAndClearsStaleResults()
+    {
+        using var context = new BunitContext(); context.Services.AddSingleton<IStatementsService>(Service); context.JSInterop.Mode = JSRuntimeMode.Loose;
+        var screen = context.Render<ConsolidationWorkspace>();
+        void Upload(CompanyReportSnapshot snapshot) => screen.FindComponent<Microsoft.AspNetCore.Components.Forms.InputFile>().UploadFiles(InputFileContent.CreateFromText(System.Text.Json.JsonSerializer.Serialize(snapshot), "member.json"));
+        Upload(Member("One")); screen.WaitForAssertion(() => Assert.Contains("One loaded", screen.Markup));
+        Upload(Member("Two", 2)); screen.WaitForAssertion(() => Assert.Contains("Two loaded", screen.Markup));
+        screen.FindAll("button").Single(b => b.TextContent == "Build group report").Click(); screen.WaitForAssertion(() => Assert.Contains("180.00", screen.Markup));
+        screen.Find("select").Change("Balance sheet"); Assert.DoesNotContain("Group total (NLe)", screen.Markup);
+        screen.FindAll("button").Single(b => b.TextContent == "Build group report").Click(); screen.WaitForAssertion(() => Assert.Contains("Balance sheet difference: 0.00", screen.Markup));
+        screen.FindAll("button").Single(b => b.TextContent == "Remove Two").Click(); Assert.DoesNotContain("Group total (NLe)", screen.Markup);
+    }
+    [Fact] public void ScreenSavesAndRestoresMappedGroupThroughDesktopFileExport()
+    {
+        using var context = new BunitContext(); var export = new Export(); context.Services.AddSingleton<IStatementsService>(Service); context.Services.AddSingleton<IFileExport>(export); context.JSInterop.Mode = JSRuntimeMode.Loose;
+        var screen = context.Render<ConsolidationWorkspace>();
+        void Upload(string json) => screen.FindComponent<Microsoft.AspNetCore.Components.Forms.InputFile>().UploadFiles(InputFileContent.CreateFromText(json, "group.json"));
+        var one = Member("One"); var two = Member("Two", 2);
+        var query = new ConsolidationRequest("Profit and loss", [one, two], [new(two.SourceId, 4000, 4000, "Sales")]);
+        Upload(System.Text.Json.JsonSerializer.Serialize(query)); screen.WaitForAssertion(() => Assert.Contains("Saved group and mappings loaded", screen.Markup));
+        screen.FindAll("button").Single(b => b.TextContent == "Save group and mappings").Click(); screen.WaitForAssertion(() => Assert.Contains("Saved to", screen.Markup)); Assert.Equal("group-reporting-set.json", export.Name);
+        var restored = System.Text.Json.JsonSerializer.Deserialize<ConsolidationRequest>(export.Bytes)!; Assert.Equal(2, restored.Members.Count); Assert.Contains(restored.Mappings, m => m.SourceId == two.SourceId && m.SourceCode == 4000 && m.GroupName == "Sales");
+        Upload("{bad"); screen.WaitForAssertion(() => Assert.Contains("not a valid company snapshot", screen.Markup));
+        screen.FindAll("button").Single(b => b.TextContent == "Build group report").Click(); screen.WaitForAssertion(() => Assert.Contains("180.00", screen.Markup));
+        screen.FindAll("button").Single(b => b.TextContent == "Export group report to Excel").Click(); screen.WaitForAssertion(() => Assert.EndsWith(".xlsx", export.Name)); Assert.DoesNotContain(context.JSInterop.Invocations, i => i.Identifier == "sierraDownload");
+    }
+    private sealed class Export : IFileExport { public string Name = ""; public byte[] Bytes = []; public Task<string> Save(string name, byte[] bytes) { Name = name; Bytes = bytes; return Task.FromResult("C:/Reports/" + name); } }
+    private sealed class Session : IActorSession { public Actor Actor = new("owner", "FREETOWN", BusinessPermissions.All.ToHashSet()); public Task<Actor> CurrentActor() => Task.FromResult(Actor); }
+    private sealed class Factory(DbContextOptions<BusinessDb> options) : IDbContextFactory<BusinessDb> { public BusinessDb CreateDbContext() => new(options); }
+}

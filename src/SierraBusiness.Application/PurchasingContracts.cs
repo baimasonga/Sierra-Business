@@ -31,6 +31,16 @@ public sealed record SupplierInvoicePreview(string Currency, decimal Rate, decim
 
 public interface IPurchasingService
 {
+    Task<IReadOnlyList<ForeignReceivableView>> ForeignReceivables();
+    Task<Guid> CollectForeign(ForeignCollectionCommand input);
+    Task<Guid> ConfigureForeignBank(ForeignBankCommand input);
+    Task<IReadOnlyList<ForeignBankView>> ForeignBanks(DateOnly date);
+    Task<ForeignBankTradePreview> PreviewForeignBankTrade(ForeignBankTradeCommand input);
+    Task<Guid> PostForeignBankTrade(ForeignBankTradeCommand input);
+    Task<ForeignRevaluationPreview> PreviewForeignRevaluation(ForeignRevaluationRequest input);
+    Task<Guid> PostForeignRevaluation(ForeignRevaluationCommand input);
+    Task<IReadOnlyList<ForeignRevaluationView>> ForeignRevaluations();
+    Task<Guid> CancelForeignRevaluation(CancelForeignRevaluationCommand input);
     Task<IReadOnlyList<ExchangeRateView>> Rates();
     Task<Guid> SetRate(ExchangeRateCommand input);
     Task<IReadOnlyList<ForeignBillView>> ForeignBills();

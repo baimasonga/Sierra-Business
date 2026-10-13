@@ -16,6 +16,17 @@ builder.Services.AddRazorComponents().AddInteractiveServerComponents().AddHubOpt
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddAuthentication(IdentityConstants.ApplicationScheme).AddIdentityCookies();
 builder.Services.AddAuthorization();
+builder.Services.AddOpenApi("v1", o =>
+{
+    o.ShouldInclude = description => description.RelativePath?.StartsWith("api/v1/", StringComparison.Ordinal) == true;
+    o.AddDocumentTransformer((document, context, cancellationToken) =>
+    {
+        document.Info.Title = "Rokela Business Admin API";
+        document.Info.Version = "v1";
+        document.Info.Description = "Requires a signed-in Identity session. Obtain a request verification token from GET /api/v1/antiforgery and send it as RequestVerificationToken on POST requests. Commands require a stable operationId for safe retries; a changed payload must use a new ID. Permissions and branch access are checked on each action. Validation uses ProblemDetails (422); permission denial uses 403. This document covers the business API; branch sync has a separately versioned protocol.";
+        return Task.CompletedTask;
+    });
+});
 builder.Services.AddIdentityCore<IdentityUser>(o => { o.Password.RequiredLength = 12; o.Lockout.MaxFailedAccessAttempts = 5; })
     .AddEntityFrameworkStores<BusinessDb>().AddSignInManager().AddDefaultTokenProviders();
 builder.Services.ConfigureApplicationCookie(o => { o.LoginPath = "/account/login"; o.ExpireTimeSpan = TimeSpan.FromHours(8); o.SlidingExpiration = false; });
@@ -68,6 +79,8 @@ builder.Services.Configure<UpdateOptions>(builder.Configuration.GetSection("Upda
 builder.Services.AddHostedService<JobHostedService>();
 builder.Services.TryAddSingleton<IFiscalIntegration, NoFiscalDevice>();
 builder.Services.AddSingleton<IChangeFeed, ChangeFeed>();
+builder.Services.AddSignalR();
+builder.Services.AddHostedService<WorkspaceChangesPublisher>();
 builder.Services.AddSingleton<IFileStore, DatabaseFileStore>();
 builder.Services.AddScoped<IDocumentLibrary, DocumentLibrary>();
 builder.Services.AddProblemDetails();
@@ -104,10 +117,12 @@ app.UseStatusCodePages();
 app.UseStaticFiles();
 app.UseAuthentication();
 app.UseAuthorization();
+app.MapOpenApi().RequireAuthorization();
 app.UseAntiforgery();
 app.UseRateLimiter();
 app.MapHealthChecks("/health");
 app.MapBusinessEndpoints();
+app.MapHub<WorkspaceChangesHub>("/notifications/workspace", o => o.CloseOnAuthenticationExpiration = true).RequireAuthorization();
 app.MapSyncEndpoints();
 
 // Database migration is an explicit deployment command, never an implicit production startup action.
@@ -138,8 +153,8 @@ app.MapGet("/account/login", (HttpContext context, IAntiforgery antiforgery) =>
     var token = antiforgery.GetAndStoreTokens(context);
     var error = context.Request.Query.ContainsKey("failed") ? "Sign-in failed. Check your credentials or wait if your account is locked." : "";
     return Results.Content($"""
-    <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in · Sierra Business</title><link rel="stylesheet" href="/app.css"></head>
-    <body class="login-body"><main class="login-panel"><div class="brand"><span class="brand-mark">S</span><div>SIERRA<span>BUSINESS OS</span></div></div><p class="eyebrow">YOUR BRANCH WORKSPACE</p><h1>Welcome back.</h1><p>Sign in to manage stock, sales and accounts.</p><p role="alert">{error}</p><form method="post" action="/account/login"><input type="hidden" name="{token.FormFieldName}" value="{token.RequestToken}"><label>Email<input type="email" name="email" autocomplete="username" required autofocus></label><label>Password<input type="password" name="password" autocomplete="current-password" required></label><button class="primary">Sign in →</button></form><p class="hint">Access is restricted to your assigned branch and permissions.</p></main></body></html>
+    <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in · Rokela Business Admin</title><link rel="stylesheet" href="/app.css"></head>
+    <body class="login-body"><main class="login-panel"><div class="brand"><img class="brand-logo" src="/branding/rokela-logo.png" alt="Rokela Business Admin" /></div><p class="eyebrow">YOUR BRANCH WORKSPACE</p><h1>Welcome back.</h1><p>Sign in to manage stock, sales and accounts.</p><p role="alert">{error}</p><form method="post" action="/account/login"><input type="hidden" name="{token.FormFieldName}" value="{token.RequestToken}"><label>Email<input type="email" name="email" autocomplete="username" required autofocus></label><label>Password<input type="password" name="password" autocomplete="current-password" required></label><button class="primary">Sign in →</button></form><p class="hint">Access is restricted to your assigned branch and permissions.</p></main></body></html>
     """, "text/html");
 });
 app.MapPost("/account/login", async (HttpContext context, IAntiforgery antiforgery, SignInManager<IdentityUser> signIn) =>

@@ -8,7 +8,11 @@ public sealed record LedgerInput(Guid OperationId, int Code, string Name, Ledger
 public sealed record LedgerDefinition(int Code, string Name, LedgerGroup Group, bool CashOrBank, bool Control);
 public sealed record VoucherLine(int AccountCode, decimal Debit, decimal Credit, string CostCentre = "");
 public sealed record BillSettlement(Guid DocumentId, decimal Amount);
-public sealed record VoucherCommand(Guid OperationId, VoucherType Type, DateOnly Date, string Narration, List<VoucherLine> Lines, List<BillSettlement> Allocations, [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] Guid? ApprovalId = null);
+public sealed record VoucherCommand(Guid OperationId, VoucherType Type, DateOnly Date, string Narration, List<VoucherLine> Lines, List<BillSettlement> Allocations, [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] Guid? ApprovalId = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? AllocationSource = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] Guid? StatementRowId = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IssueChequeCommand? ChequeIssue = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? ExternalReference = null);
 public sealed record BankMatchCommand(Guid OperationId, Guid JournalLineId, DateOnly ClearedDate, string StatementReference, Guid? StatementRowId = null);
 public sealed record CancelBankMatchCommand(Guid OperationId, Guid MatchId, string Reason);
 public sealed record BankMatchHistory(Guid Id, Guid JournalLineId, int AccountCode, string Number, DateOnly ClearedDate, string Reference, string? CancellationReason);
@@ -23,6 +27,31 @@ public sealed record BankBalance(int AccountCode, decimal Book, decimal Uncleare
 public sealed record FinanceSnapshot(IReadOnlyList<LedgerDefinition> Accounts, IReadOnlyList<LedgerBalance> Balances, IReadOnlyList<FinanceEntry> Entries, IReadOnlyList<OutstandingBill> Bills, IReadOnlyList<BudgetView> Budgets, decimal Profit, decimal Assets, decimal Liabilities, decimal Equity, decimal RetainedProfit, IReadOnlyList<BankBalance> BankBalances);
 public interface IFinanceService
 {
+    Task<AccountingProductivitySnapshot> Productivity();
+    Task<IReadOnlyList<CostCategoryView>> CostCategories();
+    Task<Guid> SaveCostCategory(CostCategoryCommand input);
+    Task<Guid> AllocateCategory(CategoryAllocationCommand input);
+    Task<CategoryReport> CategoryAnalysis(DateOnly from, DateOnly to);
+    Task<Guid> SaveAllocationClass(AllocationClassCommand input);
+    Task<CentreAllocationPreview> PreviewAllocationClass(UseAllocationClassCommand input);
+    Task<Guid> PostAllocationClass(UseAllocationClassCommand input);
+    Task<Guid> SaveProject(ProjectCommand input);
+    Task<Guid> AssignProjectDocument(ProjectDocumentCommand input);
+    Task<ProjectReport> ProjectProfitability(DateOnly from, DateOnly to);
+    Task<Guid> ScheduleJournal(ScheduledJournalCommand input);
+    Task<Guid> PostScheduledJournal(PostScheduledJournalCommand input);
+    Task<AccountingStructure> Structure();
+    Task<Guid> SaveAccountGroup(AccountGroupCommand input);
+    Task<Guid> AssignLedgerGroup(LedgerGroupingCommand input);
+    Task<Guid> SaveCostCentre(CostCentreCommand input);
+    Task<StructuredReport> StructureReport(DateOnly from, DateOnly to);
+    Task<CentreAllocationPreview> PreviewCentreAllocation(AllocateCentreCommand input);
+    Task<Guid> PostCentreAllocation(AllocateCentreCommand input);
+    Task<IReadOnlyList<ScenarioView>> Scenarios();
+    Task<Guid> SaveScenario(ScenarioCommand input);
+    Task<ScenarioReport> ProjectScenarios(DateOnly from, DateOnly to, IReadOnlyList<Guid> ids);
+    Task<InterestReport> Interest(InterestRequest input);
+    Task<byte[]> ExportAdvanced(DateOnly from, DateOnly to, IReadOnlyList<Guid> scenarioIds, InterestRequest? interest = null);
     Task<FinanceSnapshot> Read(DateOnly from, DateOnly to);
     Task<Guid> CreateLedger(LedgerInput input);
     Task<Guid> PostVoucher(VoucherCommand input);
