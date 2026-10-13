@@ -465,7 +465,7 @@ public sealed class ServiceDesk(IDbContextFactory<BusinessDb> factory, IActorSes
             if (!Enum.IsDefined(input.Billing)) throw new BusinessException("Choose who pays for this job.");
             var reason = Optional(input.Reason, "Reason", 160);
             var exception = false;
-            var authority = actor.Permissions.Contains("pricing.manage");
+            var authority = actor.CanDemand("pricing.manage");
             switch (input.Billing)
             {
                 case ServiceBilling.Warranty:

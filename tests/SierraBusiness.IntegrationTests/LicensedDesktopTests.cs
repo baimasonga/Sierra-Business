@@ -37,6 +37,7 @@ public sealed class LicensedDesktopTests
         var actor = new Actor("local", "branch", new HashSet<string> { "sales.create", "inventory.receive" })
         { LicenseDemand = permission => { if (permission == "sales.create") throw new UnauthorizedAccessException(); } };
         actor.DemandAny("sales.create", "inventory.receive");
+        Assert.False(actor.CanDemand("sales.create")); Assert.True(actor.CanDemand("inventory.receive")); Assert.False(actor.CanDemand("accounting.write"));
         Assert.Throws<UnauthorizedAccessException>(() => actor.DemandAny("sales.create", "accounting.write"));
     }
 }

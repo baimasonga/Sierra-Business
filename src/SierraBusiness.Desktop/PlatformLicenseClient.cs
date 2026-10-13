@@ -28,6 +28,7 @@ public sealed class PlatformLicenseClient(PlatformLicenseOptions options, ILicen
     private readonly SemaphoreSlim gate = new(1, 1);
     private Checkpoint? state;
     private DateTimeOffset? observed;
+    private bool storageFault;
     private readonly object stateLock = new();
     public PlatformLicenseOptions Options => options;
     public LicenseCheck Current
@@ -36,6 +37,7 @@ public sealed class PlatformLicenseClient(PlatformLicenseOptions options, ILicen
         {
             lock (stateLock)
             {
+                if (storageFault) return new(LicenseState.Invalid);
                 if (state?.Lease is null) return new(LicenseState.NotActivated);
                 using var key = Import(state);
                 var now = clock.GetUtcNow();
@@ -82,23 +84,33 @@ public sealed class PlatformLicenseClient(PlatformLicenseOptions options, ILicen
                 throw new CryptographicException("Protected license state is invalid.");
             using var key = Import(checkpoint);
         }
-        lock (stateLock) state = checkpoint;
+        lock (stateLock) { state = checkpoint; storageFault = false; }
     }
     private async Task Save(Checkpoint checkpoint, CancellationToken cancellationToken)
     {
-        await store.Write(JsonSerializer.Serialize(checkpoint), cancellationToken);
-        lock (stateLock) state = checkpoint;
+        try { await store.Write(JsonSerializer.Serialize(checkpoint), cancellationToken); }
+        catch
+        {
+            // Keep an authoritative revocation and clock watermark in memory even when disk persistence fails.
+            lock (stateLock) { state = checkpoint; storageFault = true; }
+            throw;
+        }
+        lock (stateLock) { state = checkpoint; storageFault = false; }
     }
     private async Task ObserveClock(CancellationToken cancellationToken)
     {
         var now = clock.GetUtcNow();
-        lock (stateLock) if (observed > now) now = observed.Value;
-        if (state!.LastSeen is null || now > state.LastSeen) await Save(state with { LastSeen = now }, cancellationToken);
+        lock (stateLock)
+        {
+            if (observed > now) now = observed.Value;
+            if (state!.LastSeen > now) now = state.LastSeen.Value;
+        }
+        if (storageFault || state!.LastSeen is null || now > state.LastSeen) await Save(state! with { LastSeen = now }, cancellationToken);
     }
     public async Task<LicenseCheck> Check(CancellationToken cancellationToken = default)
     {
         await gate.WaitAsync(cancellationToken);
-        try { await Load(cancellationToken); var check = Current; await ObserveClock(cancellationToken); return check; }
+        try { await Load(cancellationToken); _ = Current; await ObserveClock(cancellationToken); return Current; }
         finally { gate.Release(); }
     }
     private async Task<JsonDocument> Post(string path, object body, string? token, CancellationToken cancellationToken)

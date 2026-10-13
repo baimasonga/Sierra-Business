@@ -14,9 +14,9 @@ public sealed class PlatformLicenseTests
     private sealed class Clock : TimeProvider { public DateTimeOffset Time = Now; public override DateTimeOffset GetUtcNow() => Time; }
     private sealed class Store : ILicenseStore
     {
-        public string? Value; public int Writes;
+        public string? Value; public int Writes; public bool FailWrites;
         public Task<string?> Read(CancellationToken cancellationToken = default) => Task.FromResult(Value);
-        public Task Write(string state, CancellationToken cancellationToken = default) { Value = state; Writes++; return Task.CompletedTask; }
+        public Task Write(string state, CancellationToken cancellationToken = default) { if (FailWrites) throw new IOException("Synthetic protected store failure."); Value = state; Writes++; return Task.CompletedTask; }
     }
     private sealed class Provider : HttpMessageHandler
     {
@@ -170,5 +170,38 @@ public sealed class PlatformLicenseTests
         await Assert.ThrowsAsync<System.Security.Cryptography.CryptographicException>(() => client.Check());
         Assert.Equal(before, store.Value); Assert.Equal(0, store.Writes);
         client.Demand("business.read"); client.Demand("backups.create"); Assert.Throws<UnauthorizedAccessException>(() => client.Demand("sales.create"));
+    }
+    [Fact] public async Task ALocalManagerRoleDoesNotGrantAnUnpurchasedMappedFeature()
+    {
+        using var p = new Provider(); using var http = new HttpClient(p);
+        var options = new PlatformLicenseOptions(new Uri("https://platform.example.test"), "sierra-business", [p.Public], new() { ["pricing.manage"] = "pricing_enabled" });
+        var client = new PlatformLicenseClient(options, new Store(), http, new Clock());
+        await client.Activate("platform@example.test", "one-use-password", "key", "123456");
+        var actor = new Actor("manager", "branch", BusinessPermissions.All.ToHashSet()) { LicenseDemand = client.Demand };
+        actor.Demand("sales.create"); Assert.True(actor.CanDemand("sales.create"));
+        Assert.False(actor.CanDemand("pricing.manage")); Assert.Throws<UnauthorizedAccessException>(() => actor.Demand("pricing.manage"));
+    }
+    [Fact] public async Task KnownRevocationCannotLeaveCachedWriteAccessWhenProtectedStorageFails()
+    {
+        using var p = new Provider(); using var http = new HttpClient(p); var store = new Store();
+        var options = new PlatformLicenseOptions(new Uri("https://platform.example.test"), "sierra-business", [p.Public]);
+        var client = new PlatformLicenseClient(options, store, http, new Clock());
+        await client.Activate("platform@example.test", "one-use-password", "key", "123456");
+        p.Revoked = true; store.FailWrites = true;
+        await Assert.ThrowsAsync<IOException>(() => client.Refresh());
+        Assert.False(client.Current.Usable); Assert.Throws<UnauthorizedAccessException>(() => client.Demand("sales.create")); client.Demand("business.read");
+        store.FailWrites = false;
+        Assert.Equal(LicenseState.NotActivated, (await client.Check()).State);
+        Assert.Equal(LicenseState.NotActivated, (await new PlatformLicenseClient(options, store, http, new Clock()).Check()).State);
+    }
+    [Fact] public async Task ClockCheckpointFailureRestrictsUntilTheWatermarkIsDurable()
+    {
+        using var p = new Provider(); using var http = new HttpClient(p); var store = new Store(); var clock = new Clock();
+        var client = new PlatformLicenseClient(new(new Uri("https://platform.example.test"), "sierra-business", [p.Public]), store, http, clock);
+        await client.Activate("platform@example.test", "one-use-password", "key", "123456");
+        clock.Time = Now.AddMinutes(2); store.FailWrites = true;
+        await Assert.ThrowsAsync<IOException>(() => client.Check()); Assert.False(client.Current.Usable);
+        store.FailWrites = false; Assert.True((await client.Check()).Usable);
+        clock.Time = Now; Assert.Equal(LicenseState.ClockAnomaly, (await client.Check()).State);
     }
 }

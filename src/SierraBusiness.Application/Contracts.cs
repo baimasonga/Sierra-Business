@@ -15,6 +15,11 @@ public sealed record Actor(string Id, string Branch, IReadOnlySet<string> Permis
         }
         throw new UnauthorizedAccessException("An authorized permission and its licensed feature are required.");
     }
+    public bool CanDemand(string permission)
+    {
+        try { Demand(permission); return true; }
+        catch (UnauthorizedAccessException) { return false; }
+    }
     public void DemandCommercialAccess() => LicenseDemand?.Invoke("business_write");
 }
 public sealed record ProductInput(Guid OperationId, string Sku, string Name, string Category, string Unit, decimal Price, TrackingMode Tracking, decimal? MinimumPrice = null);
