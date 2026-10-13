@@ -250,7 +250,7 @@ public sealed partial class ComplianceService(IDbContextFactory<BusinessDb> fact
     public async Task<FiscalRunResult> RegisterPending()
     {
         var actor = await session.CurrentActor();
-        if (!actor.Permissions.Contains("sales.create") && !actor.Permissions.Contains("accounting.write")) throw new UnauthorizedAccessException("Registering invoices needs sales.create or accounting.write.");
+        actor.DemandAny("sales.create", "accounting.write");
         await Authorize();
         await using var db = await factory.CreateDbContextAsync();
         var profile = await TaxRules.Profile(db, actor.Branch);

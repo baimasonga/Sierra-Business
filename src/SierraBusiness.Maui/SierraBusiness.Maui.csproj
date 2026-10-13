@@ -1,5 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk.Razor">
   <PropertyGroup>
+    <SierraLicenseRequired Condition="'$(SierraLicenseRequired)' == '' and '$(Configuration)' == 'Release'">true</SierraLicenseRequired>
+    <SierraLicenseRequired Condition="'$(SierraLicenseRequired)' == ''">false</SierraLicenseRequired>
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <OutputType>WinExe</OutputType>
     <UseMaui>true</UseMaui>
@@ -22,6 +24,8 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(RuntimeIdentifierOverride)' != ''"><RuntimeIdentifier>$(RuntimeIdentifierOverride)</RuntimeIdentifier></PropertyGroup>
   <ItemGroup>
+    <AssemblyMetadata Include="SierraLicenseRequired" Value="$(SierraLicenseRequired)" />
+    <Content Include="licensing.json" Condition="Exists('licensing.json')" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <PackageReference Include="Tesseract" />
     <Content Include="OcrData/**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <PackageReference Include="Microsoft.Maui.Controls" />

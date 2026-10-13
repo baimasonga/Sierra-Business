@@ -94,7 +94,7 @@ public sealed class ServiceDesk(IDbContextFactory<BusinessDb> factory, IActorSes
     private async Task<Actor> Authorize(bool write = false, params string[] permissions)
     {
         var actor = await session.CurrentActor(); actor.Demand("business.read");
-        if (write && !actor.Permissions.Contains("sales.create") && !actor.Permissions.Contains("inventory.receive")) throw new UnauthorizedAccessException("You cannot change service jobs.");
+        if (write) actor.DemandAny("sales.create", "inventory.receive");
         foreach (var p in permissions) actor.Demand(p);
         if (actor.Branch != Settings.Branch || string.IsNullOrWhiteSpace(actor.Id)) throw new UnauthorizedAccessException("Sign in to the configured branch.");
         return actor;

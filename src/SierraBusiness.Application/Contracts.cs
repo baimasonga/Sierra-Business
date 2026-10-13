@@ -3,7 +3,19 @@ namespace SierraBusiness.Application;
 
 public sealed record Actor(string Id, string Branch, IReadOnlySet<string> Permissions)
 {
-    public void Demand(string permission) { if (!Permissions.Contains(permission)) throw new UnauthorizedAccessException($"Permission required: {permission}"); }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public Action<string>? LicenseDemand { get; init; }
+    public void Demand(string permission) { if (!Permissions.Contains(permission)) throw new UnauthorizedAccessException($"Permission required: {permission}"); LicenseDemand?.Invoke(permission); }
+    public void DemandAny(params string[] permissions)
+    {
+        foreach (var permission in permissions)
+        {
+            try { Demand(permission); return; }
+            catch (UnauthorizedAccessException) { }
+        }
+        throw new UnauthorizedAccessException("An authorized permission and its licensed feature are required.");
+    }
+    public void DemandCommercialAccess() => LicenseDemand?.Invoke("business_write");
 }
 public sealed record ProductInput(Guid OperationId, string Sku, string Name, string Category, string Unit, decimal Price, TrackingMode Tracking, decimal? MinimumPrice = null);
 public sealed record ProductView(Guid Id, string Sku, string Name, string Category, string Unit, decimal Price, TrackingMode Tracking);

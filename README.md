@@ -1,5 +1,7 @@
 # Sierra Business OS
 
+**Trust Platform licensing integration:** Windows activation, DPAPI-protected installation identity, signed offline leases, automatic refresh and application permission checks are available. Release builds without approved public licensing configuration preserve records/backups while restricting commercial writes. See [configuration, security boundaries and validation](docs/platform-licensing.md).
+
 **Windows release 0.32.0 — verified 11 October 2026:** company period cutovers, inventory costing/valuation and consignment, pre-invoice rejections, cheque layouts/books, reviewed bank-row vouchers, party/ledger/voucher imports and group elimination adjustments are implemented. See [scope and verification](docs/remaining-features-0.32.0.md). The [unsigned installer](artifacts/windows/0.32.0/RokelaBusinessAdmin-Setup-x64.exe) passed 26 artifact checks; 380 full Release tests passed and six live provider tests were skipped. Native visual, physical peripheral and clean-machine acceptance remain unverified.
 
 A Microsoft .NET implementation based on [the supplied engineering specification](docs/engineering-specification.md). This repository contains an initial working vertical slice, not the full production system described in that specification.

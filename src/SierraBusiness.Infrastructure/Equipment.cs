@@ -265,7 +265,7 @@ public sealed class EquipmentService(IDbContextFactory<BusinessDb> factory, IAct
     public async Task<Guid> SaveProfile(SaveUnitProfile input)
     {
         var actor = await Authorize();
-        if (!actor.Permissions.Contains("catalogue.write") && !actor.Permissions.Contains("inventory.receive") && !actor.Permissions.Contains("sales.create")) throw new UnauthorizedAccessException("You cannot change equipment records.");
+        actor.DemandAny("catalogue.write", "inventory.receive", "sales.create");
         return await Commands.Run(factory, actor, input.OperationId, "equipment.profile", input, async db =>
         {
             var serial = Normalize(input.Serial);

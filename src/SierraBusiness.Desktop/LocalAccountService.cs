@@ -9,7 +9,7 @@ using SierraBusiness.Infrastructure;
 namespace SierraBusiness.Desktop;
 
 /// <summary>Identity password hashes stay local. Sessions are in memory, expire, and recheck claims on every command.</summary>
-public sealed class LocalAccountService(IServiceScopeFactory scopes, IOptions<TradingOptions> options, TimeProvider clock, DesktopStore? store = null) : IActorSession
+public sealed class LocalAccountService(IServiceScopeFactory scopes, IOptions<TradingOptions> options, TimeProvider clock, DesktopStore? store = null, ILicenseService? license = null) : IActorSession
 {
     private readonly SemaphoreSlim setupGate = new(1, 1);
     private string? userId, securityStamp;
@@ -72,7 +72,13 @@ public sealed class LocalAccountService(IServiceScopeFactory scopes, IOptions<Tr
         var claims = await users.GetClaimsAsync(user);
         var permissions = claims.Where(x => x.Type == "permission").Select(x => x.Value).ToHashSet();
         if (store is not null && CompanyPeriodService.IsArchive(store.DirectoryPath)) permissions.RemoveWhere(p => !p.EndsWith(".read", StringComparison.Ordinal) && p != "backups.create");
-        return new Actor(user.Id, claims.FirstOrDefault(x => x.Type == "branch")?.Value ?? "", permissions);
+        if (license is not null)
+        {
+            try { await license.Check(); }
+            catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException or System.Text.Json.JsonException or IOException or FormatException)
+            { /* Damaged license storage never prevents access to saved records; writes remain restricted. */ }
+        }
+        return new Actor(user.Id, claims.FirstOrDefault(x => x.Type == "branch")?.Value ?? "", permissions) { LicenseDemand = license is null ? null : license.Demand };
     }
 
     public void SignOut() { userId = securityStamp = null; expires = default; }

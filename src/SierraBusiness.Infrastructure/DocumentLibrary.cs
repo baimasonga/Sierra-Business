@@ -55,7 +55,7 @@ public sealed class DocumentLibrary(IDbContextFactory<BusinessDb> factory, IActo
     private async Task<Actor> Authorize(bool write = false)
     {
         var actor = await session.CurrentActor(); actor.Demand("business.read");
-        if (write && !Writers.Any(actor.Permissions.Contains)) throw new UnauthorizedAccessException("You cannot add or change documents.");
+        if (write) { actor.DemandAny(Writers); actor.DemandCommercialAccess(); }
         if (actor.Branch != options.Value.Branch || string.IsNullOrWhiteSpace(actor.Id)) throw new UnauthorizedAccessException("Sign in to the configured branch.");
         return actor;
     }
