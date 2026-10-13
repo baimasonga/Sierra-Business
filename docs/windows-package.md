@@ -1,6 +1,12 @@
 # Windows application and single-package delivery
 
-Latest form-fix installer: **0.27.1**, `artifacts/windows/0.27.1/SierraBusiness-Setup-x64.exe`. All 288 integration tests passed (six live-provider skips), offline OCR and native publishing passed, and the installer checksum was independently verified. See [form picker fixes and acceptance limits](form-pickers-0.27.1.md).
+## Installer 0.33.0 — 13 October 2026
+
+[Download `SierraBusiness-Windows-0.33.0`](https://github.com/baimasonga/Sierra-Business/actions/runs/38365554988/artifacts/11799826309). The installer was built from commit `85647120c9ba9a952608595ad74fb2a25f67e5ef` on `codex/platform-licensing`. Full Windows verification and all packaging steps succeeded, including Release tests, offline OCR, native publishing, Inno compilation and 28 release artifact checks. The uploaded artifact is 324,784,203 bytes; this is the ZIP size, not the executable size. The workflow verified the executable checksum before upload. Cloud artifact-storage access is blocked, so no second downloaded-binary verification was performed here.
+
+Extract the ZIP and run `artifacts/windows/0.33.0/RokelaBusinessAdmin-Setup-x64.exe`. Back up company data and close the application first. The package is unsigned. Commercial writes require activation of a configured `sierra-business` license with the `business_write` entitlement; packaging does not create that product, its plans or customer licenses. Records and backups remain available in restricted mode. Physical install/upgrade, printing and peripheral acceptance remain pending.
+
+Historical form-fix installer: **0.27.1**, `artifacts/windows/0.27.1/SierraBusiness-Setup-x64.exe`. All 288 integration tests passed (six live-provider skips), offline OCR and native publishing passed, and the installer checksum was independently verified. See [form picker fixes and acceptance limits](form-pickers-0.27.1.md).
 
 ## Installer rebuild — 2026-10-05
 
@@ -103,7 +109,9 @@ Restore is currently an administrator procedure, not an in-app button. Close Sie
 
 The standard verification workflow now compiles the MAUI Windows host after the solution tests. The manually triggered **Windows desktop package** workflow installs .NET 10, MAUI Windows and Inno Setup on a Windows runner, then invokes the same packaging script used locally. Supply a semantic version and Microsoft's current Evergreen Standalone x64 installer HTTPS URL. The downloaded file must pass the script's Microsoft Authenticode and size checks. Inputs are passed as environment variables, not interpolated into shell commands.
 
-On success, download the workflow artifact containing the installer and SHA-256 checksum. This workflow has been authored but has not been run from this workspace; no repository remote is configured. A successful CI build still requires the clean-machine installation checks above before distribution.
+On success, open the completed workflow run and download `SierraBusiness-Windows-<version>` under **Artifacts**. Extract the ZIP, then find `RokelaBusinessAdmin-Setup-x64.exe`, `SHA256SUMS.txt` and `release-verification.json` under `artifacts/windows/<version>`. The workflow has run on GitHub Windows runners. A successful CI build still requires the clean-machine installation checks above before distribution.
+
+Version 0.33.0 includes the Trust Platform licensing integration. See [licensing configuration and activation prerequisites](platform-licensing.md). Back up your business data and close the application before installing the update. The installer preserves the existing application identity and keeps company data outside the installation directory. Unless publisher signing is configured, the executable is unsigned.
 
 ## Platform references
 
