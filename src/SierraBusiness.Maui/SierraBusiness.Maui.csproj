@@ -25,7 +25,7 @@
   <PropertyGroup Condition="'$(RuntimeIdentifierOverride)' != ''"><RuntimeIdentifier>$(RuntimeIdentifierOverride)</RuntimeIdentifier></PropertyGroup>
   <ItemGroup>
     <AssemblyMetadata Include="SierraLicenseRequired" Value="$(SierraLicenseRequired)" />
-    <Content Include="licensing.json" Condition="Exists('licensing.json')" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Update="licensing.json" Condition="Exists('licensing.json')" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <PackageReference Include="Tesseract" />
     <Content Include="OcrData/**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <PackageReference Include="Microsoft.Maui.Controls" />
