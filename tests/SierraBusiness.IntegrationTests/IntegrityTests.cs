@@ -17,7 +17,7 @@ public sealed class IntegrityTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite($"Data Source={path};Pooling=False").Options);
-        await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db);
+        await using (var db = factory.CreateDbContext()) await TestDatabase.MigrateAsync(db);
         business = new(factory, Options.Create(new TradingOptions())); integrity = new(factory, session, Options.Create(new TradingOptions()));
         product = await business.AddProduct(session.Actor, new(Guid.NewGuid(), "PAPER", "Paper", "Office", "ream", 100, TrackingMode.Quantity, MinimumPrice: 1));
         await business.Post(session.Actor, new(Guid.NewGuid(), DocumentKind.Receipt, "Supplier", today, [new(product, 10, 60)], null));

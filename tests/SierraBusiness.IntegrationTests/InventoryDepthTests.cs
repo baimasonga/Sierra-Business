@@ -13,7 +13,7 @@ public sealed class InventoryDepthTests : IAsyncLifetime
     private readonly string path = Path.Combine(Path.GetTempPath(),"rokela-inventory-depth-"+Guid.NewGuid().ToString("N")+".db"); private readonly Session session = new(); private Factory factory = null!; private BusinessService business = null!; private InventoryService inventory = null!; private FinanceService finance = null!; private Guid product; private readonly DateOnly today = DateOnly.FromDateTime(DateTime.UtcNow);
     public async Task InitializeAsync()
     {
-        factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite("Data Source="+path+";Pooling=False").Options); await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db); await TestParties.Register(factory,"School");
+        factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite("Data Source="+path+";Pooling=False").Options); await using (var db = factory.CreateDbContext()) await TestDatabase.MigrateAsync(db); await TestParties.Register(factory,"School");
         var options = Options.Create(new TradingOptions()); business = new(factory,options); inventory = new(factory,session,options); finance = new(factory,session,options); product = await business.AddProduct(session.Actor,new(Guid.NewGuid(),"DEPTH","Inventory depth item","General","piece",100,TrackingMode.Quantity,MinimumPrice:1));
     }
     public Task DisposeAsync() { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); File.Delete(path); return Task.CompletedTask; }

@@ -20,7 +20,7 @@ public sealed class ImportTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite($"Data Source={path};Pooling=False").Options);
-        await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db);
+        await using (var db = factory.CreateDbContext()) await TestDatabase.MigrateAsync(db);
         var options = Options.Create(new TradingOptions());
         imports = new(factory, session, options); business = new(factory, options);
         await new InventoryService(factory, session, options).CreateLocation(new(Guid.NewGuid(), "SECOND", "Second warehouse"));

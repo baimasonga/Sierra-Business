@@ -22,7 +22,7 @@ public sealed class DocumentPreviewTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite($"Data Source={path};Pooling=False").Options);
-        await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db);
+        await using (var db = factory.CreateDbContext()) await TestDatabase.MigrateAsync(db);
         library = new(factory, session, Options.Create(new TradingOptions()), new DatabaseFileStore());
     }
     public Task DisposeAsync() { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); File.Delete(path); return Task.CompletedTask; }

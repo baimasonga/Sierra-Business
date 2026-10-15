@@ -24,7 +24,7 @@ public sealed class TradeAdvanceTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite($"Data Source={path};Pooling=False").AddInterceptors(new SyncCaptureInterceptor(SyncRole.Branch, "FREETOWN")).Options);
-        await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db);
+        await using (var db = factory.CreateDbContext()) await TestDatabase.MigrateAsync(db);
         var options = Options.Create(new TradingOptions());
         banking = new(factory, session, options); commerce = new(factory, session, options); business = new(factory, options); finance = new(factory, session, options); parties = new(factory, session, options);
         await TestParties.Register(factory, "Deposit customer"); await TestParties.Register(factory, "Advance supplier", PartyType.Supplier);

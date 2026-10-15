@@ -11,7 +11,7 @@ public sealed class ForeignExchangeTests : IAsyncLifetime
     private readonly string path = Path.Combine(Path.GetTempPath(), "rokela-fx-" + Guid.NewGuid().ToString("N") + ".db"); private Factory factory = null!; private PurchasingService fx = null!; private FinanceService finance = null!; private BusinessService business = null!; private readonly Session session = new(); private readonly DateOnly today = DateOnly.FromDateTime(DateTime.UtcNow); private Guid product;
     public async Task InitializeAsync()
     {
-        factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite("Data Source=" + path + ";Pooling=False").Options); await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db); await TestParties.Register(factory, "School");
+        factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite("Data Source=" + path + ";Pooling=False").Options); await using (var db = factory.CreateDbContext()) await TestDatabase.MigrateAsync(db); await TestParties.Register(factory, "School");
         var options = Options.Create(new TradingOptions()); fx = new(factory, session, options); finance = new(factory, session, options); business = new(factory, options);
         await fx.SetRate(new(Guid.NewGuid(), "USD", today.AddDays(-1), 20, "Test reference")); await fx.SetRate(new(Guid.NewGuid(), "EUR", today.AddDays(-1), 30, "Test reference"));
         product = await business.AddProduct(session.Actor, new(Guid.NewGuid(), "FXITEM", "Currency invoice item", "General", "piece", 200, TrackingMode.Quantity, MinimumPrice: 100));

@@ -32,7 +32,7 @@ public sealed class SyncTests : IAsyncLifetime
         var builder = new DbContextOptionsBuilder<BusinessDb>().UseSqlite($"Data Source={path};Pooling=False");
         if (capture) builder.AddInterceptors(new SyncCaptureInterceptor(role, branch));
         var factory = new Factory(builder.Options);
-        await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db);
+        await using (var db = factory.CreateDbContext()) await TestDatabase.MigrateAsync(db);
         var sync = new SyncOptions { Role = role, BatchRows = 7 };
         if (role == SyncRole.Central) { sync.Keys["FREETOWN"] = FreetownKey; sync.Keys["BO"] = BoKey; }
         return new() { Branch = branch, Factory = factory, Session = new() { Actor = new("owner", branch, BusinessPermissions.All.ToHashSet()) }, Options = Options.Create(new TradingOptions { Branch = branch, Device = "PC1" }), Sync = sync };

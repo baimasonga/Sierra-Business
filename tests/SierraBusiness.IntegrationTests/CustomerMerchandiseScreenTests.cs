@@ -21,7 +21,7 @@ public sealed class CustomerMerchandiseScreenTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite($"Data Source={path};Pooling=False").Options);
-        await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db);
+        await using (var db = factory.CreateDbContext()) await TestDatabase.MigrateAsync(db);
         var options = Options.Create(new TradingOptions());
         business = new(factory, options);
         context.Services.AddSingleton<IPartyService>(new PartyService(factory, session, options));
