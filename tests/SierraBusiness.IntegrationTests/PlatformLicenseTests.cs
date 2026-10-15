@@ -204,4 +204,16 @@ public sealed class PlatformLicenseTests
         store.FailWrites = false; Assert.True((await client.Check()).Usable);
         clock.Time = Now; Assert.Equal(LicenseState.ClockAnomaly, (await client.Check()).State);
     }
+    [Fact] public async Task TheClockWatermarkIsPersistedOncePerToleranceNotOnEveryCheck()
+    {
+        using var p = new Provider(); using var http = new HttpClient(p); var store = new Store(); var clock = new Clock();
+        var options = new PlatformLicenseOptions(new Uri("https://platform.example.test"), "sierra-business", [p.Public]);
+        var client = new PlatformLicenseClient(options, store, http, clock);
+        await client.Activate("platform@example.test", "one-use-password", "key", "123456"); await client.Check(); var writes = store.Writes;
+        for (var seconds = 1; seconds <= 50; seconds += 7) { clock.Time = Now.AddSeconds(seconds); Assert.True((await client.Check()).Usable); }
+        Assert.Equal(writes, store.Writes);
+        clock.Time = Now.AddMinutes(2); await client.Check(); Assert.Equal(writes + 1, store.Writes);
+        // After a restart the durable watermark still detects a rollback beyond the tolerance.
+        clock.Time = Now.AddMinutes(2).AddSeconds(-61); Assert.Equal(LicenseState.ClockAnomaly, (await new PlatformLicenseClient(options, store, http, clock).Check()).State);
+    }
 }

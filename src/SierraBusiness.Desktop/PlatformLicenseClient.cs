@@ -97,6 +97,7 @@ public sealed class PlatformLicenseClient(PlatformLicenseOptions options, ILicen
         }
         lock (stateLock) { state = checkpoint; storageFault = false; }
     }
+    private static readonly TimeSpan PersistInterval = TimeSpan.FromSeconds(60);
     private async Task ObserveClock(CancellationToken cancellationToken)
     {
         var now = clock.GetUtcNow();
@@ -105,7 +106,8 @@ public sealed class PlatformLicenseClient(PlatformLicenseOptions options, ILicen
             if (observed > now) now = observed.Value;
             if (state!.LastSeen > now) now = state.LastSeen.Value;
         }
-        if (storageFault || state!.LastSeen is null || now > state.LastSeen) await Save(state! with { LastSeen = now }, cancellationToken);
+        // The in-memory watermark covers this session; persisting it once per rollback tolerance (60 s) avoids a forced disk flush on every call.
+        if (storageFault || state!.LastSeen is null || now > state.LastSeen.Value.Add(PersistInterval)) await Save(state! with { LastSeen = now }, cancellationToken);
     }
     public async Task<LicenseCheck> Check(CancellationToken cancellationToken = default)
     {

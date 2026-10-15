@@ -75,7 +75,7 @@ public sealed class LocalAccountService(IServiceScopeFactory scopes, IOptions<Tr
         if (license is not null)
         {
             try { await license.Check(); }
-            catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException or System.Text.Json.JsonException or IOException or FormatException)
+            catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException or System.Text.Json.JsonException or IOException or FormatException or UnauthorizedAccessException)
             { /* Damaged license storage never prevents access to saved records; writes remain restricted. */ }
         }
         return new Actor(user.Id, claims.FirstOrDefault(x => x.Type == "branch")?.Value ?? "", permissions) { LicenseDemand = license is null ? null : license.Demand };

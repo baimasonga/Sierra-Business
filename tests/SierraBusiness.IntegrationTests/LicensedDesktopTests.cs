@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using NSec.Cryptography;
 using SierraBusiness.Application;
 using SierraBusiness.Desktop;
 using SierraBusiness.Domain;
@@ -39,5 +40,30 @@ public sealed class LicensedDesktopTests
         actor.DemandAny("sales.create", "inventory.receive");
         Assert.False(actor.CanDemand("sales.create")); Assert.True(actor.CanDemand("inventory.receive")); Assert.False(actor.CanDemand("accounting.write"));
         Assert.Throws<UnauthorizedAccessException>(() => actor.DemandAny("sales.create", "accounting.write"));
+    }
+    private sealed class DeniedStore : ILicenseStore
+    {
+        public Task<string?> Read(CancellationToken cancellationToken = default) => throw new UnauthorizedAccessException("Access to the license checkpoint is denied.");
+        public Task Write(string state, CancellationToken cancellationToken = default) => throw new UnauthorizedAccessException("Access to the license checkpoint is denied.");
+    }
+    [Fact] public async Task ADeniedLicenseCheckpointKeepsRecordsReadableAndRestrictsWrites()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "sierra-denied-license-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var signing = Key.Create(SignatureAlgorithm.Ed25519); using var http = new HttpClient();
+            var options = new PlatformLicenseOptions(new Uri("https://platform.example.test"), "sierra-business", [new("test", LicenseProtocol.Encode(signing.PublicKey.Export(KeyBlobFormat.RawPublicKey)))]);
+            using var services = new ServiceCollection().AddSierraDesktop(directory).AddSingleton<ILicenseService>(new PlatformLicenseClient(options, new DeniedStore(), http, TimeProvider.System)).BuildServiceProvider();
+            var factory = services.GetRequiredService<IDbContextFactory<BusinessDb>>();
+            await services.GetRequiredService<DesktopStore>().Initialize(factory);
+            var accounts = services.GetRequiredService<LocalAccountService>();
+            await accounts.CreateOwner("owner@example.test", "Local-Owner-Password-123!", "Local-Owner-Password-123!");
+            var actor = await accounts.SignIn("owner@example.test", "Local-Owner-Password-123!");
+            var current = await accounts.CurrentActor();
+            var business = services.GetRequiredService<IBusinessService>();
+            Assert.Empty((await business.Read(current)).Products); current.Demand("backups.create");
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => business.AddProduct(current, new(Guid.NewGuid(), "BLOCKED", "Blocked product", "General", "piece", 10, TrackingMode.Quantity)));
+        }
+        finally { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); if (Directory.Exists(directory)) Directory.Delete(directory, true); }
     }
 }
