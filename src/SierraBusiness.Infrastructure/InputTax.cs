@@ -28,22 +28,56 @@ public sealed partial class ComplianceService
             var expense = await db.LedgerAccounts.SingleOrDefaultAsync(a => a.Id == input.ExpenseAccount);
             var recovery = await db.LedgerAccounts.SingleOrDefaultAsync(a => a.Id == input.RecoveryAccount);
             if ((input.Stock ? input.ExpenseAccount != 1200 : expense?.Group != LedgerGroup.Expense || expense.Control) || recovery?.Group != LedgerGroup.Asset || recovery.Control || recovery.CashOrBank) throw new BusinessException("Stock claims credit inventory 1200; expense claims use a custom expense. Choose a separate non-bank custom recovery asset.");
-            var expenseAmount = (await db.Journal.Where(j => j.DocumentId == payment.Id && (int)j.Account == input.ExpenseAccount).ToListAsync()).Sum(j => j.Debit - j.Credit);
-            if (expenseAmount != input.NetPurchase + input.TaxPaid) throw new BusinessException("The source expense line must equal this invoice's purchase value plus tax. Split combined invoices into separate source payments before claiming.");
-            var stockChanges = new List<Movement>();
+            if (!input.Stock)
+            {
+                var expenseAmount = (await db.Journal.Where(j => j.DocumentId == payment.Id && (int)j.Account == input.ExpenseAccount).ToListAsync()).Sum(j => j.Debit - j.Credit);
+                if (expenseAmount != input.NetPurchase + input.TaxPaid) throw new BusinessException("The source expense line must equal this invoice's purchase value plus tax. Split combined invoices into separate source payments before claiming.");
+            }
+            var stockChanges = new List<Movement>(); decimal inventoryCredit = 0, costOfSalesCredit = 0, varianceCredit = 0;
             if (input.Stock)
             {
                 if (!payment.Party.Equals(input.Supplier.Trim(),StringComparison.OrdinalIgnoreCase)) throw new BusinessException("The reviewed supplier must match the source goods receipt.");
                 if (Grni.IsAwaiting(payment)) throw new BusinessException("Match the supplier invoice before reviewing input tax; this direct-receipt workflow cannot claim from uninvoiced goods.");
-                var sourceRows = await db.Movements.AsNoTracking().Where(m => m.DocumentId == payment.Id && m.Quantity > 0).ToListAsync(); if (sourceRows.Count == 0 || sourceRows.Sum(m => m.Value) != payment.Total || payment.Total != input.NetPurchase+input.TaxPaid) throw new BusinessException("Use a direct receipt whose recorded gross stock value equals the reviewed invoice net plus GST.");
-                var posted = await db.Operations.Where(o => o.ResultId == payment.Id).Select(o => (DateTimeOffset?)o.Time).FirstOrDefaultAsync() ?? throw new BusinessException("Source receipt posting history not found."); var later = (await db.Operations.AsNoTracking().Where(o => o.Branch == actor.Branch).Select(o => new { o.ResultId,o.Time }).ToListAsync()).Where(o => o.Time > posted).Select(o => o.ResultId).ToArray(); var productIds = sourceRows.Select(m => m.ProductId).Distinct().ToArray();
-                if (await db.Movements.AnyAsync(m => m.Branch == actor.Branch && productIds.Contains(m.ProductId) && later.Contains(m.DocumentId) && (m.Quantity < 0 || m.Value < 0) && !db.Documents.Any(r => r.Reverses == m.DocumentId))) throw new BusinessException("Recover included purchase GST before goods are issued, transferred, returned or written down. Later cost corrections require an accountant's allocation review.");
-                decimal allocated = 0,receivedValue = 0;
-                for (var i = 0; i < sourceRows.Count; i++)
+                if (await db.ReturnAllocations.AnyAsync(a => a.OriginalDocumentId == payment.Id && !db.Documents.Any(r => r.Reverses == a.ReturnDocumentId))) throw new BusinessException("This receipt has an active purchase return. Claim GST on a receipt only before goods go back to the supplier, or after reversing the return.");
+                var sourceRows = await db.Movements.AsNoTracking().Where(m => m.DocumentId == payment.Id && m.Quantity > 0).ToListAsync();
+                var policies = new Dictionary<Guid, InventoryCostMethod>();
+                foreach (var product in sourceRows.Select(m => m.ProductId).Distinct()) { policies[product] = (await InventoryCost.Policy(db,actor.Branch,product)).Method; await InventoryCost.GuardDate(db,actor.Branch,product,input.Date); }
+                var averaged = sourceRows.Where(m => policies[m.ProductId] != InventoryCostMethod.Standard).ToList(); var standard = sourceRows.Count != averaged.Count;
+                // Standard-cost lines carry stock at standard; their gross is what the payable exceeds the other lines by.
+                if (sourceRows.Count == 0 || payment.Total != input.NetPurchase+input.TaxPaid || (standard ? averaged.Sum(m => m.Value) >= payment.Total : averaged.Sum(m => m.Value) != payment.Total)) throw new BusinessException("Use a direct receipt whose recorded gross stock value equals the reviewed invoice net plus GST.");
+                // Allowable GST follows each line's share of the gross invoice; a standard-cost share reverses part of the purchase-price variance (5100).
+                decimal allocated = 0, receivedValue = 0; var shares = new Dictionary<Guid, decimal>();
+                for (var i = 0; i < averaged.Count; i++)
                 {
-                    var row = sourceRows[i]; if ((await InventoryCost.Policy(db,actor.Branch,row.ProductId)).Method == InventoryCostMethod.Standard) throw new BusinessException("Standard-cost tax recovery needs its purchase-variance policy; this stock claim supports average/FIFO receipts."); await InventoryCost.GuardDate(db,actor.Branch,row.ProductId,input.Date);
-                    receivedValue += row.Value; var cumulative = i == sourceRows.Count-1 ? input.AllowableTax : AccountingEngine.Money(input.AllowableTax*receivedValue/payment.Total); var value = cumulative-allocated; allocated = cumulative; if (value == 0) continue;
-                    stockChanges.Add(new() { Id = Guid.NewGuid(),Branch = actor.Branch,ProductId = row.ProductId,Location = row.Location,Serial = row.Serial,Batch = row.Batch,Expiry = row.Expiry,Quantity = 0,Value = -value });
+                    receivedValue += averaged[i].Value; var cumulative = i == averaged.Count-1 && !standard ? input.AllowableTax : AccountingEngine.Money(input.AllowableTax*receivedValue/payment.Total);
+                    shares[averaged[i].ProductId] = shares.GetValueOrDefault(averaged[i].ProductId)+cumulative-allocated; allocated = cumulative;
+                }
+                varianceCredit = input.AllowableTax-allocated;
+                // Recovered GST on goods still held reduces their carrying value; GST on goods already issued reduces cost of sales.
+                var current = await db.Movements.AsNoTracking().Where(m => m.Branch == actor.Branch && shares.Keys.Contains(m.ProductId)).ToListAsync();
+                foreach (var (product, share) in shares)
+                {
+                    if (share == 0) continue;
+                    var received = averaged.Where(m => m.ProductId == product).Sum(m => m.Quantity); var stock = current.Where(m => m.ProductId == product).ToList();
+                    var held = Math.Min(Math.Max(stock.Sum(m => m.Quantity),0),received);
+                    var identities = stock.GroupBy(m => new InventoryCost.Identity(m.ProductId,m.Location,m.Serial,m.Batch,m.Expiry)).Select(g => (g.Key, Quantity: g.Sum(m => m.Quantity), Value: g.Sum(m => m.Value))).Where(g => g.Quantity > 0 && g.Value > 0).ToList();
+                    var inventoryPart = Math.Min(held == received ? share : AccountingEngine.Money(share*held/received),identities.Sum(g => g.Value));
+                    // GST per held unit goes first to the units still in the receipt's own stock lines, then to the product's other stock
+                    // (for example goods transferred to another warehouse), spread by quantity and never below a line's book value.
+                    var own = identities.Where(g => averaged.Any(m => m.ProductId == product && m.Location == g.Key.Location && m.Serial == g.Key.Serial && m.Batch == g.Key.Batch && m.Expiry == g.Key.Expiry)).ToList();
+                    var perUnit = held == 0 ? 0 : inventoryPart/held; var remaining = inventoryPart;
+                    foreach (var (tier, limit) in new[] { (own, AccountingEngine.Money(perUnit*Math.Min(own.Sum(g => g.Quantity),held))), (identities.Except(own).ToList(), inventoryPart) })
+                    {
+                        var amount = Math.Min(Math.Min(remaining,limit),tier.Sum(g => g.Value)); var quantity = tier.Sum(g => g.Quantity); decimal assigned = 0;
+                        for (var i = 0; i < tier.Count && amount > 0; i++)
+                        {
+                            var g = tier[i]; var value = Math.Min(g.Value,i == tier.Count-1 ? amount-assigned : AccountingEngine.Money(amount*g.Quantity/quantity)); assigned += value; if (value == 0) continue;
+                            stockChanges.Add(new() { Id = Guid.NewGuid(),Branch = actor.Branch,ProductId = product,Location = g.Key.Location,Serial = g.Key.Serial,Batch = g.Key.Batch,Expiry = g.Key.Expiry,Quantity = 0,Value = -value });
+                        }
+                        remaining -= assigned;
+                    }
+                    inventoryPart -= remaining;
+                    inventoryCredit += inventoryPart; costOfSalesCredit += share-inventoryPart;
                 }
             }
             var claims = (await db.Operations.AsNoTracking().Where(o => o.Branch == actor.Branch && o.Action == "tax.input.claim" && !db.Documents.Any(r => r.Reverses == o.ResultId)).ToListAsync()).Select(o => JsonSerializer.Deserialize<InputTaxCommand>(o.Payload)!).ToArray();
@@ -51,7 +85,9 @@ public sealed partial class ComplianceService
             var doc = new BusinessDocument { Id = Guid.NewGuid(), Branch = actor.Branch, Number = $"{actor.Branch}-{options.Value.Device}-IT-{input.OperationId:N}", Kind = DocumentKind.Journal, BusinessDate = input.Date, Party = input.Supplier.Trim(), Total = input.AllowableTax, Settlement = "Input tax recovery", Detail = JsonSerializer.Serialize(input) };
             db.Documents.Add(doc);
             foreach (var movement in stockChanges) { movement.DocumentId = doc.Id; db.Movements.Add(movement); }
-            db.Journal.AddRange(new JournalLine { Id = Guid.NewGuid(), Branch = actor.Branch, DocumentId = doc.Id, Account = (Account)input.RecoveryAccount, Debit = input.AllowableTax }, new JournalLine { Id = Guid.NewGuid(), Branch = actor.Branch, DocumentId = doc.Id, Account = (Account)input.ExpenseAccount, Credit = input.AllowableTax });
+            db.Journal.Add(new JournalLine { Id = Guid.NewGuid(), Branch = actor.Branch, DocumentId = doc.Id, Account = (Account)input.RecoveryAccount, Debit = input.AllowableTax });
+            if (!input.Stock) db.Journal.Add(new JournalLine { Id = Guid.NewGuid(), Branch = actor.Branch, DocumentId = doc.Id, Account = (Account)input.ExpenseAccount, Credit = input.AllowableTax });
+            else foreach (var (account, amount) in new[] { (Account.Inventory, inventoryCredit), (Account.CostOfSales, costOfSalesCredit), ((Account)5100, varianceCredit) }) if (amount != 0) db.Journal.Add(new JournalLine { Id = Guid.NewGuid(), Branch = actor.Branch, DocumentId = doc.Id, Account = account, Credit = amount });
             return doc.Id;
         });
     }

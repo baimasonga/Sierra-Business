@@ -72,6 +72,8 @@ public interface IComplianceService
     Task<TaxFilingPreview> PreviewTaxFiling(DateOnly from,DateOnly to);
     Task<Guid> RecordTaxFiling(TaxFilingCommand input);
     Task<IReadOnlyList<TaxFilingView>> TaxFilings();
+    Task<Guid> RecordTaxCorrection(TaxCorrectionCommand input);
+    Task<IReadOnlyList<TaxCorrectionView>> TaxCorrections();
     Task<Guid> RecordReliefGrant(TaxReliefGrantCommand input);
     Task<IReadOnlyList<TaxReliefGrantView>> ReliefGrants();
     Task<NetTaxReturnReport> NetTaxReturn(DateOnly from, DateOnly to);

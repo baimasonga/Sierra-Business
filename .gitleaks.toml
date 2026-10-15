@@ -1,0 +1,12 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "jwt"
+
+[[rules.allowlists]]
+description = "Exact synthetic Node-signed offline lease fixture; the private signing key was destroyed."
+condition = "AND"
+paths = ['''(^|/)tests/SierraBusiness\.IntegrationTests/(?:bin/Release/net10\.0/)?Fixtures/node-lease\.json$''']
+regexTarget = "secret"
+regexes = ['''eyJhbGciOiJFZERTQSIsInR5cCI6ImxlYXNlK2p3cyIsImtpZCI6Im5vZGUtdmVjdG9yIn0\.eyJ2IjoxLCJpc3MiOiJ0cnVzdC1wbGF0Zm9ybSIsImF1ZCI6InByb2R1Y3Q6c2llcnJhLWJ1c2luZXNzIiwiaW5zdCI6InRlc3QtaW5zdGFsbGF0aW9uIiwiYWN0IjoiYWN0X3Rlc3QiLCJjbmYiOnsiamt0IjoidGVzdC1kZXZpY2UifSwiaWF0IjoxOTk5OTk5OTAwLCJuYmYiOjE5OTk5OTk5MDAsImV4cCI6MjAwMDAwMzYwMCwicmVmcmVzaF9hZnRlciI6MjAwMDAwMTgwMCwiZW50Ijp7ImJ1c2luZXNzX3dyaXRlIjp0cnVlfX0\.CrcDJv0acTOQju8lW03zYmDvumYUqjKrAR1Iio_f\-rs85FnvmNvCPGudI3GNjmCNPYG41d0o1ub5YTbtvLoHDQ''']

@@ -1,4 +1,4 @@
-param([ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.31.0')
+param([ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.33.0')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $release = Join-Path $root "artifacts/windows/$Version"
@@ -20,13 +20,16 @@ Record 'Unique immutable publish folder' ($staging.Count -eq 1) "Count: $($stagi
 $publish = $staging[0].FullName
 $exe = Join-Path $publish 'SierraBusiness.Maui.exe'
 Record 'Published application version' ((Get-Item -LiteralPath $exe).VersionInfo.ProductVersion.Split('+')[0] -eq $Version) ((Get-Item -LiteralPath $exe).VersionInfo.ProductVersion)
-$required = @('SierraBusiness.Maui.dll', 'coreclr.dll', 'hostfxr.dll', 'wwwroot/branding/rokela-logo.png', 'wwwroot/branding/rokela-icon.png', 'wwwroot/print.js', 'wwwroot/forms.js', 'wwwroot/capture.css', 'OcrData/eng.traineddata', 'x64/tesseract50.dll', 'x64/leptonica-1.82.0.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')
+$required = @('licensing.json', 'SierraBusiness.Maui.dll', 'coreclr.dll', 'hostfxr.dll', 'wwwroot/branding/rokela-logo.png', 'wwwroot/branding/rokela-icon.png', 'wwwroot/print.js', 'wwwroot/forms.js', 'wwwroot/capture.css', 'OcrData/eng.traineddata', 'x64/tesseract50.dll', 'x64/leptonica-1.82.0.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')
 foreach ($file in $required) { Record "Bundled $file" (Test-Path -LiteralPath (Join-Path $publish $file) -PathType Leaf) 'Required offline asset' }
 foreach ($file in @('print.js', 'forms.js', 'app.css')) {
     $sourceHash = (Get-FileHash -LiteralPath (Join-Path $snapshot "src/SierraBusiness.Web/wwwroot/$file") -Algorithm SHA256).Hash
     $publishedHash = (Get-FileHash -LiteralPath (Join-Path $publish "wwwroot/$file") -Algorithm SHA256).Hash
     Record "Published $file matches source" ($sourceHash -eq $publishedHash) $publishedHash
 }
+$sourceLicenseHash = (Get-FileHash -LiteralPath (Join-Path $snapshot 'src/SierraBusiness.Maui/licensing.json') -Algorithm SHA256).Hash
+$publishedLicenseHash = (Get-FileHash -LiteralPath (Join-Path $publish 'licensing.json') -Algorithm SHA256).Hash
+Record 'Published licensing configuration matches source' ($sourceLicenseHash -eq $publishedLicenseHash) $publishedLicenseHash
 $model = (Get-FileHash -LiteralPath (Join-Path $publish 'OcrData/eng.traineddata') -Algorithm SHA256).Hash
 Record 'Offline OCR model checksum' ($model -eq '7D4322BD2A7749724879683FC3912CB542F19906C83BCC1A52132556427170B2') $model
 $privateFiles = @(Get-ChildItem -LiteralPath $publish -Recurse -File | Where-Object { $_.Name -match '\.db($|-)|credentials' })

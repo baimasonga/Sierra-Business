@@ -143,7 +143,7 @@ public sealed class ControlService(IDbContextFactory<BusinessDb> factory, IActor
     }
     private static async Task<(bool Allowed, bool Self)> MayDecide(BusinessDb db, Actor actor, State s, ControlPolicy policy)
     {
-        if (!s.Permissions.All(actor.Permissions.Contains)) return (false, false);
+        if (!s.Permissions.All(actor.CanDemand)) return (false, false);
         if (s.Request.RequestedBy != actor.Id) return (true, false);
         return policy.SelfApprovalWhenAlone && !await Controls.OtherApprover(db, actor.Branch, actor.Id, s.Permissions) ? (true, true) : (false, false);
     }
@@ -213,7 +213,7 @@ public sealed class ControlService(IDbContextFactory<BusinessDb> factory, IActor
         return await Commands.Run(factory, actor, input.OperationId, "approval.note", input, async db =>
         {
             var s = await Load(db, actor, input.RequestId);
-            if (s.Request.RequestedBy != actor.Id && !s.Permissions.All(actor.Permissions.Contains)) throw new UnauthorizedAccessException("Only the requester or an approver can add notes.");
+            if (s.Request.RequestedBy != actor.Id && !s.Permissions.All(actor.CanDemand)) throw new UnauthorizedAccessException("Only the requester or an approver can add notes.");
             var row = new ApprovalNote { Id = Guid.NewGuid(), RequestId = s.Request.Id, Note = Rules.Required(input.Note, "Note", 200), Actor = actor.Id, Time = DateTimeOffset.UtcNow };
             db.ApprovalNotes.Add(row); return row.Id;
         });

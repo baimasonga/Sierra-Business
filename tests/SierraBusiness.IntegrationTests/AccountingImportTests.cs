@@ -10,7 +10,7 @@ public sealed class AccountingImportTests : IAsyncLifetime
 {
     private readonly string path = Path.Combine(Path.GetTempPath(),"rokela-account-import-"+Guid.NewGuid().ToString("N")+".db"); private readonly Session session = new(); private Factory factory = null!; private ImportService imports = null!;
     private readonly DateOnly today = DateOnly.FromDateTime(DateTime.UtcNow);
-    public async Task InitializeAsync() { factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite("Data Source="+path+";Pooling=False").Options); await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db); imports = new(factory,session,Options.Create(new TradingOptions())); }
+    public async Task InitializeAsync() { factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite("Data Source="+path+";Pooling=False").Options); await using (var db = factory.CreateDbContext()) await TestDatabase.MigrateAsync(db); imports = new(factory,session,Options.Create(new TradingOptions())); }
     public Task DisposeAsync() { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); File.Delete(path); return Task.CompletedTask; }
     private async Task<ImportPreview> Validate(ImportType type, params string[][] rows) { var bytes = WorkbookWriter.Write([("Data",rows.Select(r => (IReadOnlyList<string>)r).ToArray())]); var sheet = (await imports.Inspect("onboarding.xlsx",bytes))[0]; return await imports.Validate(new(type,"onboarding.xlsx",bytes,sheet.Name,imports.SuggestMapping(type,sheet.Headers))); }
     [Fact] public async Task PartyAndLedgerPreviewCreatesNothingAndCommitUsesDomainRules()

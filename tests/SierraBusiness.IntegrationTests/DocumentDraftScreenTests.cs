@@ -42,7 +42,7 @@ public sealed class DocumentDraftScreenTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         var factory = new Factory(new DbContextOptionsBuilder<BusinessDb>().UseSqlite($"Data Source={path};Pooling=False").Options);
-        await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db);
+        await using (var db = factory.CreateDbContext()) await TestDatabase.MigrateAsync(db);
         var options = Options.Create(new TradingOptions());
         context.Services.AddSingleton<IDocumentDraftRecovery>(memory);
         context.Services.AddSingleton<IBusinessService>(new BusinessService(factory, options));

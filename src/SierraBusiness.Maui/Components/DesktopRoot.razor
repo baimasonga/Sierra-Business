@@ -4,6 +4,13 @@
 @inject DesktopBackupService Backups
 @inject CompanyDirectory Companies
 @inject CompanyInfo Company
+@inject IServiceProvider Services
+@using Microsoft.Extensions.DependencyInjection
+
+@if (Services.GetService<ILicenseService>() is { } licensing)
+{
+    <LicenseWorkspace Service="licensing" />
+}
 
 @if (companiesOpen)
 {

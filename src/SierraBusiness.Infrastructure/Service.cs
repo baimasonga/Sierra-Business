@@ -32,10 +32,10 @@ public static class ServiceRules
     public const Account WorkInProgress = (Account)1260, Income = (Account)4300, Costs = (Account)5400;
     public static readonly DocumentKind[] StockKinds = [DocumentKind.ServiceIssue, DocumentKind.ServiceReturn, DocumentKind.ServiceClose];
 
-    /// <summary>Customer receivable documents: credit sales, credit service invoices and bounced cheques.</summary>
+    /// <summary>Customer receivable documents: credit sales, credit service invoices, bounced cheques and interest charges.</summary>
     public static IQueryable<BusinessDocument> Receivable(IQueryable<BusinessDocument> documents) =>
-        documents.Where(x => (x.Kind == DocumentKind.Sale || x.Kind == DocumentKind.ServiceInvoice) && x.Settlement == "Credit" || x.Kind == DocumentKind.ChequeBounce);
-    public static bool IsReceivable(BusinessDocument x) => (x.Kind is DocumentKind.Sale or DocumentKind.ServiceInvoice) && x.Settlement == "Credit" || x.Kind == DocumentKind.ChequeBounce;
+        documents.Where(x => (x.Kind == DocumentKind.Sale || x.Kind == DocumentKind.ServiceInvoice) && x.Settlement == "Credit" || x.Kind == DocumentKind.ChequeBounce || x.Kind == DocumentKind.InterestCharge);
+    public static bool IsReceivable(BusinessDocument x) => (x.Kind is DocumentKind.Sale or DocumentKind.ServiceInvoice) && x.Settlement == "Credit" || x.Kind is DocumentKind.ChequeBounce or DocumentKind.InterestCharge;
 
     /// <summary>Credit limit and hold check shared by credit sales and credit service invoices.</summary>
     public static async Task CheckCredit(BusinessDb db, string branch, BusinessParty? customer, string party, decimal amount, CancellationToken ct = default)
@@ -94,7 +94,7 @@ public sealed class ServiceDesk(IDbContextFactory<BusinessDb> factory, IActorSes
     private async Task<Actor> Authorize(bool write = false, params string[] permissions)
     {
         var actor = await session.CurrentActor(); actor.Demand("business.read");
-        if (write && !actor.Permissions.Contains("sales.create") && !actor.Permissions.Contains("inventory.receive")) throw new UnauthorizedAccessException("You cannot change service jobs.");
+        if (write) actor.DemandAny("sales.create", "inventory.receive");
         foreach (var p in permissions) actor.Demand(p);
         if (actor.Branch != Settings.Branch || string.IsNullOrWhiteSpace(actor.Id)) throw new UnauthorizedAccessException("Sign in to the configured branch.");
         return actor;
@@ -465,7 +465,7 @@ public sealed class ServiceDesk(IDbContextFactory<BusinessDb> factory, IActorSes
             if (!Enum.IsDefined(input.Billing)) throw new BusinessException("Choose who pays for this job.");
             var reason = Optional(input.Reason, "Reason", 160);
             var exception = false;
-            var authority = actor.Permissions.Contains("pricing.manage");
+            var authority = actor.CanDemand("pricing.manage");
             switch (input.Billing)
             {
                 case ServiceBilling.Warranty:

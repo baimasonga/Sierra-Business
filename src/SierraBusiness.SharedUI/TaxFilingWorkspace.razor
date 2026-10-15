@@ -14,15 +14,42 @@
 }
 </section>
 <section class="panel"><h2>Recorded GST returns</h2><button class="secondary" disabled="@busy" @onclick="Refresh">Refresh GST records</button><div class="table-wrap"><table><thead><tr><th>Tax period</th><th>Reference</th><th>Recorded</th><th>Net tax</th><th>Credit used</th><th>Paid</th><th>New credit</th></tr></thead><tbody>@foreach (var f in filings) { <tr><td>@f.From — @f.To</td><td>@f.FilingReference</td><td>@f.Recorded</td><td>@f.NetTax.ToString("N2")</td><td>@f.CarryUsed.ToString("N2")</td><td>@f.Paid.ToString("N2")</td><td>@f.NewCredit.ToString("N2")</td></tr> }</tbody></table></div></section>
+@if (filings.Count > 0)
+{
+    <section class="panel"><h2>Corrections to recorded returns</h2><p>A recorded return cannot be changed or reversed. When an amended return or NRA assessment changes a filed month, record the reviewed difference here. It is booked today: additional tax is charged to the chosen income or expense ledger and paid from cash/bank or brought-forward credit, and a reduction becomes carry-forward credit. Penalties and interest go to their own expense ledger.</p>
+    @if (Actor.Permissions.Contains("users.manage") && Actor.Permissions.Contains("accounting.write") && accounts is not null)
+    {
+        <div class="form-grid"><label>Return to correct<select @bind="correctionFiling"><option value="@Guid.Empty">Choose a recorded return</option>@foreach (var f in filings) { <option value="@f.Id">@f.From — @f.To · @f.FilingReference</option> }</select></label><label>Correction or amended-return reference<input maxlength="80" @bind="correctionReference" /></label><label>Correction review reason<input maxlength="200" @bind="correctionReason" /></label>
+        <label>Output GST under-declared (negative if over-declared)<input type="number" step="0.01" @bind="outputChange" /></label><label>Input GST newly allowable (negative if over-claimed)<input type="number" step="0.01" @bind="inputChange" /></label>
+        <label>Book the tax difference to<select @bind="offsetAccount"><option value="0">Choose income or expense ledger</option>@foreach (var a in accounts.Accounts.Where(a => !a.Control && a.Group is LedgerGroup.Expense or LedgerGroup.Income)) { <option value="@a.Code">@a.Code · @a.Name</option> }</select></label>
+        <label>Separate GST carry-forward asset<select @bind="correctionCarry"><option value="0">Choose dedicated carry-forward asset</option>@foreach (var a in accounts.Accounts.Where(a => a.Group == LedgerGroup.Asset && !a.Control && !a.CashOrBank)) { <option value="@a.Code">@a.Code · @a.Name</option> }</select></label><label>Brought-forward credit to use<input type="number" min="0" step="0.01" @bind="correctionCarryUsed" /></label>
+        <label>Penalties and interest<input type="number" min="0" step="0.01" @bind="penalty" /></label><label>Penalty expense ledger<select @bind="penaltyAccount"><option value="0">Choose expense ledger</option>@foreach (var a in accounts.Accounts.Where(a => a.Group == LedgerGroup.Expense && !a.Control)) { <option value="@a.Code">@a.Code · @a.Name</option> }</select></label>
+        <label>Cash/bank for payment<select @bind="correctionBank">@foreach (var a in accounts.Accounts.Where(a => a.CashOrBank)) { <option value="@a.Code">@a.Code · @a.Name</option> }</select></label></div>
+        <p>Net tax change @((outputChange-inputChange).ToString("N2")) · Cash/bank payment @(Math.Max(0,outputChange-inputChange-correctionCarryUsed)+penalty).ToString("N2") · New carry-forward credit @Math.Max(0,inputChange-outputChange).ToString("N2") NLe</p>
+        <button class="primary" disabled="@(busy || correctionFiling == Guid.Empty)" @onclick="RecordCorrection">Record reviewed correction</button>
+    }
+    @if (corrections.Count > 0)
+    {
+        <div class="table-wrap"><table><thead><tr><th>Tax period</th><th>Reference</th><th>Recorded</th><th>Output change</th><th>Input change</th><th>Net change</th><th>Credit used</th><th>Paid</th><th>New credit</th><th>Penalty</th></tr></thead><tbody>@foreach (var c in corrections) { <tr><td>@c.From — @c.To</td><td>@c.CorrectionReference</td><td>@c.Recorded</td><td>@c.OutputTaxChange.ToString("N2")</td><td>@c.InputTaxChange.ToString("N2")</td><td>@c.NetChange.ToString("N2")</td><td>@c.CarryUsed.ToString("N2")</td><td>@c.Paid.ToString("N2")</td><td>@c.NewCredit.ToString("N2")</td><td>@c.Penalty.ToString("N2")</td></tr> }</tbody></table></div>
+    }
+    </section>
+}
 @code {
     [Parameter] public Actor Actor { get; set; } = default!; private bool busy,reconciled; private string error = "",message = "",filingReference = "",reason = ""; private int bank = 1010,carryAccount; private decimal carryUsed; private Guid operation = Guid.NewGuid(); private TaxFilingPreview? preview; private FinanceSnapshot? accounts; private IReadOnlyList<TaxFilingView> filings = [];
     private DateOnly from = new DateOnly(DateTime.UtcNow.Year,DateTime.UtcNow.Month,1).AddMonths(-1),to = new DateOnly(DateTime.UtcNow.Year,DateTime.UtcNow.Month,1).AddDays(-1);
     private decimal declared; private int roundingAccount = 5100;
-    public bool HasDraft => filingReference.Length > 0 || reason.Length > 0 || reconciled || carryUsed != 0;
+    private IReadOnlyList<TaxCorrectionView> corrections = []; private Guid correctionFiling, correctionOperation = Guid.NewGuid(); private string correctionReference = "",correctionReason = "";
+    private decimal outputChange,inputChange,correctionCarryUsed,penalty; private int offsetAccount,correctionCarry,penaltyAccount,correctionBank = 1010;
+    public bool HasDraft => filingReference.Length > 0 || reason.Length > 0 || reconciled || carryUsed != 0 || correctionReference.Length > 0 || correctionReason.Length > 0 || outputChange != 0 || inputChange != 0 || penalty != 0;
     protected override Task OnInitializedAsync() => Refresh();
-    private Task Refresh() => Run(async () => { filings = await Compliance.TaxFilings(); accounts = await Finance.Read(new(2000,1,1),DateOnly.FromDateTime(DateTime.UtcNow)); });
+    private Task Refresh() => Run(async () => { filings = await Compliance.TaxFilings(); corrections = await Compliance.TaxCorrections(); accounts = await Finance.Read(new(2000,1,1),DateOnly.FromDateTime(DateTime.UtcNow)); });
     private void Clear() { preview = null; reconciled = false; }
     private Task Review() => Run(async () => { preview = await Compliance.PreviewTaxFiling(from,to); declared = preview.Report.NetPayable; });
     private Task Record() => Run(async () => { if (preview is null) throw new BusinessException("Review the monthly GST working paper first."); await Compliance.RecordTaxFiling(new(operation,from,to,preview.CalculationFingerprint,filingReference,reason,bank,carryAccount,carryUsed,reconciled,declared,roundingAccount)); operation = Guid.NewGuid(); preview = null; filingReference = reason = ""; carryUsed = 0; reconciled = false; filings = await Compliance.TaxFilings(); message = "Reviewed GST return and settlement recorded. The reporting month is locked."; });
+    private Task RecordCorrection() => Run(async () =>
+    {
+        await Compliance.RecordTaxCorrection(new(correctionOperation,correctionFiling,correctionReference,correctionReason,outputChange,inputChange,offsetAccount,correctionBank,correctionCarry,correctionCarryUsed,penalty,penaltyAccount));
+        correctionOperation = Guid.NewGuid(); correctionReference = correctionReason = ""; outputChange = inputChange = correctionCarryUsed = penalty = 0; corrections = await Compliance.TaxCorrections(); message = "Reviewed GST correction recorded.";
+    });
     private async Task Run(Func<Task> work) { if (busy) return; busy = true; error = message = ""; try { await work(); } catch (Exception e) when (e is BusinessException or UnauthorizedAccessException) { error = e.Message; } catch { error = "The GST record could not complete. Refresh recorded returns before retrying."; } finally { busy = false; } }
 }

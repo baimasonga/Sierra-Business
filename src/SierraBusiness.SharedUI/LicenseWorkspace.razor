@@ -1,0 +1,86 @@
+@using SierraBusiness.Application
+@implements IAsyncDisposable
+<section aria-label="Software license" class="notice">
+    <details>
+        <summary>Software license: @Service.Current.State</summary>
+        <p>Your saved records and backups remain available if your license expires. Offline access lasts until the signed lease expires.</p>
+        @if (Service.Current.ExpiresAt is { } expiry) { <p>Offline expiry (UTC): @expiry.ToString("u")</p> }
+        @if (error.Length > 0) { <p role="alert">@error</p> }
+        @if (Service.Current.State == LicenseState.RefreshRequired)
+        {
+            <p role="alert">A license refresh was interrupted before its result could be saved. Commercial actions resume after the next successful refresh; connect to the internet and choose Refresh license. Records and backups remain available.</p>
+        }
+        @if (Service.Current.State == LicenseState.NotConfigured)
+        {
+            <p role="alert">The publisher must supply this installation's public licensing configuration. Records and backups remain available.</p>
+        }
+        else if (Service.Current.State == LicenseState.NotActivated)
+        {
+            <form @onsubmit="Activate" @onsubmit:preventDefault>
+                <p>Use your licensing platform account, separate from your local business sign-in.</p>
+                <label>Platform email<input type="email" autocomplete="username" required @bind="email" /></label>
+                <label>Platform password<input type="password" autocomplete="current-password" required @bind="password" /></label>
+                <label>Authenticator or recovery code (if enabled)<input autocomplete="one-time-code" @bind="code" /></label>
+                <label>License key<input type="password" autocomplete="off" required @bind="key" /></label>
+                <button class="primary" disabled="@busy">Activate this installation</button>
+            </form>
+        }
+        else
+        {
+            <button class="secondary" disabled="@busy" @onclick="Refresh">Refresh license</button>
+            <label><input type="checkbox" @bind="confirmDeactivate" /> Release this installation's license seat</label>
+            <button class="secondary" disabled="@(busy || !confirmDeactivate)" @onclick="Deactivate">Deactivate</button>
+        }
+        <p role="status">@(busy ? "Contacting the licensing service…" : "")</p>
+    </details>
+</section>
+@code {
+    [Parameter, EditorRequired] public ILicenseService Service { get; set; } = default!;
+    private string email = "", password = "", code = "", key = "", error = "";
+    private bool busy, confirmDeactivate;
+    private readonly CancellationTokenSource stop = new();
+    private Task? polling;
+    protected override async Task OnInitializedAsync()
+    {
+        await Run(() => Service.Check(stop.Token));
+        polling = Poll();
+    }
+    private async Task Poll()
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(1));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(stop.Token))
+            {
+                await InvokeAsync(async () =>
+                {
+                    if (busy) return;
+                    await Run(async () =>
+                    {
+                        var check = await Service.Check(stop.Token);
+                        if (check.State is LicenseState.RefreshRecommended or LicenseState.Expired or LicenseState.RefreshRequired) await Service.Refresh(stop.Token);
+                    });
+                    StateHasChanged();
+                });
+            }
+        }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+    }
+    private async Task Run(Func<Task> action)
+    {
+        if (busy) return;
+        busy = true; error = "";
+        try { await action(); }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+        catch (Exception) { error = "The license could not be updated. Check your platform account, network and license details. Saved records have not been removed."; }
+        finally { busy = false; }
+    }
+    private async Task Activate()
+    {
+        try { await Run(() => Service.Activate(email.Trim(), password, key.Trim(), string.IsNullOrWhiteSpace(code) ? null : code.Trim(), stop.Token)); }
+        finally { password = code = key = ""; }
+    }
+    private Task Refresh() => Run(() => Service.Refresh(stop.Token));
+    private async Task Deactivate() { await Run(() => Service.Deactivate(stop.Token)); confirmDeactivate = false; }
+    public async ValueTask DisposeAsync() { await stop.CancelAsync(); if (polling is not null) await polling; password = code = key = ""; stop.Dispose(); }
+}

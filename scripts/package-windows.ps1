@@ -3,13 +3,15 @@ param(
     [string]$WebView2Installer,
     [string]$InnoCompiler,
     [string]$VisualCppRuntimeDirectory,
-    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.10.0'
+    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '0.33.0'
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $localDotnet = Join-Path $root '.tools\dotnet\dotnet.exe'
 $dotnet = if (Test-Path -LiteralPath $localDotnet) { $localDotnet } else { 'dotnet' }
 $problems = [System.Collections.Generic.List[string]]::new()
+$licenseConfiguration = Join-Path $root 'src/SierraBusiness.Maui/licensing.json'
+if (!(Test-Path -LiteralPath $licenseConfiguration)) { $problems.Add('Supply the approved public licensing.json before packaging a licensed Release build.') }
 if (!$VisualCppRuntimeDirectory) {
     $VisualCppRuntimeDirectory = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\*\*\VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT" -Directory -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
 }
@@ -68,7 +70,8 @@ try {
     New-Item -ItemType Directory -Force $staging,$output | Out-Null
     & $dotnet restore SierraBusiness.sln
     if ($LASTEXITCODE -ne 0) { throw 'Solution restore failed.' }
-    & $dotnet test tests\SierraBusiness.IntegrationTests -c Release --no-restore --blame-crash --blame-hang-timeout 5m --results-directory "artifacts\windows\$Version\tests" --logger "trx;LogFileName=tests.trx" --logger "console;verbosity=normal"
+    # The per-test hang limit must exceed the slowest test's own budget: HalfAYearOfTradingStaysFast's timed steps allow 940 s (15m40s) plus setup.
+    & $dotnet test tests\SierraBusiness.IntegrationTests -c Release --no-restore --blame-crash --blame-hang-timeout 20m --results-directory "artifacts\windows\$Version\tests" --logger "trx;LogFileName=tests.trx" --logger "console;verbosity=normal"
     if ($LASTEXITCODE -ne 0) { throw 'Integration tests failed; no installer will be produced.' }
     & $dotnet run --project tests\SierraBusiness.WindowsCaptureSmoke -c Release
     if ($LASTEXITCODE -ne 0) { throw 'Offline OCR smoke checks failed; no installer will be produced.' }
@@ -86,7 +89,7 @@ try {
         if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { throw 'Visual C++ runtime signature verification failed.' }
         Copy-Item -LiteralPath $runtime.FullName -Destination $staging
     }
-    foreach ($required in @('wwwroot\branding\rokela-logo.png', 'wwwroot\branding\rokela-icon.png', 'wwwroot\print.js', 'wwwroot\forms.js', 'wwwroot\capture.css', 'OcrData\eng.traineddata', 'x64\tesseract50.dll', 'x64\leptonica-1.82.0.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')) {
+    foreach ($required in @('licensing.json', 'wwwroot\branding\rokela-logo.png', 'wwwroot\branding\rokela-icon.png', 'wwwroot\print.js', 'wwwroot\forms.js', 'wwwroot\capture.css', 'OcrData\eng.traineddata', 'x64\tesseract50.dll', 'x64\leptonica-1.82.0.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')) {
         if (!(Test-Path -LiteralPath (Join-Path $staging $required))) { throw "Offline OCR dependency missing: $required" }
     }
     if ((Get-FileHash (Join-Path $staging 'OcrData\eng.traineddata') -Algorithm SHA256).Hash -ne '7D4322BD2A7749724879683FC3912CB542F19906C83BCC1A52132556427170B2') { throw 'English OCR model checksum mismatch.' }

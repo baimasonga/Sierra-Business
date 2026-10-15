@@ -21,8 +21,8 @@ public sealed class SyncScreenTests : IAsyncLifetime
     {
         var hq = new Factory(new DbContextOptionsBuilder<BusinessDb>().UseSqlite($"Data Source={central};Pooling=False").AddInterceptors(new SyncCaptureInterceptor(SyncRole.Central, "HQ")).Options);
         var local = new Factory(new DbContextOptionsBuilder<BusinessDb>().UseSqlite($"Data Source={branch};Pooling=False").AddInterceptors(new SyncCaptureInterceptor(SyncRole.Branch, "FREETOWN")).Options);
-        await using (var db = hq.CreateDbContext()) await HistoryProtection.MigrateAsync(db);
-        await using (var db = local.CreateDbContext()) await HistoryProtection.MigrateAsync(db);
+        await using (var db = hq.CreateDbContext()) await TestDatabase.MigrateAsync(db);
+        await using (var db = local.CreateDbContext()) await TestDatabase.MigrateAsync(db);
         await new BusinessService(hq, Options.Create(new TradingOptions { Branch = "HQ" })).AddProduct(new("owner", "HQ", BusinessPermissions.All.ToHashSet()), new(Guid.NewGuid(), "WID-1", "Widget", "General", "piece", 200, TrackingMode.Quantity, MinimumPrice: 1));
         var server = new SyncServer(hq, Options.Create(new SyncOptions { Role = SyncRole.Central }), Options.Create(new TradingOptions { Branch = "HQ" }));
         var services = new ServiceCollection().AddSingleton<ISyncTransport>(new Direct(server)).BuildServiceProvider();

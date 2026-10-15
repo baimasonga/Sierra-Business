@@ -38,6 +38,31 @@ public static class MauiProgram
         builder.Services.AddSingleton(companies);
         builder.Services.AddSingleton(company);
         builder.Services.AddSierraDesktop(company.DataDirectory);
+        // Release configuration contains only a product code, API origin and pinned PUBLIC lease keys.
+        var licensingFile = Path.Combine(AppContext.BaseDirectory, "licensing.json");
+        var requireLicensing = typeof(MauiProgram).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute), false)
+            .Cast<System.Reflection.AssemblyMetadataAttribute>().Any(a => a.Key == "SierraLicenseRequired" && bool.TryParse(a.Value, out var required) && required);
+        PlatformLicenseOptions? licensing = null;
+        if (File.Exists(licensingFile))
+        {
+            try
+            {
+                licensing = System.Text.Json.JsonSerializer.Deserialize<PlatformLicenseOptions>(File.ReadAllText(licensingFile));
+                if (licensing is null) throw new InvalidOperationException();
+                licensing.Validate();
+            }
+            catch (Exception ex) when (ex is System.Text.Json.JsonException or InvalidOperationException or ArgumentException or FormatException or IOException)
+            { licensing = null; requireLicensing = true; }
+        }
+        if (licensing is not null)
+        {
+            var configuredLicensing = licensing;
+            builder.Services.AddSingleton<PlatformLicenseClient>(sp => new PlatformLicenseClient(configuredLicensing,
+                new WindowsLicenseStore(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SierraBusiness", "Licensing", company.Id.ToString("N")), configuredLicensing.ProductCode),
+                new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(15) }, TimeProvider.System));
+            builder.Services.AddSingleton<SierraBusiness.Application.ILicenseService>(sp => sp.GetRequiredService<PlatformLicenseClient>());
+        }
+        else if (requireLicensing) builder.Services.AddSingleton<SierraBusiness.Application.ILicenseService, SierraBusiness.Application.UnconfiguredLicenseService>();
         builder.Services.AddSingleton<IOfflineDocumentReader, WindowsDocumentReader>();
         builder.Services.AddSingleton(_ => new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(90) });
         builder.Services.AddTransient<OnlineCaptureAssistant>();

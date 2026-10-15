@@ -17,6 +17,8 @@ public static class BusinessEndpoints
         group.MapGet("/compliance/tax-filings",async (IComplianceService service) => await Result(service.TaxFilings));
         group.MapGet("/compliance/tax-filing-preview",async (DateOnly from,DateOnly to,IComplianceService service) => await Result(() => service.PreviewTaxFiling(from,to)));
         group.MapPost("/compliance/tax-filings",async (TaxFilingCommand input,HttpContext context,IAntiforgery antiforgery,IComplianceService service) => { await antiforgery.ValidateRequestAsync(context); return await Result(() => service.RecordTaxFiling(input)); });
+        group.MapGet("/compliance/tax-corrections",async (IComplianceService service) => await Result(service.TaxCorrections));
+        group.MapPost("/compliance/tax-corrections",async (TaxCorrectionCommand input,HttpContext context,IAntiforgery antiforgery,IComplianceService service) => { await antiforgery.ValidateRequestAsync(context); return await Result(() => service.RecordTaxCorrection(input)); });
         group.MapGet("/compliance/input-tax-sources",async (IComplianceService service) => await Result(service.InputTaxSources));
         group.MapGet("/banking/foreign-advances", async (IBankingService service) => await Result(service.ForeignAdvances));
         group.MapPost("/banking/foreign-advances", async (ForeignAdvanceCommand input,HttpContext context,IAntiforgery antiforgery,IBankingService service) => { await antiforgery.ValidateRequestAsync(context); return await Result(() => service.PostForeignAdvance(input)); });
@@ -112,6 +114,7 @@ public static class BusinessEndpoints
         group.MapPost("/finance/scenarios", async (ScenarioCommand input, HttpContext context, IAntiforgery antiforgery, IFinanceService service) => { await antiforgery.ValidateRequestAsync(context); return await Result(() => service.SaveScenario(input)); });
         group.MapPost("/finance/scenarios/project", async (ScenarioProjectionRequest input, IFinanceService service) => await Result(() => service.ProjectScenarios(input.From, input.To, input.Ids))).Produces<ScenarioReport>();
         group.MapPost("/finance/interest", async (InterestRequest input, IFinanceService service) => await Result(() => service.Interest(input))).Produces<InterestReport>();
+        group.MapPost("/finance/interest/charges", async (ChargeInterestCommand input, HttpContext context, IAntiforgery antiforgery, IFinanceService service) => { await antiforgery.ValidateRequestAsync(context); return await Result(() => service.ChargeInterest(input)); });
         group.MapGet("/finance/cash-flow", async (DateOnly from, DateOnly to, IFinanceService service) => await Result(() => service.CashFlow(from, to)));
         group.MapGet("/finance/reconciliation/history", async (IFinanceService service) => await Result(() => service.MatchHistory()));
         group.MapPost("/finance/reconciliation/cancel", async (CancelBankMatchCommand input, HttpContext context, IAntiforgery antiforgery, IFinanceService service) => { await antiforgery.ValidateRequestAsync(context); return await Result(() => service.CancelMatch(input)); });

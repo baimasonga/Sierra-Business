@@ -11,10 +11,10 @@ namespace SierraBusiness.IntegrationTests;
 
 public sealed class AdvancedAccountingScreenTests : IAsyncLifetime
 {
-    private readonly string path = Path.Combine(Path.GetTempPath(), "rokela-analysis-ui-" + Guid.NewGuid().ToString("N") + ".db"); private readonly BunitContext context = new(); private readonly Session session = new(); private FinanceService finance = null!;
+    private readonly string path = Path.Combine(Path.GetTempPath(), "rokela-analysis-ui-" + Guid.NewGuid().ToString("N") + ".db"); private readonly BunitContext context = new(); private readonly Session session = new(); private Factory factory = null!; private FinanceService finance = null!;
     public async Task InitializeAsync()
     {
-        var factory = new Factory(new DbContextOptionsBuilder<BusinessDb>().UseSqlite("Data Source=" + path + ";Pooling=False").Options); await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db);
+        factory = new Factory(new DbContextOptionsBuilder<BusinessDb>().UseSqlite("Data Source=" + path + ";Pooling=False").Options); await using (var db = factory.CreateDbContext()) await TestDatabase.MigrateAsync(db);
         finance = new(factory, session, Options.Create(new TradingOptions())); await finance.CreateLedger(new(Guid.NewGuid(), 6001, "Operating expenses", LedgerGroup.Expense));
         context.Services.AddSingleton<IFinanceService>(finance); context.JSInterop.Mode = JSRuntimeMode.Loose;
     }
@@ -42,8 +42,23 @@ public sealed class AdvancedAccountingScreenTests : IAsyncLifetime
     [Fact] public void ReadOnlyUserCanCalculateInterestButDoesNotSeeWriteControls()
     {
         session.Actor = new("reader", "FREETOWN", new HashSet<string> { "accounting.read" }); var screen = Render(); screen.WaitForAssertion(() => Assert.Contains("Grouped balances", screen.Markup)); Assert.DoesNotContain("Save account group", screen.Markup);
-        Click(screen, "Interest"); Field(screen, "Annual rate percent").Change("10"); Click(screen, "Calculate interest worksheet"); screen.WaitForAssertion(() => Assert.Contains("No bill or journal has been created", screen.Markup));
+        Click(screen, "Interest"); Field(screen, "Annual rate percent").Change("10"); Click(screen, "Calculate interest worksheet"); screen.WaitForAssertion(() => Assert.Contains("Calculating creates no bill or journal", screen.Markup)); Assert.DoesNotContain("Charge selected interest", screen.Markup);
         Click(screen, "Scenarios"); Assert.DoesNotContain("Save non posting scenario", screen.Markup);
+    }
+    [Fact] public async Task OwnerChargesSelectedWorksheetInterestToTheCustomer()
+    {
+        var business = new BusinessService(factory, Options.Create(new TradingOptions())); await TestParties.Register(factory, "School"); var date = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-10);
+        var product = await business.AddProduct(session.Actor, new(Guid.NewGuid(), "INT-UI", "Credit item", "General", "piece", 100, TrackingMode.Quantity, MinimumPrice: 1));
+        await business.Post(session.Actor, new(Guid.NewGuid(), DocumentKind.Receipt, "Supplier", date, [new(product, 10, 50)], null));
+        await business.Post(session.Actor, new(Guid.NewGuid(), DocumentKind.Sale, "School", date, [new(product, 10, 100)], null, DueDate: date));
+        var screen = Render(); screen.WaitForAssertion(() => Assert.Contains("New account group", screen.Markup));
+        Click(screen, "Interest"); Field(screen, "Annual rate percent").Change("36.5"); Click(screen, "Calculate interest worksheet");
+        screen.WaitForAssertion(() => Assert.Contains("Charge selected interest", screen.Markup));
+        screen.Find("input[aria-label^='Charge interest on']").Change(true); Click(screen, "Charge selected interest");
+        screen.WaitForAssertion(() => Assert.Contains("Interest charge posted to School's account", screen.Markup));
+        var today = DateOnly.FromDateTime(DateTime.UtcNow); var income = -(await finance.Read(date, today)).Balances.Single(b => b.Code == 4400).Closing;
+        Assert.True(income > 0); Assert.Contains((await finance.Read(date, today)).Bills, b => b.Party == "School" && b.Outstanding == income);
+        Assert.DoesNotContain("aria-label=\"Charge interest on", screen.Markup);
     }
     private sealed class Session : IActorSession { public Actor Actor = new("owner", "FREETOWN", BusinessPermissions.All.ToHashSet()); public Task<Actor> CurrentActor() => Task.FromResult(Actor); }
     private sealed class Factory(DbContextOptions<BusinessDb> options) : IDbContextFactory<BusinessDb> { public BusinessDb CreateDbContext() => new(options); }

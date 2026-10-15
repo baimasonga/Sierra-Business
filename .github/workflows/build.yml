@@ -13,3 +13,26 @@ jobs:
       - run: dotnet test SierraBusiness.sln --no-build --configuration Release --logger trx
       - run: dotnet workload install maui-windows
       - run: dotnet build src/SierraBusiness.Maui/SierraBusiness.Maui.csproj --configuration Release
+  windows-license:
+    name: Windows licensing and MAUI build
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Test licensing, UI and native DPAPI
+        run: dotnet test tests/SierraBusiness.IntegrationTests/SierraBusiness.IntegrationTests.csproj --configuration Release --filter "FullyQualifiedName~PlatformLicenseTests|FullyQualifiedName~LicenseScreenTests|FullyQualifiedName~LicensedDesktopTests|FullyQualifiedName~WindowsLicenseStoreTests" --logger trx
+      - name: Install Windows MAUI workload
+        run: dotnet workload install maui-windows
+      - name: Supply public licensing content for the native build
+        shell: pwsh
+        run: |
+          $fixture = Get-Content tests/SierraBusiness.IntegrationTests/Fixtures/node-lease.json -Raw | ConvertFrom-Json
+          $configuration = @{ ApiOrigin = 'https://example.test/'; ProductCode = 'sierra-business'; Keys = @(@{ Kid = 'node-vector'; X = $fixture.x }) }
+          $configuration | ConvertTo-Json -Depth 5 | Set-Content src/SierraBusiness.Maui/licensing.json -Encoding utf8
+      - name: Build licensed Windows host
+        run: dotnet build src/SierraBusiness.Maui/SierraBusiness.Maui.csproj --configuration Release

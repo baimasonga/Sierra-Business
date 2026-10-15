@@ -13,7 +13,7 @@ public sealed class InventoryTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite($"Data Source={path};Pooling=False").Options);
-        await using var db = factory.CreateDbContext(); await db.Database.MigrateAsync();
+        await using var db = factory.CreateDbContext(); await TestDatabase.MigrateAsync(db, guarded: false);
         inventory = new(factory, session, Options.Create(new TradingOptions())); business = new(factory, Options.Create(new TradingOptions()));
         product = await business.AddProduct(session.Actor, new(Guid.NewGuid(), "PAPER", "Paper", "Office", "ream", 100, TrackingMode.Quantity, MinimumPrice: .0001m));
         await business.Post(session.Actor, new(Guid.NewGuid(), DocumentKind.Receipt, "Supplier", today, [new(product, 10, 60)], null));

@@ -2409,6 +2409,14 @@ namespace SierraBusiness.Infrastructure.SqlServer.Migrations
                         },
                         new
                         {
+                            Id = 4400,
+                            CashOrBank = false,
+                            Control = true,
+                            Group = 3,
+                            Name = "Interest income"
+                        },
+                        new
+                        {
                             Id = 5000,
                             CashOrBank = false,
                             Control = true,

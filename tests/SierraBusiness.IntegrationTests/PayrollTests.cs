@@ -13,7 +13,7 @@ public sealed class PayrollTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite($"Data Source={path};Pooling=False").Options);
-        await using var db = factory.CreateDbContext(); await db.Database.MigrateAsync(); payroll = new(factory, session, Options.Create(new TradingOptions())); business = new(factory, Options.Create(new TradingOptions()));
+        await using var db = factory.CreateDbContext(); await TestDatabase.MigrateAsync(db, guarded: false); payroll = new(factory, session, Options.Create(new TradingOptions())); business = new(factory, Options.Create(new TradingOptions()));
     }
     public Task DisposeAsync() { File.Delete(path); return Task.CompletedTask; }
     private EmployeeCommand Employee() => new(Guid.NewGuid(), null, 0, "E001", "Test Employee", "Sales", 1000, 200, 150, today.AddYears(-1), null);

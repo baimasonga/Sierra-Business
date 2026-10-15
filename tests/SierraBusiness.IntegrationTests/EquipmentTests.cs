@@ -16,7 +16,7 @@ public sealed class EquipmentTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite($"Data Source={path};Pooling=False").Options);
-        await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db);
+        await using (var db = factory.CreateDbContext()) await TestDatabase.MigrateAsync(db);
         var options = Options.Create(new TradingOptions());
         business = new(factory, options); equipment = new(factory, session, options); returns = new(factory, session, options);
         xray = await business.AddProduct(session.Actor, new(Guid.NewGuid(), "XRAY-M1", "Mobile X-ray unit", "Medical", "unit", 250000, TrackingMode.Serial, MinimumPrice: 1));

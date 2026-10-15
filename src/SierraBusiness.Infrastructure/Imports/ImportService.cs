@@ -230,7 +230,7 @@ public sealed partial class ImportService(IDbContextFactory<BusinessDb> factory,
                     line.Tracking = ParseTracking(line) ?? TrackingMode.Quantity;
                     line.Minimum = ParseNumber(line, "minimum_price", "Minimum price", false);
                     if (line.Minimum is null && line.V("minimum_price").Length == 0) line.Warnings.Add("No minimum price: the product cannot be sold until a manager sets one under Sales controls.");
-                    if (line.Minimum is not null && !actor.Permissions.Contains("pricing.manage")) line.Errors.Add("Setting minimum prices needs the pricing.manage permission. Remove the column or ask a manager to import.");
+                    if (line.Minimum is not null && !actor.CanDemand("pricing.manage")) line.Errors.Add("Setting minimum prices needs the pricing.manage permission. Remove the column or ask a manager to import.");
                     if (line.Minimum > line.Price) line.Warnings.Add("Minimum price is above the selling price.");
                     var barcode = Text(line, "barcode", "Barcode", false, 80)?.ToUpperInvariant();
                     if (barcode is not null)
@@ -296,7 +296,7 @@ public sealed partial class ImportService(IDbContextFactory<BusinessDb> factory,
                     var product = await FindProduct(line);
                     line.Price = ParseNumber(line, "price", "New selling price", false); line.Minimum = ParseNumber(line, "minimum_price", "New minimum price", false);
                     if (line.V("price").Length == 0 && line.V("minimum_price").Length == 0) line.Errors.Add("Give a new selling price, a new minimum price, or both.");
-                    if (line.Minimum is not null && !actor.Permissions.Contains("pricing.manage")) line.Errors.Add("Changing minimum prices needs the pricing.manage permission.");
+                    if (line.Minimum is not null && !actor.CanDemand("pricing.manage")) line.Errors.Add("Changing minimum prices needs the pricing.manage permission.");
                     if (product is not null)
                     {
                         var minimum = line.Minimum ?? policies.Where(x => x.ProductId == product.Id).OrderByDescending(x => x.Version).FirstOrDefault()?.MinimumPrice;

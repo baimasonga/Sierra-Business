@@ -1,5 +1,9 @@
 # Sierra Business OS
 
+**Trust Platform licensing integration:** Windows activation, DPAPI-protected installation identity, signed offline leases, automatic refresh and application permission checks are available. Release builds without approved public licensing configuration preserve records/backups while restricting commercial writes. See [configuration, security boundaries and validation](docs/platform-licensing.md).
+
+**Windows installer 0.33.0 — built 13 October 2026:** [download the GitHub artifact](https://github.com/baimasonga/Sierra-Business/actions/runs/38365554988/artifacts/11799826309). Includes the Trust Platform licensing integration and pinned public verification keys. Full Windows verification, Release packaging tests, offline OCR, native publishing, installer compilation and all 28 release artifact checks passed. The installer is unsigned; physical installation/upgrade acceptance remains pending. See [installation instructions](docs/windows-package.md) and [activation prerequisites](docs/platform-licensing.md).
+
 **Windows release 0.32.0 — verified 11 October 2026:** company period cutovers, inventory costing/valuation and consignment, pre-invoice rejections, cheque layouts/books, reviewed bank-row vouchers, party/ledger/voucher imports and group elimination adjustments are implemented. See [scope and verification](docs/remaining-features-0.32.0.md). The [unsigned installer](artifacts/windows/0.32.0/RokelaBusinessAdmin-Setup-x64.exe) passed 26 artifact checks; 380 full Release tests passed and six live provider tests were skipped. Native visual, physical peripheral and clean-machine acceptance remain unverified.
 
 A Microsoft .NET implementation based on [the supplied engineering specification](docs/engineering-specification.md). This repository contains an initial working vertical slice, not the full production system described in that specification.
@@ -85,9 +89,9 @@ See [notes](docs/production-readiness-0.26.0.md) and the [acceptance checklists]
 
 ### Windows desktop package
 
-The **Windows installer is ready** at `artifacts\windows\0.27.0\SierraBusiness-Setup-x64.exe`. Double-click it to install, open Sierra Business from the Start menu, and create your owner account on first use. Existing users should back up and close the app before updating. The package includes the application runtimes, offline WebView2 prerequisite and English OCR dependencies. It is an unsigned development preview; full clean-machine installation and UI acceptance testing are still outstanding. See [Windows package instructions and status](docs/windows-package.md).
+Download the **Windows installer 0.33.0** from the [completed GitHub package run](https://github.com/baimasonga/Sierra-Business/actions/runs/38365554988/artifacts/11799826309), extract the ZIP and run `artifacts/windows/0.33.0/RokelaBusinessAdmin-Setup-x64.exe`. Create your local owner account on first use, then activate the Trust Platform license for commercial operations. Existing users should back up and close the app before updating. The package includes the application runtimes, offline WebView2 prerequisite and English OCR dependencies. It is unsigned; clean-machine installation and UI acceptance remain outstanding. See [Windows package instructions and status](docs/windows-package.md).
 
-Desktop owners can create integrity-checked backups from the workspace sidebar, including captured originals and review revisions. Backup restoration and permission checks pass in the primary .NET 10 suite (126 tests total). A Windows CI workflow is also prepared to build the native app and installer once this project is hosted in a GitHub repository; it has not yet been run.
+Desktop owners can create integrity-checked backups from the workspace sidebar, including captured originals and review revisions. Backup restoration and permission checks pass in the primary .NET 10 suite (126 tests total). The GitHub Windows workflows now verify the native app and produce the installer; see the latest release evidence above.
 
 ### Browser development host
 

@@ -105,7 +105,7 @@ public sealed class ConsolidationTests
         try
         {
             var factory = new Factory(new DbContextOptionsBuilder<BusinessDb>().UseSqlite("Data Source=" + path + ";Pooling=False").Options);
-            await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db);
+            await using (var db = factory.CreateDbContext()) await TestDatabase.MigrateAsync(db);
             var options = Options.Create(new TradingOptions()); var finance = new FinanceService(factory, session, options); var service = new StatementsService(factory, session, options);
             await finance.CreateLedger(new(Guid.NewGuid(), 6001, "Other income", LedgerGroup.Income));
             await finance.PostVoucher(new(Guid.NewGuid(), VoucherType.Journal, From.AddDays(-1), "Opening", [new(1000, 100, 0), new(3000, 0, 100)], []));

@@ -11,7 +11,7 @@ public sealed class AdvancedAccountingTests : IAsyncLifetime
     private readonly string path = Path.Combine(Path.GetTempPath(), "rokela-advanced-" + Guid.NewGuid().ToString("N") + ".db"); private Factory factory = null!; private FinanceService finance = null!; private BusinessService business = null!; private readonly Session session = new(); private readonly DateOnly today = DateOnly.FromDateTime(DateTime.UtcNow);
     public async Task InitializeAsync()
     {
-        factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite("Data Source=" + path + ";Pooling=False").Options); await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db);
+        factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite("Data Source=" + path + ";Pooling=False").Options); await using (var db = factory.CreateDbContext()) await TestDatabase.MigrateAsync(db);
         var options = Options.Create(new TradingOptions()); finance = new(factory, session, options); business = new(factory, options);
         await finance.CreateLedger(new(Guid.NewGuid(), 6001, "Operating expense", LedgerGroup.Expense)); await finance.CreateLedger(new(Guid.NewGuid(), 6002, "Consulting revenue", LedgerGroup.Income));
     }

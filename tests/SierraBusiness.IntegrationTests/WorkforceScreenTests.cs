@@ -16,7 +16,7 @@ public sealed class WorkforceScreenTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         var factory = new Factory(new DbContextOptionsBuilder<BusinessDb>().UseSqlite("Data Source=" + path + ";Pooling=False").Options);
-        await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db);
+        await using (var db = factory.CreateDbContext()) await TestDatabase.MigrateAsync(db);
         payroll = new(factory, new Session(), Options.Create(new TradingOptions()));
         employee = await payroll.SaveEmployee(new(Guid.NewGuid(), null, 0, "UI-HR", "Test employee", "Admin", 3000, 0, 0, DateOnly.FromDateTime(DateTime.Today).AddYears(-1), null));
         context.Services.AddSingleton<IPayrollService>(payroll); context.JSInterop.Mode = JSRuntimeMode.Loose;
