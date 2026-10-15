@@ -70,7 +70,8 @@ try {
     New-Item -ItemType Directory -Force $staging,$output | Out-Null
     & $dotnet restore SierraBusiness.sln
     if ($LASTEXITCODE -ne 0) { throw 'Solution restore failed.' }
-    & $dotnet test tests\SierraBusiness.IntegrationTests -c Release --no-restore --blame-crash --blame-hang-timeout 5m --results-directory "artifacts\windows\$Version\tests" --logger "trx;LogFileName=tests.trx" --logger "console;verbosity=normal"
+    # The per-test hang limit must exceed the slowest test's own budget: HalfAYearOfTradingStaysFast's timed steps allow 940 s (15m40s) plus setup.
+    & $dotnet test tests\SierraBusiness.IntegrationTests -c Release --no-restore --blame-crash --blame-hang-timeout 20m --results-directory "artifacts\windows\$Version\tests" --logger "trx;LogFileName=tests.trx" --logger "console;verbosity=normal"
     if ($LASTEXITCODE -ne 0) { throw 'Integration tests failed; no installer will be produced.' }
     & $dotnet run --project tests\SierraBusiness.WindowsCaptureSmoke -c Release
     if ($LASTEXITCODE -ne 0) { throw 'Offline OCR smoke checks failed; no installer will be produced.' }
