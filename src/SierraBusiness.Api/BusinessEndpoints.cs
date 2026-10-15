@@ -17,6 +17,8 @@ public static class BusinessEndpoints
         group.MapGet("/compliance/tax-filings",async (IComplianceService service) => await Result(service.TaxFilings));
         group.MapGet("/compliance/tax-filing-preview",async (DateOnly from,DateOnly to,IComplianceService service) => await Result(() => service.PreviewTaxFiling(from,to)));
         group.MapPost("/compliance/tax-filings",async (TaxFilingCommand input,HttpContext context,IAntiforgery antiforgery,IComplianceService service) => { await antiforgery.ValidateRequestAsync(context); return await Result(() => service.RecordTaxFiling(input)); });
+        group.MapGet("/compliance/tax-corrections",async (IComplianceService service) => await Result(service.TaxCorrections));
+        group.MapPost("/compliance/tax-corrections",async (TaxCorrectionCommand input,HttpContext context,IAntiforgery antiforgery,IComplianceService service) => { await antiforgery.ValidateRequestAsync(context); return await Result(() => service.RecordTaxCorrection(input)); });
         group.MapGet("/compliance/input-tax-sources",async (IComplianceService service) => await Result(service.InputTaxSources));
         group.MapGet("/banking/foreign-advances", async (IBankingService service) => await Result(service.ForeignAdvances));
         group.MapPost("/banking/foreign-advances", async (ForeignAdvanceCommand input,HttpContext context,IAntiforgery antiforgery,IBankingService service) => { await antiforgery.ValidateRequestAsync(context); return await Result(() => service.PostForeignAdvance(input)); });

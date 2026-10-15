@@ -31,7 +31,7 @@ This is ongoing source work after the immutable 0.32.0 release. The 0.32.0 insta
 
 ## Still requiring implementation or deeper completion
 
-1. Post-issue inventory input-tax allocation, standard-cost tax treatment, later filed-return corrections and independent jurisdiction acceptance.
+1. ~~Post-issue inventory input-tax allocation, standard-cost tax treatment, later filed-return corrections~~ — implemented 15 October 2026; see [GST completion](gst-completion.md). Independent jurisdiction acceptance remains outstanding.
 2. Retrospective company partitioning, verified physical compaction and coordinated synced-branch period migration.
 3. Ownership/minority-interest consolidation and functional-currency translation; broader transaction-level intercompany matching.
 4. Standard-cost migrations for existing stock and impairment allowance policy.

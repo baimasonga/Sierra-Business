@@ -4,7 +4,7 @@ Source work on 15 October 2026. Completes backlog item 5 ("reviewed billable int
 
 ## Charging interest
 
-1. Open **Advanced accounting → Interest**, enter the agreed annual rate, grace days and day-count basis, keep **Customer receivables** selected and calculate the worksheet. Calculating never posts anything.
+1. Open **Accounting**, choose the **Advanced accounting** view and its **Interest** tab, enter the agreed annual rate, grace days and day-count basis, keep **Customer receivables** selected and calculate the worksheet. Calculating never posts anything.
 2. Users with `accounting.write` see a **Charge** box on each row. Tick the bills to charge for **one customer**, choose the charge date (on or after the worksheet's end date, in an open period) and the payment terms in days.
 3. **Charge selected interest** recalculates the interest on the server. If the amount no longer matches the worksheet (for example because a payment was recorded meanwhile), nothing is posted and you are asked to recalculate.
 
