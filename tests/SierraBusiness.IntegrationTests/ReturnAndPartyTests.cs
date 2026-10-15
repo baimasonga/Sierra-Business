@@ -13,7 +13,7 @@ public sealed class ReturnAndPartyTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite($"Data Source={path};Pooling=False").Options);
-        await using var db = factory.CreateDbContext(); await db.Database.MigrateAsync(); var options = Options.Create(new TradingOptions { TaxRate = .15m });
+        await using var db = factory.CreateDbContext(); await TestDatabase.MigrateAsync(db, guarded: false); var options = Options.Create(new TradingOptions { TaxRate = .15m });
         returns = new(factory, session, options); parties = new(factory, session, options); business = new(factory, options); finance = new(factory, session, options);
         product = await business.AddProduct(session.Actor, new(Guid.NewGuid(), "PAPER", "Paper", "Office", "ream", 100, TrackingMode.Quantity, MinimumPrice: .0001m));
     }

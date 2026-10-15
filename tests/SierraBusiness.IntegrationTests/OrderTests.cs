@@ -13,7 +13,7 @@ public sealed class OrderTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite($"Data Source={path};Pooling=False").Options);
-        await using var db = factory.CreateDbContext(); await db.Database.MigrateAsync(); await TestParties.Register(factory, "School / Supplier", PartyType.Both);
+        await using var db = factory.CreateDbContext(); await TestDatabase.MigrateAsync(db, guarded: false); await TestParties.Register(factory, "School / Supplier", PartyType.Both);
         orders = new(factory, session, Options.Create(new TradingOptions())); business = new(factory, Options.Create(new TradingOptions()));
         product = await business.AddProduct(session.Actor, new(Guid.NewGuid(), "PAPER", "Paper", "Office", "ream", 100, TrackingMode.Quantity, MinimumPrice: .0001m));
     }

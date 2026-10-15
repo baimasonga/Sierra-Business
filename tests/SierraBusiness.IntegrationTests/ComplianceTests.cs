@@ -20,7 +20,7 @@ public sealed class ComplianceTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite($"Data Source={path};Pooling=False").Options);
-        await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db);
+        await using (var db = factory.CreateDbContext()) await TestDatabase.MigrateAsync(db);
         options = Options.Create(new TradingOptions());
         business = new(factory, options); returns = new(factory, session, options); periods = new(factory, session, options);
         await periods.SetTax(new(Guid.NewGuid(), today.AddDays(-20), .15m, "GST 15%"));

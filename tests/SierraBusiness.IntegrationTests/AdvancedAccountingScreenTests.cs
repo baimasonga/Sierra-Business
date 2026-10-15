@@ -14,7 +14,7 @@ public sealed class AdvancedAccountingScreenTests : IAsyncLifetime
     private readonly string path = Path.Combine(Path.GetTempPath(), "rokela-analysis-ui-" + Guid.NewGuid().ToString("N") + ".db"); private readonly BunitContext context = new(); private readonly Session session = new(); private FinanceService finance = null!;
     public async Task InitializeAsync()
     {
-        var factory = new Factory(new DbContextOptionsBuilder<BusinessDb>().UseSqlite("Data Source=" + path + ";Pooling=False").Options); await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db);
+        var factory = new Factory(new DbContextOptionsBuilder<BusinessDb>().UseSqlite("Data Source=" + path + ";Pooling=False").Options); await using (var db = factory.CreateDbContext()) await TestDatabase.MigrateAsync(db);
         finance = new(factory, session, Options.Create(new TradingOptions())); await finance.CreateLedger(new(Guid.NewGuid(), 6001, "Operating expenses", LedgerGroup.Expense));
         context.Services.AddSingleton<IFinanceService>(finance); context.JSInterop.Mode = JSRuntimeMode.Loose;
     }

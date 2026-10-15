@@ -29,7 +29,7 @@ public sealed class ProductionReadinessTests(ITestOutputHelper output)
         var builder = new DbContextOptionsBuilder<BusinessDb>().UseSqlite($"Data Source={path};Pooling=False");
         if (sync) builder.AddInterceptors(new SyncCaptureInterceptor(SyncRole.Branch, "FREETOWN"));
         var factory = new Factory(builder.Options);
-        await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db);
+        await using (var db = factory.CreateDbContext()) await TestDatabase.MigrateAsync(db);
         return (factory, path);
     }
     private static void Delete(params string[] paths) { SqliteConnection.ClearAllPools(); foreach (var p in paths) if (File.Exists(p)) File.Delete(p); }

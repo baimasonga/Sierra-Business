@@ -18,7 +18,7 @@ public sealed class SmallerGapsTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite($"Data Source={path};Pooling=False").Options);
-        await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db);
+        await using (var db = factory.CreateDbContext()) await TestDatabase.MigrateAsync(db);
         options = Options.Create(new TradingOptions()); business = new(factory, options);
         widget = await business.AddProduct(session.Actor, new(Guid.NewGuid(), "WID-1", "Widget", "Medical", "piece", 200, TrackingMode.Quantity, MinimumPrice: 180));
     }

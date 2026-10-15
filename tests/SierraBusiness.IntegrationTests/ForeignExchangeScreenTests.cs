@@ -14,7 +14,7 @@ public sealed class ForeignExchangeScreenTests : IAsyncLifetime
     private readonly string path = Path.Combine(Path.GetTempPath(), "rokela-fx-ui-" + Guid.NewGuid().ToString("N") + ".db"); private readonly BunitContext context = new(); private readonly Session session = new(); private PurchasingService fx = null!; private BusinessService business = null!; private FinanceService finance = null!; private Guid product; private readonly DateOnly today = DateOnly.FromDateTime(DateTime.UtcNow);
     public async Task InitializeAsync()
     {
-        var factory = new Factory(new DbContextOptionsBuilder<BusinessDb>().UseSqlite("Data Source=" + path + ";Pooling=False").Options); await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db); await TestParties.Register(factory, "School");
+        var factory = new Factory(new DbContextOptionsBuilder<BusinessDb>().UseSqlite("Data Source=" + path + ";Pooling=False").Options); await using (var db = factory.CreateDbContext()) await TestDatabase.MigrateAsync(db); await TestParties.Register(factory, "School");
         var options = Options.Create(new TradingOptions()); fx = new(factory, session, options); finance = new(factory, session, options); business = new(factory, options);
         await fx.SetRate(new(Guid.NewGuid(), "USD", today.AddDays(-1), 20, "Training reference")); product = await business.AddProduct(session.Actor, new(Guid.NewGuid(), "FX-UI", "Invoice item", "General", "piece", 200, TrackingMode.Quantity, MinimumPrice: 100)); await business.Post(session.Actor, new(Guid.NewGuid(), DocumentKind.Receipt, "Supplier", today.AddDays(-1), [new(product, 2, 100)], null));
         await finance.CreateLedger(new(Guid.NewGuid(), 6010, "USD bank", LedgerGroup.Asset, true));

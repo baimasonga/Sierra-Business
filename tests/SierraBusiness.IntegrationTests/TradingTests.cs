@@ -17,7 +17,7 @@ public sealed class TradingTests : IAsyncLifetime
     {
         factory = new(new DbContextOptionsBuilder<BusinessDb>().UseSqlite($"Data Source={path};Pooling=False").Options);
         await using var db = factory.CreateDbContext();
-        await db.Database.MigrateAsync();
+        await TestDatabase.MigrateAsync(db, guarded: false);
         service = new(factory, Options.Create(new TradingOptions()));
     }
     public Task DisposeAsync() { File.Delete(path); return Task.CompletedTask; }
@@ -105,7 +105,7 @@ public sealed class TradingTests : IAsyncLifetime
     [Fact] public async Task MigrationIsRepeatableAndPreservesUnsyncedWork()
     {
         var p = await Product(); await service.Post(owner, Receipt(p));
-        await using var db = factory.CreateDbContext(); await db.Database.MigrateAsync();
+        await using var db = factory.CreateDbContext(); await TestDatabase.MigrateAsync(db, guarded: false);
         Assert.Equal(2, await db.Operations.CountAsync()); Assert.Empty(await db.Database.GetPendingMigrationsAsync());
         Assert.False(db.Database.HasPendingModelChanges());
     }
