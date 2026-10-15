@@ -1,9 +1,12 @@
 using System.Text.Json;
+using Bunit;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using SierraBusiness.Application;
 using SierraBusiness.Domain;
 using SierraBusiness.Infrastructure;
+using SierraBusiness.SharedUI;
 using Xunit;
 namespace SierraBusiness.IntegrationTests;
 
@@ -105,6 +108,82 @@ public sealed class ComplianceTests : IAsyncLifetime
     }
     private async Task<BusinessDocument> Doc(Guid id) { await using var db = factory.CreateDbContext(); return await db.Documents.AsNoTracking().SingleAsync(x => x.Id == id); }
     private static decimal Field(BusinessDocument d, string name) => JsonDocument.Parse(d.Detail).RootElement.GetProperty(name).GetDecimal();
+    [Fact] public async Task StockInputTaxAfterSomeGoodsAreSoldSplitsBetweenStockAndCostOfSales()
+    {
+        var service = Compliance(); await service.SaveProfile(new(Guid.NewGuid(),new(LegalName:"Stock tax company",TaxRegistered:true,Identifiers:[new("TIN","123456")]))); var finance = new FinanceService(factory,session,options); await finance.CreateLedger(new(Guid.NewGuid(),6401,"Input GST recovery",LedgerGroup.Asset));
+        var item = await business.AddProduct(session.Actor,new(Guid.NewGuid(),"GST-ITEM","Taxed stock item","General","piece",300,TrackingMode.Quantity,MinimumPrice:1));
+        var receipt = await business.Post(session.Actor,new(Guid.NewGuid(),DocumentKind.Receipt,"Tax supplier",today,[new(item,10,115)],null));
+        await business.Post(session.Actor,new(Guid.NewGuid(),DocumentKind.Sale,"Walk-in",today,[new(item,4,300)],PaymentMethod.Cash));
+        async Task<decimal> StockValue() => (await business.Read(session.Actor)).Stock.Where(s => s.ProductId == item).Sum(s => s.Value);
+        async Task<decimal> Ledger(int code) => (await finance.Read(today,today)).Balances.Single(a => a.Code == code).Closing;
+        var stock = await StockValue(); var cost = await Ledger(5000); Assert.Equal(690,stock);
+        // GST 150 on 10 units: 6 still held reduce stock by 90, the 4 sold reduce cost of sales by 60.
+        var id = await service.RecordInputTax(new(Guid.NewGuid(),receipt,today,"Tax supplier","TIN-SUP","GST-INV-SOLD",false,1000,150,150,1200,6401,"Reviewed stock invoice after part sale",true));
+        Assert.Equal(600,await StockValue()); Assert.Equal(cost-60,await Ledger(5000)); Assert.Equal(150,await Ledger(6401)); Assert.Equal(10,(await business.Read(session.Actor)).Stock.Where(s => s.ProductId == item).Sum(s => s.Quantity)+4);
+        await business.Reverse(session.Actor,new(Guid.NewGuid(),id,"Correct allowable-tax review")); Assert.Equal(690,await StockValue()); Assert.Equal(cost,await Ledger(5000)); Assert.Equal(0,await Ledger(6401)); await Verified();
+    }
+    [Fact] public async Task StockInputTaxFollowsGoodsTransferredToAnotherWarehouse()
+    {
+        var service = Compliance(); await service.SaveProfile(new(Guid.NewGuid(),new(LegalName:"Stock tax company",TaxRegistered:true,Identifiers:[new("TIN","123456")]))); var finance = new FinanceService(factory,session,options); await finance.CreateLedger(new(Guid.NewGuid(),6401,"Input GST recovery",LedgerGroup.Asset));
+        var inventory = new InventoryService(factory,session,options); await inventory.CreateLocation(new(Guid.NewGuid(),"SECOND","Second warehouse"));
+        var item = await business.AddProduct(session.Actor,new(Guid.NewGuid(),"GST-MOVED","Moved taxed item","General","piece",300,TrackingMode.Quantity,MinimumPrice:1));
+        var receipt = await business.Post(session.Actor,new(Guid.NewGuid(),DocumentKind.Receipt,"Tax supplier",today,[new(item,10,115)],null));
+        await inventory.Transfer(new(Guid.NewGuid(),item,"MAIN","SECOND",9,null,null,null,"Move most stock"));
+        var cost = (await finance.Read(today,today)).Balances.Single(a => a.Code == 5000).Closing;
+        await service.RecordInputTax(new(Guid.NewGuid(),receipt,today,"Tax supplier","TIN-SUP","GST-INV-MOVED",false,1000,150,150,1200,6401,"Reviewed stock invoice after transfer",true));
+        var stock = (await business.Read(session.Actor)).Stock.Where(s => s.ProductId == item).ToList();
+        Assert.Equal(1000,stock.Sum(s => s.Value)); Assert.Equal(100,stock.Single(s => s.Location == "MAIN").Value); Assert.Equal(900,stock.Single(s => s.Location == "SECOND").Value);
+        Assert.Equal(cost,(await finance.Read(today,today)).Balances.Single(a => a.Code == 5000).Closing); await Verified();
+    }
+    [Fact] public async Task StandardCostStockInputTaxReducesPurchaseVarianceNotStandardValue()
+    {
+        var service = Compliance(); await service.SaveProfile(new(Guid.NewGuid(),new(LegalName:"Standard cost company",TaxRegistered:true,Identifiers:[new("TIN","123456")]))); var finance = new FinanceService(factory,session,options); await finance.CreateLedger(new(Guid.NewGuid(),6401,"Input GST recovery",LedgerGroup.Asset));
+        var item = await business.AddProduct(session.Actor,new(Guid.NewGuid(),"STD-GST","Standard taxed item","General","piece",300,TrackingMode.Quantity,MinimumPrice:1));
+        await new InventoryService(factory,session,options).SetCostPolicy(new(Guid.NewGuid(),item,0,InventoryCostMethod.Standard,80,today,"Initial standard cost"));
+        var receipt = await business.Post(session.Actor,new(Guid.NewGuid(),DocumentKind.Receipt,"Tax supplier",today,[new(item,10,115)],null));
+        async Task<decimal> Ledger(int code) => (await finance.Read(today,today)).Balances.Single(a => a.Code == code).Closing;
+        var variance = await Ledger(5100); Assert.Equal(800,(await business.Read(session.Actor)).Stock.Where(s => s.ProductId == item).Sum(s => s.Value));
+        await service.RecordInputTax(new(Guid.NewGuid(),receipt,today,"Tax supplier","TIN-SUP","GST-INV-STD",false,1000,150,150,1200,6401,"Reviewed standard-cost invoice",true));
+        Assert.Equal(800,(await business.Read(session.Actor)).Stock.Where(s => s.ProductId == item).Sum(s => s.Value)); Assert.Equal(variance-150,await Ledger(5100)); Assert.Equal(150,await Ledger(6401)); await Verified();
+    }
+    [Fact] public async Task RecordedReturnCorrectionsSettleOrCreditTheDifferenceAndAreImmutable()
+    {
+        var service = Compliance(); await service.SaveProfile(new(Guid.NewGuid(),new(LegalName:"GST filer",TaxRegistered:true,Identifiers:[new("TIN","123456")]))); var finance = new FinanceService(factory,session,options);
+        await finance.CreateLedger(new(Guid.NewGuid(),6501,"GST carry forward",LedgerGroup.Asset)); await finance.CreateLedger(new(Guid.NewGuid(),6502,"GST penalties",LedgerGroup.Expense));
+        var to = new DateOnly(today.Year,today.Month,1).AddDays(-1); var from = new DateOnly(to.Year,to.Month,1); await MixedSale(to);
+        var preview = await service.PreviewTaxFiling(from,to); var filing = await service.RecordTaxFiling(new(Guid.NewGuid(),from,to,preview.CalculationFingerprint,"NRA-1","Reconciled",1010,6501,0,true));
+        async Task<decimal> Ledger(int code) => (await finance.Read(from,today)).Balances.Single(a => a.Code == code).Closing;
+        var bank = await Ledger(1010); var expense = await Ledger(5100);
+        var underDeclared = new TaxCorrectionCommand(Guid.NewGuid(),filing,"NRA-1-AMEND","Zero-rated sale was standard-rated",30,0,5100,1010,6501,0,5,6502);
+        var paid = await service.RecordTaxCorrection(underDeclared); Assert.Equal(paid,await service.RecordTaxCorrection(underDeclared));
+        Assert.Equal(bank-35,await Ledger(1010)); Assert.Equal(expense+30,await Ledger(5100)); Assert.Equal(5,await Ledger(6502));
+        await service.RecordTaxCorrection(new(Guid.NewGuid(),filing,"NRA-1-INPUT","Customs GST receipt found after filing",0,20,5100,1010,6501,0));
+        Assert.Equal(20,await Ledger(6501)); Assert.Equal(expense+10,await Ledger(5100));
+        await Assert.ThrowsAsync<BusinessException>(() => service.RecordTaxCorrection(underDeclared with { OperationId = Guid.NewGuid() }));
+        await Assert.ThrowsAsync<BusinessException>(() => service.RecordTaxCorrection(underDeclared with { OperationId = Guid.NewGuid(),CorrectionReference = "OVER-CREDIT",CarryCreditUsed = 25 }));
+        await Assert.ThrowsAsync<BusinessException>(() => service.RecordTaxCorrection(underDeclared with { OperationId = Guid.NewGuid(),CorrectionReference = "NO-FILING",FilingId = Guid.NewGuid() }));
+        await finance.CreateLedger(new(Guid.NewGuid(),6401,"Input GST recovery",LedgerGroup.Asset)); await finance.PostVoucher(new(Guid.NewGuid(),VoucherType.Journal,today,"Unfiled input claim",[new(6401,50,0),new(5100,0,50)],[]));
+        await Assert.ThrowsAsync<BusinessException>(() => service.RecordTaxCorrection(underDeclared with { OperationId = Guid.NewGuid(),CorrectionReference = "WRONG-CARRY",CarryAccount = 6401,CarryCreditUsed = 30,Penalty = 0 }));
+        await Assert.ThrowsAsync<BusinessException>(() => business.Reverse(session.Actor,new(Guid.NewGuid(),paid,"Corrections cannot be erased")));
+        var corrections = await service.TaxCorrections(); Assert.Equal(2,corrections.Count); Assert.All(corrections,c => Assert.Equal((from,to),(c.From,c.To)));
+        Assert.Equal(30,corrections.Single(c => c.CorrectionReference == "NRA-1-AMEND").Paid); Assert.Equal(20,corrections.Single(c => c.CorrectionReference == "NRA-1-INPUT").NewCredit); await Verified();
+    }
+    [Fact] public async Task OwnerRecordsAReturnCorrectionFromTheGstScreen()
+    {
+        var service = Compliance(); await service.SaveProfile(new(Guid.NewGuid(),new(LegalName:"GST filer",TaxRegistered:true,Identifiers:[new("TIN","123456")]))); var finance = new FinanceService(factory,session,options);
+        await finance.CreateLedger(new(Guid.NewGuid(),6501,"GST carry forward",LedgerGroup.Asset));
+        var to = new DateOnly(today.Year,today.Month,1).AddDays(-1); var from = new DateOnly(to.Year,to.Month,1); await MixedSale(to);
+        var preview = await service.PreviewTaxFiling(from,to); var filing = await service.RecordTaxFiling(new(Guid.NewGuid(),from,to,preview.CalculationFingerprint,"NRA-UI","Reconciled",1010,6501,0,true));
+        using var context = new BunitContext(); context.JSInterop.Mode = JSRuntimeMode.Loose; context.Services.AddSingleton<IComplianceService>(service); context.Services.AddSingleton<IFinanceService>(finance);
+        var screen = context.Render<TaxFilingWorkspace>(p => p.Add(c => c.Actor,session.Actor));
+        screen.WaitForAssertion(() => Assert.Contains("Corrections to recorded returns",screen.Markup));
+        AngleSharp.Dom.IElement Field(string label) => screen.FindAll("label").First(l => l.TextContent.Trim().StartsWith(label,StringComparison.Ordinal)).QuerySelector("input,select")!;
+        Field("Return to correct").Change(filing.ToString()); Field("Correction or amended-return reference").Change("NRA-UI-AMEND"); Field("Correction review reason").Change("Amended after NRA review");
+        Field("Output GST under-declared").Change("12.50"); Field("Book the tax difference to").Change("5100");
+        screen.FindAll("button").Single(b => b.TextContent.Trim() == "Record reviewed correction").Click();
+        screen.WaitForAssertion(() => Assert.Contains("Reviewed GST correction recorded",screen.Markup)); Assert.Contains("NRA-UI-AMEND",screen.Markup);
+        Assert.Equal(12.50m,Assert.Single(await service.TaxCorrections()).Paid);
+    }
     private Task<Guid> MixedSale(DateOnly date) => business.Post(session.Actor, new(Guid.NewGuid(), DocumentKind.Sale, "Connaught Hospital", date, [new(widget, 1, 200), new(drug, 2, 50), new(food, 1, 100)], PaymentMethod.Cash));
     private async Task Verified() { await using var db = factory.CreateDbContext(); var report = await HistoryProtection.Verify(db); Assert.True(report.Ok, string.Join("; ", report.Problems)); }
 

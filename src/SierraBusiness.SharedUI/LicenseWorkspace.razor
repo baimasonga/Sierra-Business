@@ -6,6 +6,10 @@
         <p>Your saved records and backups remain available if your license expires. Offline access lasts until the signed lease expires.</p>
         @if (Service.Current.ExpiresAt is { } expiry) { <p>Offline expiry (UTC): @expiry.ToString("u")</p> }
         @if (error.Length > 0) { <p role="alert">@error</p> }
+        @if (Service.Current.State == LicenseState.RefreshRequired)
+        {
+            <p role="alert">A license refresh was interrupted before its result could be saved. Commercial actions resume after the next successful refresh; connect to the internet and choose Refresh license. Records and backups remain available.</p>
+        }
         @if (Service.Current.State == LicenseState.NotConfigured)
         {
             <p role="alert">The publisher must supply this installation's public licensing configuration. Records and backups remain available.</p>
@@ -54,7 +58,7 @@
                     await Run(async () =>
                     {
                         var check = await Service.Check(stop.Token);
-                        if (check.State is LicenseState.RefreshRecommended or LicenseState.Expired) await Service.Refresh(stop.Token);
+                        if (check.State is LicenseState.RefreshRecommended or LicenseState.Expired or LicenseState.RefreshRequired) await Service.Refresh(stop.Token);
                     });
                     StateHasChanged();
                 });

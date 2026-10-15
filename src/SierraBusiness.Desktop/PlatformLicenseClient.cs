@@ -24,11 +24,13 @@ public sealed record PlatformLicenseOptions(Uri ApiOrigin, string ProductCode, L
 /// <summary>One instance per company process. All identity, lease and clock updates share one durable checkpoint.</summary>
 public sealed class PlatformLicenseClient(PlatformLicenseOptions options, ILicenseStore store, HttpClient http, TimeProvider clock) : ILicenseService
 {
-    private sealed record Checkpoint(string Installation, string PrivateKey, string? Activation = null, string? Lease = null, DateTimeOffset? LastSeen = null);
+    /// <param name="RefreshPending">Written before the licensing service is asked to refresh and cleared with its answer. If a revocation
+    /// arrives but cannot be saved, the marker survives a restart and the stored lease is not trusted until a refresh succeeds.</param>
+    private sealed record Checkpoint(string Installation, string PrivateKey, string? Activation = null, string? Lease = null, DateTimeOffset? LastSeen = null, bool RefreshPending = false);
     private readonly SemaphoreSlim gate = new(1, 1);
     private Checkpoint? state;
     private DateTimeOffset? observed;
-    private bool storageFault;
+    private bool storageFault, refreshing;
     private readonly object stateLock = new();
     public PlatformLicenseOptions Options => options;
     public LicenseCheck Current
@@ -39,6 +41,7 @@ public sealed class PlatformLicenseClient(PlatformLicenseOptions options, ILicen
             {
                 if (storageFault) return new(LicenseState.Invalid);
                 if (state?.Lease is null) return new(LicenseState.NotActivated);
+                if (state.RefreshPending && !refreshing) return new(LicenseState.RefreshRequired);
                 using var key = Import(state);
                 var now = clock.GetUtcNow();
                 var highWater = observed is { } seen && (state.LastSeen is null || seen > state.LastSeen) ? observed : state.LastSeen;
@@ -97,6 +100,7 @@ public sealed class PlatformLicenseClient(PlatformLicenseOptions options, ILicen
         }
         lock (stateLock) { state = checkpoint; storageFault = false; }
     }
+    private static readonly TimeSpan PersistInterval = TimeSpan.FromSeconds(60);
     private async Task ObserveClock(CancellationToken cancellationToken)
     {
         var now = clock.GetUtcNow();
@@ -105,7 +109,8 @@ public sealed class PlatformLicenseClient(PlatformLicenseOptions options, ILicen
             if (observed > now) now = observed.Value;
             if (state!.LastSeen > now) now = state.LastSeen.Value;
         }
-        if (storageFault || state!.LastSeen is null || now > state.LastSeen) await Save(state! with { LastSeen = now }, cancellationToken);
+        // The in-memory watermark covers this session; persisting it once per rollback tolerance (60 s) avoids a forced disk flush on every call.
+        if (storageFault || state!.LastSeen is null || now > state.LastSeen.Value.Add(PersistInterval)) await Save(state! with { LastSeen = now }, cancellationToken);
     }
     public async Task<LicenseCheck> Check(CancellationToken cancellationToken = default)
     {
@@ -141,7 +146,7 @@ public sealed class PlatformLicenseClient(PlatformLicenseOptions options, ILicen
         lock (stateLock) highWater = observed is { } seen && (state!.LastSeen is null || seen > state.LastSeen) ? observed : state!.LastSeen;
         var check = LicenseProtocol.Verify(lease, options.Keys, options.ProductCode, state!.Installation, Thumbprint(key), clock.GetUtcNow(), highWater, activation);
         if (!check.Usable || string.IsNullOrWhiteSpace(activation)) throw new CryptographicException("The licensing service returned an unusable signed lease.");
-        await Save(state with { Lease = lease, Activation = activation, LastSeen = clock.GetUtcNow() > state.LastSeen.GetValueOrDefault() ? clock.GetUtcNow() : state.LastSeen }, cancellationToken);
+        await Save(state with { Lease = lease, Activation = activation, RefreshPending = false, LastSeen = clock.GetUtcNow() > state.LastSeen.GetValueOrDefault() ? clock.GetUtcNow() : state.LastSeen }, cancellationToken);
         return check;
     }
     public async Task<LicenseCheck> Activate(string email, string password, string licenseKey, string? mfaCode = null, CancellationToken cancellationToken = default)
@@ -167,15 +172,27 @@ public sealed class PlatformLicenseClient(PlatformLicenseOptions options, ILicen
         {
             await Load(cancellationToken);
             if (state!.Activation is null) return Current;
-            using var key = Import(state);
-            var proof = await Proof("refresh", state.Activation, key, cancellationToken);
+            // Durable before the service is asked, so an answer that cannot be saved is never forgotten across a restart.
+            // A marker left by an earlier run stays until the service answers: it may stand for a revocation that could not be saved.
+            var marked = !state.RefreshPending; if (marked) await Save(state with { RefreshPending = true }, cancellationToken);
+            lock (stateLock) refreshing = true;
             try
             {
-                using var grant = await Post("/v1/licenses/refresh", new { activation_id = state.Activation, installation_id = state.Installation, nonce = proof.Nonce, signature = proof.Signature }, null, cancellationToken);
-                return await Accept(grant.RootElement, key, cancellationToken);
+                using var key = Import(state);
+                var proof = await Proof("refresh", state.Activation, key, cancellationToken);
+                JsonDocument grant;
+                try { grant = await Post("/v1/licenses/refresh", new { activation_id = state.Activation, installation_id = state.Installation, nonce = proof.Nonce, signature = proof.Signature }, null, cancellationToken); }
+                catch (HttpRequestException ex) when (ex.StatusCode is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.NotFound)
+                { await Save(state with { Lease = null, Activation = null, RefreshPending = false }, cancellationToken); throw; }
+                using (grant) return await Accept(grant.RootElement, key, cancellationToken);
             }
-            catch (HttpRequestException ex) when (ex.StatusCode is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.NotFound)
-            { await Save(state with { Lease = null, Activation = null }, cancellationToken); throw; }
+            catch (Exception) when (marked && state.RefreshPending && state.Activation is not null)
+            {
+                // No authoritative answer (offline, timeout, bad response): the stored lease stays trusted.
+                try { await Save(state with { RefreshPending = false }, cancellationToken); } catch (Exception) when (storageFault) { }
+                throw;
+            }
+            finally { lock (stateLock) refreshing = false; }
         }
         finally { gate.Release(); }
     }

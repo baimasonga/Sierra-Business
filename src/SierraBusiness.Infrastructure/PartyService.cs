@@ -82,7 +82,7 @@ public sealed class PartyService(IDbContextFactory<BusinessDb> factory, IActorSe
     {
         DocumentKind.Sale => "Sales invoice", DocumentKind.ServiceInvoice => "Service invoice", DocumentKind.MoneyReceipt => "Payment received", DocumentKind.Payment => "Payment made",
         DocumentKind.SalesReturn => "Credit note (return)", DocumentKind.PurchaseReturn => "Debit note (return)", DocumentKind.Receipt => "Goods received", DocumentKind.SupplierInvoice => "Supplier invoice",
-        DocumentKind.ChequeBounce => "Bounced cheque", DocumentKind.ChequeReceipt => "Cheque received", DocumentKind.CustomerCreditUse => "Credit applied", DocumentKind.SupplierCreditUse => "Supplier credit applied",
+        DocumentKind.ChequeBounce => "Bounced cheque", DocumentKind.InterestCharge => "Interest charge", DocumentKind.ChequeReceipt => "Cheque received", DocumentKind.CustomerCreditUse => "Credit applied", DocumentKind.SupplierCreditUse => "Supplier credit applied",
         DocumentKind.Reversal => "Reversal", DocumentKind.Journal => "Journal adjustment", DocumentKind.LandedCost => "Landed cost", _ => d.Kind.ToString()
     } + (d.Settlement.Length > 0 && d.Kind is DocumentKind.Sale or DocumentKind.ServiceInvoice ? $" ({d.Settlement})" : "");
     private static string Short(string number) { var parts = number.Split('-'); return parts.Length >= 3 && parts[^1].Length > 8 ? $"{parts[^2]}-{parts[^1][^8..].ToUpperInvariant()}" : number; }

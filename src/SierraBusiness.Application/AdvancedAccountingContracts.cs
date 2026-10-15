@@ -23,3 +23,7 @@ public enum InterestBasis { Actual365, ActualYear, Actual360 }
 public sealed record InterestRequest(DateOnly From, DateOnly To, decimal AnnualPercent, int GraceDays, InterestBasis Basis, bool Receivable = true, string Party = "");
 public sealed record InterestRow(Guid DocumentId, string Number, string Party, DateOnly Due, int ChargedDays, decimal StartBalance, decimal EndBalance, decimal Interest);
 public sealed record InterestReport(InterestRequest Request, IReadOnlyList<InterestRow> Rows, decimal Total);
+/// <summary>Bills reviewed customer interest from a worksheet. The server recalculates it; <paramref name="ExpectedTotal"/> must still match.</summary>
+/// <summary>What an interest charge document records: the worksheet settings, payment due date and the interest per bill.</summary>
+public sealed record InterestChargeDetail(DateOnly From, DateOnly To, decimal AnnualPercent, int GraceDays, InterestBasis Basis, DateOnly PaymentDue, IReadOnlyList<InterestRow> Bills);
+public sealed record ChargeInterestCommand(Guid OperationId, InterestRequest Request, DateOnly Date, IReadOnlyList<Guid> DocumentIds, decimal ExpectedTotal, int DueDays = 0);

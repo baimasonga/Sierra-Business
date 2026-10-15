@@ -131,19 +131,31 @@ public sealed partial class FinanceService
         var balances = report.Balances.Select(b => { var change = projected.Where(l => l.AccountCode == b.Code).Sum(l => l.Debit - l.Credit); var actual = b.Group is LedgerGroup.Income or LedgerGroup.Expense ? b.Debit - b.Credit : b.Closing; if (b.Group is LedgerGroup.Income or LedgerGroup.Liability or LedgerGroup.Equity) { actual = -actual; change = -change; } return new ScenarioBalance(b.Code, b.Name, b.Group, actual, change, actual + change); }).ToArray();
         return new(from, to, balances, report.Profit, report.Profit + projected.Where(l => report.Accounts.Single(a => a.Code == l.AccountCode).Group is LedgerGroup.Income or LedgerGroup.Expense).Sum(l => l.Credit - l.Debit));
     }
+    private const string InterestChargeAction = "interest.charge";
     public async Task<InterestReport> Interest(InterestRequest q)
     {
-        var actor = await Authorize(); if (q.From > q.To || q.From.Year < 2000 || q.To > DateOnly.FromDateTime(DateTime.UtcNow) || q.To.DayNumber - q.From.DayNumber > 3660 || q.GraceDays is < 0 or > 3660 || q.AnnualPercent < 0 || q.AnnualPercent > 100 || AccountingEngine.Money(q.AnnualPercent) != q.AnnualPercent || !Enum.IsDefined(q.Basis)) throw new BusinessException("Choose a past/current period of at most ten years, a 0–100 percent annual rate and a valid day-count basis.");
-        await using var db = await factory.CreateDbContextAsync(); var docs = await db.Documents.AsNoTracking().Where(d => d.Branch == actor.Branch && d.BusinessDate <= q.To).ToDictionaryAsync(d => d.Id);
+        var actor = await Authorize(); await using var db = await factory.CreateDbContextAsync();
+        var rows = await InterestRows(db, actor.Branch, q); return new(q, rows, rows.Sum(r => r.Interest));
+    }
+    /// <summary>Daily-balance interest per bill. Customer interest already billed by an active interest charge is skipped,
+    /// and interest charges never bear interest themselves.</summary>
+    private static async Task<IReadOnlyList<InterestRow>> InterestRows(BusinessDb db, string branch, InterestRequest q)
+    {
+        if (q is null) throw new BusinessException("Enter the interest worksheet settings.");
+        if (q.From > q.To || q.From.Year < 2000 || q.To > DateOnly.FromDateTime(DateTime.UtcNow) || q.To.DayNumber - q.From.DayNumber > 3660 || q.GraceDays is < 0 or > 3660 || q.AnnualPercent < 0 || q.AnnualPercent > 100 || AccountingEngine.Money(q.AnnualPercent) != q.AnnualPercent || !Enum.IsDefined(q.Basis)) throw new BusinessException("Choose a past/current period of at most ten years, a 0–100 percent annual rate and a valid day-count basis.");
+        var docs = await db.Documents.AsNoTracking().Where(d => d.Branch == branch && d.BusinessDate <= q.To).ToDictionaryAsync(d => d.Id);
+        var chargedThrough = q.Receivable ? await InterestChargedThrough(db, branch) : new Dictionary<Guid, DateOnly>();
         var reverseDates = docs.Values.Where(d => d.Reverses != null).ToDictionary(d => d.Reverses!.Value, d => d.BusinessDate);
-        var allocations = await db.BillAllocations.AsNoTracking().Where(a => db.Documents.Any(d => d.Id == a.VoucherId && d.Branch == actor.Branch)).ToListAsync();
-        var returns = await db.ReturnAllocations.AsNoTracking().Where(a => db.Documents.Any(d => d.Id == a.OriginalDocumentId && d.Branch == actor.Branch)).ToListAsync();
+        var allocations = await db.BillAllocations.AsNoTracking().Where(a => db.Documents.Any(d => d.Id == a.VoucherId && d.Branch == branch)).ToListAsync();
+        var returns = await db.ReturnAllocations.AsNoTracking().Where(a => db.Documents.Any(d => d.Id == a.OriginalDocumentId && d.Branch == branch)).ToListAsync();
         bool Active(Guid id, DateOnly day) => docs.TryGetValue(id, out var d) && d.BusinessDate <= day && (!reverseDates.TryGetValue(id, out var reversed) || reversed > day);
         var rows = new List<InterestRow>();
-        var bills = docs.Values.Where(d => q.Receivable ? ServiceRules.IsReceivable(d) : d.Kind is DocumentKind.Receipt or DocumentKind.LandedCost or DocumentKind.SupplierInvoice && d.Settlement.StartsWith("Supplier payable", StringComparison.Ordinal)).Where(d => string.IsNullOrWhiteSpace(q.Party) || d.Party.Equals(q.Party.Trim(), StringComparison.OrdinalIgnoreCase));
+        var bills = docs.Values.Where(d => q.Receivable ? ServiceRules.IsReceivable(d) && d.Kind != DocumentKind.InterestCharge : d.Kind is DocumentKind.Receipt or DocumentKind.LandedCost or DocumentKind.SupplierInvoice && d.Settlement.StartsWith("Supplier payable", StringComparison.Ordinal)).Where(d => string.IsNullOrWhiteSpace(q.Party) || d.Party.Equals(q.Party.Trim(), StringComparison.OrdinalIgnoreCase));
         foreach (var bill in bills)
         {
-            var due = bill.DueDate ?? bill.BusinessDate; var startNumber = Math.Max(q.From.DayNumber, Math.Max(bill.BusinessDate.DayNumber, due.DayNumber + q.GraceDays + 1)); if (startNumber > q.To.DayNumber) continue;
+            var due = bill.DueDate ?? bill.BusinessDate; var startNumber = Math.Max(q.From.DayNumber, Math.Max(bill.BusinessDate.DayNumber, due.DayNumber + q.GraceDays + 1));
+            if (chargedThrough.TryGetValue(bill.Id, out var charged)) startNumber = Math.Max(startNumber, charged.DayNumber + 1);
+            if (startNumber > q.To.DayNumber) continue;
             var settled = allocations.Where(a => a.InvoiceId == bill.Id).Select(a => (Id: a.VoucherId, Amount: a.Amount)).Concat(returns.Where(a => a.OriginalDocumentId == bill.Id).Select(a => (Id: a.ReturnDocumentId, Amount: a.BillCredit))).ToArray();
             decimal Balance(DateOnly day) => !Active(bill.Id, day) ? 0 : Math.Max(0, bill.Total - settled.Where(a => Active(a.Id, day)).Sum(a => a.Amount));
             var points = new HashSet<DateOnly> { DateOnly.FromDayNumber(startNumber), q.To.AddDays(1) };
@@ -153,8 +165,43 @@ public sealed partial class FinanceService
             for (var i = 0; i < ordered.Length - 1; i++) { var balance = Balance(ordered[i]); var count = ordered[i + 1].DayNumber - ordered[i].DayNumber; if (balance <= 0) continue; var divisor = q.Basis == InterestBasis.Actual360 ? 360 : q.Basis == InterestBasis.ActualYear && DateTime.IsLeapYear(ordered[i].Year) ? 366 : 365; interest += balance * q.AnnualPercent / 100 * count / divisor; days += count; }
             if (days > 0) rows.Add(new(bill.Id, bill.Number, bill.Party, due, days, Balance(q.From), Balance(q.To), AccountingEngine.Money(interest)));
         }
-        return new(q, rows.OrderBy(r => r.Due).ToArray(), rows.Sum(r => r.Interest));
+        return rows.OrderBy(r => r.Due).ToArray();
     }
+    /// <summary>For each customer bill, the last day already covered by an active (unreversed) interest charge.</summary>
+    private static async Task<Dictionary<Guid, DateOnly>> InterestChargedThrough(BusinessDb db, string branch)
+    {
+        var charges = await db.Operations.AsNoTracking().Where(o => o.Branch == branch && o.Action == InterestChargeAction && !db.Documents.Any(r => r.Reverses == o.ResultId)).ToListAsync();
+        var through = new Dictionary<Guid, DateOnly>();
+        foreach (var command in charges.Select(o => JsonSerializer.Deserialize<ChargeInterestCommand>(o.Payload)!))
+            foreach (var id in command.DocumentIds) if (!through.TryGetValue(id, out var day) || command.Request.To > day) through[id] = command.Request.To;
+        return through;
+    }
+    /// <summary>Bills one customer for reviewed worksheet interest: Dr trade receivables, Cr interest income. The charge is itself a
+    /// customer bill (collected through receipt allocations) and is cancelled by reversing it, which reopens its period.</summary>
+    public Task<Guid> ChargeInterest(ChargeInterestCommand input) => Execute(input.OperationId, InterestChargeAction, input, async (db, actor) =>
+    {
+        if (input.Request is not { Receivable: true }) throw new BusinessException("Interest charges apply to customer receivables only.");
+        if (input.DocumentIds is null || input.DocumentIds.Count is 0 or > 200 || input.DocumentIds.Distinct().Count() != input.DocumentIds.Count) throw new BusinessException("Select between 1 and 200 different bills to charge.");
+        if (input.DueDays is < 0 or > 365) throw new BusinessException("Payment terms for the interest charge must be 0–365 days.");
+        if (input.Date < input.Request.To) throw new BusinessException("Date the interest charge on or after the end of the worksheet period.");
+        await OpenDate(db, actor.Branch, input.Date);
+        var rows = (await InterestRows(db, actor.Branch, input.Request)).Where(r => input.DocumentIds.Contains(r.DocumentId)).ToArray();
+        if (rows.Length != input.DocumentIds.Count || rows.Any(r => r.Interest <= 0)) throw new BusinessException("A selected bill has no uncharged interest for this period. Recalculate the worksheet.");
+        if (rows.Select(r => r.Party.ToUpperInvariant()).Distinct().Count() != 1) throw new BusinessException("Charge interest to one customer at a time.");
+        var total = rows.Sum(r => r.Interest); Money(total, "Interest charge");
+        if (total != input.ExpectedTotal) throw new BusinessException("The interest has changed since it was calculated. Recalculate the worksheet before charging.");
+        var doc = new BusinessDocument
+        {
+            Id = Guid.NewGuid(), Branch = actor.Branch, Number = $"{actor.Branch}-{options.Value.Device}-INT-{input.OperationId:N}", BusinessDate = input.Date, DueDate = input.Date.AddDays(input.DueDays),
+            Party = rows[0].Party, Kind = DocumentKind.InterestCharge, Total = total, Settlement = "Credit",
+            Detail = JsonSerializer.Serialize(new InterestChargeDetail(input.Request.From, input.Request.To, input.Request.AnnualPercent, input.Request.GraceDays, input.Request.Basis, input.Date.AddDays(input.DueDays), rows))
+        };
+        db.Documents.Add(doc);
+        db.Journal.Add(new JournalLine { Id = Guid.NewGuid(), DocumentId = doc.Id, Branch = actor.Branch, Account = Account.Receivables, Debit = total });
+        db.Journal.Add(new JournalLine { Id = Guid.NewGuid(), DocumentId = doc.Id, Branch = actor.Branch, Account = InterestIncome, Credit = total });
+        return doc.Id;
+    });
+    public const Account InterestIncome = (Account)4400;
     public async Task<byte[]> ExportAdvanced(DateOnly from, DateOnly to, IReadOnlyList<Guid> scenarioIds, InterestRequest? interest = null)
     {
         var structure = await StructureReport(from, to); var scenario = await ProjectScenarios(from, to, scenarioIds); var rows = new List<(string, IReadOnlyList<IReadOnlyList<string>>)>

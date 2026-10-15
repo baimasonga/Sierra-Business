@@ -34,6 +34,7 @@ public sealed class LedgerAccount
         new() { Id=4100, Name="Other income", Group=LedgerGroup.Income },
         new() { Id=4200, Name="Exchange gains", Group=LedgerGroup.Income, Control=true },
         new() { Id=4300, Name="Service income", Group=LedgerGroup.Income, Control=true },
+        new() { Id=4400, Name="Interest income", Group=LedgerGroup.Income, Control=true },
         new() { Id=5000, Name="Cost of sales", Group=LedgerGroup.Expense, Control=true },
         new() { Id=5100, Name="Operating expenses", Group=LedgerGroup.Expense },
         new() { Id=5200, Name="Wages and salaries", Group=LedgerGroup.Expense },
