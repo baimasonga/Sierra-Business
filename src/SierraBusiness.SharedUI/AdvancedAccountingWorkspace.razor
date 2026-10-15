@@ -52,7 +52,17 @@ else if (tab == "Scenarios")
 else if (tab == "Interest")
 {
     <section class="panel"><h2>Interest worksheet</h2><p>This is a calculation using an agreed rate, not an automatic charge or a statutory rate. It starts after the due date plus grace days and uses daily closing balances. Payments and bill credits reduce the balance on their document date; reversals restore it on their reversal date. Each bill is rounded once.</p><div class="form-grid"><label>Annual rate percent<input type="number" min="0" max="100" step="0.01" @bind="rate" /></label><label>Grace days<input type="number" min="0" max="3660" @bind="grace" /></label><label>Day count basis<select @bind="basis"><option value="@InterestBasis.Actual365">Actual days divided by 365</option><option value="@InterestBasis.ActualYear">Actual days divided by days in year</option><option value="@InterestBasis.Actual360">Actual days divided by 360</option></select></label><label>Bill type<select @bind="receivable"><option value="true">Customer receivables</option><option value="false">Supplier payables</option></select></label><label>Exact party optional<input @bind="interestParty" /></label></div><button class="secondary" disabled="@busy" @onclick="CalculateInterest">Calculate interest worksheet</button>
-    @if (interest is not null) { <p>Calculated interest @Money(interest.Total). No bill or journal has been created.</p><div class="table-wrap"><table><thead><tr><th>Document and party</th><th>Due</th><th>Charged days</th><th>Start balance</th><th>End balance</th><th>Interest</th></tr></thead><tbody>@foreach (var r in interest.Rows) { <tr><td>@r.Number · @r.Party</td><td>@r.Due</td><td>@r.ChargedDays</td><td>@Money(r.StartBalance)</td><td>@Money(r.EndBalance)</td><td>@Money(r.Interest)</td></tr> }</tbody></table></div> }</section>
+    @if (interest is not null)
+    {
+        <p>Calculated interest @Money(interest.Total). Calculating creates no bill or journal. Customer interest that has already been charged is not calculated again, and interest charges themselves bear no interest.</p>
+        <div class="table-wrap"><table><thead><tr>@if (Chargeable) { <th>Charge</th> }<th>Document and party</th><th>Due</th><th>Charged days</th><th>Start balance</th><th>End balance</th><th>Interest</th></tr></thead><tbody>@foreach (var r in interest.Rows) { <tr>@if (Chargeable) { <td><input type="checkbox" aria-label="@($"Charge interest on {r.Number}")" checked="@chargeIds.Contains(r.DocumentId)" @onchange="e => ChooseCharge(r.DocumentId, e)" /></td> }<td>@r.Number · @r.Party</td><td>@r.Due</td><td>@r.ChargedDays</td><td>@Money(r.StartBalance)</td><td>@Money(r.EndBalance)</td><td>@Money(r.Interest)</td></tr> }</tbody></table></div>
+        @if (Chargeable)
+        {
+            <h3>Charge interest to a customer</h3><p>Creates an interest charge bill for one customer: trade receivables are debited and Interest income (4400) is credited. Collect it like any other customer bill. Reverse the charge to cancel it; its period can then be charged again.</p>
+            <div class="form-grid"><label>Charge date<input type="date" @bind="chargeDate" /></label><label>Payment terms in days<input type="number" min="0" max="365" @bind="chargeDueDays" /></label></div>
+            <p>Selected interest @Money(SelectedCharge)</p><button disabled="@(busy || chargeIds.Count == 0)" @onclick="ChargeInterest">Charge selected interest</button>
+        }
+    }</section>
 }
 @code {
     [Parameter] public Actor Actor { get; set; } = default!;
@@ -66,6 +76,9 @@ else if (tab == "Interest")
     private int ledger, allocationAccount, funds = 1000; private bool centreActive = true, income; private DateOnly allocationDate = DateOnly.FromDateTime(DateTime.Today); private decimal amount; private string narration = ""; private readonly Dictionary<Guid, decimal> shares = []; private CentreAllocationPreview? allocationPreview;
     private string scenarioName = "", scenarioNote = ""; private ScenarioKind scenarioKind; private DateOnly scenarioDate = DateOnly.FromDateTime(DateTime.Today); private bool scenarioActive = true; private readonly List<VoucherLine> scenarioLines = []; private int scenarioAccount; private decimal scenarioDebit, scenarioCredit; private readonly HashSet<Guid> chosen = []; private ScenarioReport? projection;
     private decimal rate; private int grace; private InterestBasis basis; private bool receivable = true; private string interestParty = ""; private InterestReport? interest;
+    private readonly HashSet<Guid> chargeIds = []; private DateOnly chargeDate = DateOnly.FromDateTime(DateTime.Today); private int chargeDueDays = 14; private Guid chargeOperation = Guid.NewGuid();
+    private bool Chargeable => CanWrite && interest?.Request.Receivable == true;
+    private decimal SelectedCharge => interest?.Rows.Where(r => chargeIds.Contains(r.DocumentId)).Sum(r => r.Interest) ?? 0;
     private Guid groupOperation = Guid.NewGuid(), mappingOperation = Guid.NewGuid(), centreOperation = Guid.NewGuid(), allocationOperation = Guid.NewGuid(), scenarioOperation = Guid.NewGuid();
     private string groupBaseline = "", centreBaseline = "", scenarioBaseline = ""; private Guid mappingBaseline;
     private string GroupValues => System.Text.Json.JsonSerializer.Serialize(new { groupName, nature, groupParent });
@@ -101,6 +114,13 @@ else if (tab == "Interest")
     private void ChooseScenario(Guid id, bool value) { if (value) chosen.Add(id); else chosen.Remove(id); projection = null; }
     private Task Project() => Run(async () => projection = await Finance.ProjectScenarios(from, to, chosen.ToArray()));
     private InterestRequest InterestRequest() => new(from, to, rate, grace, basis, receivable, interestParty);
-    private Task CalculateInterest() => Run(async () => interest = await Finance.Interest(InterestRequest()));
+    private Task CalculateInterest() => Run(async () => { interest = await Finance.Interest(InterestRequest()); chargeIds.Clear(); chargeOperation = Guid.NewGuid(); });
+    private void ChooseCharge(Guid id, ChangeEventArgs e) { if (e.Value is true) chargeIds.Add(id); else chargeIds.Remove(id); }
+    private Task ChargeInterest() => Run(async () =>
+    {
+        var request = interest!.Request; var party = interest.Rows.First(r => chargeIds.Contains(r.DocumentId)).Party;
+        await Finance.ChargeInterest(new(chargeOperation, request, chargeDate, chargeIds.ToList(), SelectedCharge, chargeDueDays));
+        chargeOperation = Guid.NewGuid(); chargeIds.Clear(); interest = await Finance.Interest(request); message = $"Interest charge posted to {party}'s account.";
+    });
     private Task Export() => Run(async () => { var bytes = await Finance.ExportAdvanced(from, to, chosen.ToArray(), interest?.Request); await JS.InvokeVoidAsync("sierraDownload", "Accounting-analysis.xlsx", Convert.ToBase64String(bytes)); });
 }

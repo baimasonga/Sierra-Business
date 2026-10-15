@@ -35,7 +35,7 @@ This is ongoing source work after the immutable 0.32.0 release. The 0.32.0 insta
 2. Retrospective company partitioning, verified physical compaction and coordinated synced-branch period migration.
 3. Ownership/minority-interest consolidation and functional-currency translation; broader transaction-level intercompany matching.
 4. Standard-cost migrations for existing stock and impairment allowance policy.
-5. Reviewed billable interest charges. Customer/supplier currency advances, currency-bank refunds/revaluation and local cheque advances are implemented in source and covered by focused regression tests.
+5. ~~Reviewed billable interest charges~~ — implemented 15 October 2026; see [customer interest charges](interest-charges.md). Customer/supplier currency advances, currency-bank refunds/revaluation and local cheque advances are implemented in source and covered by focused regression tests.
 6. Complete-company and broader Tally migration, external reporting compatibility and live cross-company search.
 7. Live Google OAuth/upload acceptance, credential provisioning and scheduled-task operational acceptance. Google Drive integration is implemented in source: PKCE browser sign-in, encrypted chunked backups, scoped resumable uploads, verified metadata and reviewed encrypted import. No live sign-in, upload or scheduled-task registration has occurred.
 8. Native accessibility/DPI/keyboard and hardware acceptance; clean-machine install/upgrade/rollback; two-device outages; live SQL Server/PostgreSQL checks; signing and distribution.
