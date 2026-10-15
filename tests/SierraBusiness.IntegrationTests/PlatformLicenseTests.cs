@@ -14,9 +14,10 @@ public sealed class PlatformLicenseTests
     private sealed class Clock : TimeProvider { public DateTimeOffset Time = Now; public override DateTimeOffset GetUtcNow() => Time; }
     private sealed class Store : ILicenseStore
     {
-        public string? Value; public int Writes; public bool FailWrites;
+        public string? Value; public int Writes; public bool FailWrites; public Func<string, bool>? Reject;
         public Task<string?> Read(CancellationToken cancellationToken = default) => Task.FromResult(Value);
-        public Task Write(string state, CancellationToken cancellationToken = default) { if (FailWrites) throw new IOException("Synthetic protected store failure."); Value = state; Writes++; return Task.CompletedTask; }
+        public Task Write(string state, CancellationToken cancellationToken = default) { if (FailWrites || Reject?.Invoke(state) == true) throw new IOException("Synthetic protected store failure."); Value = state; Writes++; return Task.CompletedTask; }
+        public static bool Revoked(string state) => JsonDocument.Parse(state).RootElement.GetProperty("Lease").ValueKind == JsonValueKind.Null;
     }
     private sealed class Provider : HttpMessageHandler
     {
@@ -187,12 +188,46 @@ public sealed class PlatformLicenseTests
         var options = new PlatformLicenseOptions(new Uri("https://platform.example.test"), "sierra-business", [p.Public]);
         var client = new PlatformLicenseClient(options, store, http, new Clock());
         await client.Activate("platform@example.test", "one-use-password", "key", "123456");
-        p.Revoked = true; store.FailWrites = true;
+        p.Revoked = true; store.Reject = Store.Revoked;
         await Assert.ThrowsAsync<IOException>(() => client.Refresh());
         Assert.False(client.Current.Usable); Assert.Throws<UnauthorizedAccessException>(() => client.Demand("sales.create")); client.Demand("business.read");
-        store.FailWrites = false;
+        store.Reject = null;
         Assert.Equal(LicenseState.NotActivated, (await client.Check()).State);
         Assert.Equal(LicenseState.NotActivated, (await new PlatformLicenseClient(options, store, http, new Clock()).Check()).State);
+    }
+    [Fact] public async Task ARevocationThatCouldNotBeSavedIsNotForgottenAfterARestart()
+    {
+        using var p = new Provider(); using var http = new HttpClient(p); var store = new Store();
+        var options = new PlatformLicenseOptions(new Uri("https://platform.example.test"), "sierra-business", [p.Public]);
+        await new PlatformLicenseClient(options, store, http, new Clock()).Activate("platform@example.test", "one-use-password", "key", "123456");
+        // The revocation arrives but cannot be saved, and the process exits before any later save.
+        p.Revoked = true; store.Reject = Store.Revoked;
+        await Assert.ThrowsAsync<IOException>(() => new PlatformLicenseClient(options, store, http, new Clock()).Refresh());
+        store.Reject = null;
+        var restarted = new PlatformLicenseClient(options, store, http, new Clock());
+        Assert.Equal(LicenseState.RefreshRequired, (await restarted.Check()).State);
+        Assert.Throws<UnauthorizedAccessException>(() => restarted.Demand("sales.create")); restarted.Demand("business.read"); restarted.Demand("backups.create");
+        // Offline attempts keep the marker; the next answer from the service settles it.
+        p.Offline = true; await Assert.ThrowsAsync<HttpRequestException>(() => restarted.Refresh());
+        Assert.Equal(LicenseState.RefreshRequired, (await new PlatformLicenseClient(options, store, http, new Clock()).Check()).State);
+        p.Offline = false; await Assert.ThrowsAsync<HttpRequestException>(() => restarted.Refresh());
+        Assert.Equal(LicenseState.NotActivated, (await new PlatformLicenseClient(options, store, http, new Clock()).Check()).State);
+    }
+    [Fact] public async Task AnInterruptedRefreshRecoversOnlineAndOfflineFailuresKeepTheLease()
+    {
+        using var p = new Provider(); using var http = new HttpClient(p); var store = new Store();
+        var options = new PlatformLicenseOptions(new Uri("https://platform.example.test"), "sierra-business", [p.Public]);
+        var client = new PlatformLicenseClient(options, store, http, new Clock());
+        await client.Activate("platform@example.test", "one-use-password", "key", "123456");
+        p.Offline = true; await Assert.ThrowsAsync<HttpRequestException>(() => client.Refresh()); Assert.True(client.Current.Usable);
+        Assert.True((await new PlatformLicenseClient(options, store, http, new Clock()).Check()).Usable);
+        // A refresh whose answer could not be saved (here a valid lease) requires one successful refresh after restart.
+        p.Offline = false; store.Reject = s => !Store.Revoked(s) && !JsonDocument.Parse(s).RootElement.GetProperty("RefreshPending").GetBoolean();
+        await Assert.ThrowsAsync<IOException>(() => client.Refresh()); store.Reject = null;
+        var restarted = new PlatformLicenseClient(options, store, http, new Clock());
+        Assert.Equal(LicenseState.RefreshRequired, (await restarted.Check()).State);
+        Assert.True((await restarted.Refresh()).Usable); restarted.Demand("sales.create");
+        Assert.True((await new PlatformLicenseClient(options, store, http, new Clock()).Check()).Usable);
     }
     [Fact] public async Task ClockCheckpointFailureRestrictsUntilTheWatermarkIsDurable()
     {

@@ -1,6 +1,6 @@
 namespace SierraBusiness.Application;
 
-public enum LicenseState { NotConfigured, NotActivated, Valid, RefreshRecommended, Expired, ClockAnomaly, Invalid }
+public enum LicenseState { NotConfigured, NotActivated, Valid, RefreshRecommended, Expired, ClockAnomaly, Invalid, RefreshRequired }
 public sealed record LicenseCheck(LicenseState State, DateTimeOffset? ExpiresAt = null, IReadOnlyDictionary<string, bool>? Features = null)
 {
     public bool Usable => State is LicenseState.Valid or LicenseState.RefreshRecommended;
