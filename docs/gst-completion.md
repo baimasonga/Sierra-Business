@@ -6,7 +6,7 @@ Source work on 15 October 2026. Completes the software parts of backlog item 1 i
 
 Before, a stock claim was refused once any of the receipt's goods had been sold, issued, transferred or written down. **Company & tax → Input tax** now accepts the claim and allocates the allowable GST:
 
-- **Goods still held** (up to the quantity received) — the product's carrying value is reduced, starting with the receipt's own warehouse/batch/serial lines. The reduction never exceeds the stock's current book value.
+- **Goods still held** (up to the quantity received), including goods transferred to another warehouse — the product's carrying value is reduced by the GST per unit: first on the units still in the receipt's own warehouse/batch/serial lines, then on the product's other stock. No stock line drops below zero.
 - **Goods already sold or issued** — the rest reduces **5000 Cost of sales**.
 - **Standard-cost items** — their stock stays at standard value. The GST share reduces **5100 Operating expenses**, where the receipt posted its purchase-price variance.
 
@@ -23,7 +23,7 @@ A recorded monthly return stays immutable. When an amended return or NRA assessm
 | Output GST under-declared | Extra output GST for that month (negative if over-declared) |
 | Input GST newly allowable | Extra input credit (negative if over-claimed) |
 | Book the tax difference to | Non-control income or expense ledger that absorbs the difference in the books |
-| Brought-forward credit to use | Part of the extra tax settled from the GST carry-forward asset |
+| Brought-forward credit to use | Part of the extra tax settled from the GST carry-forward asset recorded on that return (the only asset a correction may use or credit) |
 | Penalties and interest | Paid with the correction and charged to their own expense ledger |
 
 The correction is dated **today**, so locked periods are never reopened. Extra tax is paid from a local cash/bank ledger (less any brought-forward credit used); a net reduction becomes carry-forward credit. Each correction needs a reference that is unique for its return, and corrections cannot be reversed. Recorded corrections are listed in the same section.

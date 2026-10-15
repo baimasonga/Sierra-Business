@@ -70,7 +70,7 @@ public sealed partial class ComplianceService
             var paid = Math.Max(0,net)-input.CarryCreditUsed; var newCredit = Math.Max(0,-net);
             if (input.CarryCreditUsed > 0 || newCredit > 0)
             {
-                if (!accounts.TryGetValue(input.CarryAccount,out var carry) || carry.Group != LedgerGroup.Asset || carry.Control || carry.CashOrBank) throw new BusinessException("Choose the separate non-bank custom GST carry-forward asset.");
+                if (input.CarryAccount != original.CarryAccount) throw new BusinessException("Use the GST carry-forward asset recorded on the return being corrected.");
                 var available = (await db.Journal.AsNoTracking().Where(j => j.Branch == actor.Branch && (int)j.Account == input.CarryAccount).ToListAsync()).Sum(j => j.Debit-j.Credit);
                 if (input.CarryCreditUsed > Math.Max(0,available)) throw new BusinessException("Brought-forward credit exceeds the selected asset ledger's available balance.");
             }

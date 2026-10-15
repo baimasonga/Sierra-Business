@@ -61,14 +61,22 @@ public sealed partial class ComplianceService
                     var received = averaged.Where(m => m.ProductId == product).Sum(m => m.Quantity); var stock = current.Where(m => m.ProductId == product).ToList();
                     var held = Math.Min(Math.Max(stock.Sum(m => m.Quantity),0),received);
                     var identities = stock.GroupBy(m => new InventoryCost.Identity(m.ProductId,m.Location,m.Serial,m.Batch,m.Expiry)).Select(g => (g.Key, Quantity: g.Sum(m => m.Quantity), Value: g.Sum(m => m.Value))).Where(g => g.Quantity > 0 && g.Value > 0).ToList();
-                    var own = identities.Where(g => averaged.Any(m => m.ProductId == product && m.Location == g.Key.Location && m.Serial == g.Key.Serial && m.Batch == g.Key.Batch && m.Expiry == g.Key.Expiry)).ToList(); if (own.Count > 0) identities = own;
                     var inventoryPart = Math.Min(held == received ? share : AccountingEngine.Money(share*held/received),identities.Sum(g => g.Value));
-                    decimal spread = 0;
-                    for (var i = 0; i < identities.Count && inventoryPart > 0; i++)
+                    // GST per held unit goes first to the units still in the receipt's own stock lines, then to the product's other stock
+                    // (for example goods transferred to another warehouse), spread by quantity and never below a line's book value.
+                    var own = identities.Where(g => averaged.Any(m => m.ProductId == product && m.Location == g.Key.Location && m.Serial == g.Key.Serial && m.Batch == g.Key.Batch && m.Expiry == g.Key.Expiry)).ToList();
+                    var perUnit = held == 0 ? 0 : inventoryPart/held; var remaining = inventoryPart;
+                    foreach (var (tier, limit) in new[] { (own, AccountingEngine.Money(perUnit*Math.Min(own.Sum(g => g.Quantity),held))), (identities.Except(own).ToList(), inventoryPart) })
                     {
-                        var g = identities[i]; var value = i == identities.Count-1 ? inventoryPart-spread : Math.Min(g.Value,AccountingEngine.Money(inventoryPart*g.Value/identities.Sum(x => x.Value))); spread += value; if (value == 0) continue;
-                        stockChanges.Add(new() { Id = Guid.NewGuid(),Branch = actor.Branch,ProductId = product,Location = g.Key.Location,Serial = g.Key.Serial,Batch = g.Key.Batch,Expiry = g.Key.Expiry,Quantity = 0,Value = -value });
+                        var amount = Math.Min(Math.Min(remaining,limit),tier.Sum(g => g.Value)); var quantity = tier.Sum(g => g.Quantity); decimal assigned = 0;
+                        for (var i = 0; i < tier.Count && amount > 0; i++)
+                        {
+                            var g = tier[i]; var value = Math.Min(g.Value,i == tier.Count-1 ? amount-assigned : AccountingEngine.Money(amount*g.Quantity/quantity)); assigned += value; if (value == 0) continue;
+                            stockChanges.Add(new() { Id = Guid.NewGuid(),Branch = actor.Branch,ProductId = product,Location = g.Key.Location,Serial = g.Key.Serial,Batch = g.Key.Batch,Expiry = g.Key.Expiry,Quantity = 0,Value = -value });
+                        }
+                        remaining -= assigned;
                     }
+                    inventoryPart -= remaining;
                     inventoryCredit += inventoryPart; costOfSalesCredit += share-inventoryPart;
                 }
             }

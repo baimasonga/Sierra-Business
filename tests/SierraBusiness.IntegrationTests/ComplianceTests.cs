@@ -122,6 +122,19 @@ public sealed class ComplianceTests : IAsyncLifetime
         Assert.Equal(600,await StockValue()); Assert.Equal(cost-60,await Ledger(5000)); Assert.Equal(150,await Ledger(6401)); Assert.Equal(10,(await business.Read(session.Actor)).Stock.Where(s => s.ProductId == item).Sum(s => s.Quantity)+4);
         await business.Reverse(session.Actor,new(Guid.NewGuid(),id,"Correct allowable-tax review")); Assert.Equal(690,await StockValue()); Assert.Equal(cost,await Ledger(5000)); Assert.Equal(0,await Ledger(6401)); await Verified();
     }
+    [Fact] public async Task StockInputTaxFollowsGoodsTransferredToAnotherWarehouse()
+    {
+        var service = Compliance(); await service.SaveProfile(new(Guid.NewGuid(),new(LegalName:"Stock tax company",TaxRegistered:true,Identifiers:[new("TIN","123456")]))); var finance = new FinanceService(factory,session,options); await finance.CreateLedger(new(Guid.NewGuid(),6401,"Input GST recovery",LedgerGroup.Asset));
+        var inventory = new InventoryService(factory,session,options); await inventory.CreateLocation(new(Guid.NewGuid(),"SECOND","Second warehouse"));
+        var item = await business.AddProduct(session.Actor,new(Guid.NewGuid(),"GST-MOVED","Moved taxed item","General","piece",300,TrackingMode.Quantity,MinimumPrice:1));
+        var receipt = await business.Post(session.Actor,new(Guid.NewGuid(),DocumentKind.Receipt,"Tax supplier",today,[new(item,10,115)],null));
+        await inventory.Transfer(new(Guid.NewGuid(),item,"MAIN","SECOND",9,null,null,null,"Move most stock"));
+        var cost = (await finance.Read(today,today)).Balances.Single(a => a.Code == 5000).Closing;
+        await service.RecordInputTax(new(Guid.NewGuid(),receipt,today,"Tax supplier","TIN-SUP","GST-INV-MOVED",false,1000,150,150,1200,6401,"Reviewed stock invoice after transfer",true));
+        var stock = (await business.Read(session.Actor)).Stock.Where(s => s.ProductId == item).ToList();
+        Assert.Equal(1000,stock.Sum(s => s.Value)); Assert.Equal(100,stock.Single(s => s.Location == "MAIN").Value); Assert.Equal(900,stock.Single(s => s.Location == "SECOND").Value);
+        Assert.Equal(cost,(await finance.Read(today,today)).Balances.Single(a => a.Code == 5000).Closing); await Verified();
+    }
     [Fact] public async Task StandardCostStockInputTaxReducesPurchaseVarianceNotStandardValue()
     {
         var service = Compliance(); await service.SaveProfile(new(Guid.NewGuid(),new(LegalName:"Standard cost company",TaxRegistered:true,Identifiers:[new("TIN","123456")]))); var finance = new FinanceService(factory,session,options); await finance.CreateLedger(new(Guid.NewGuid(),6401,"Input GST recovery",LedgerGroup.Asset));
@@ -149,6 +162,8 @@ public sealed class ComplianceTests : IAsyncLifetime
         await Assert.ThrowsAsync<BusinessException>(() => service.RecordTaxCorrection(underDeclared with { OperationId = Guid.NewGuid() }));
         await Assert.ThrowsAsync<BusinessException>(() => service.RecordTaxCorrection(underDeclared with { OperationId = Guid.NewGuid(),CorrectionReference = "OVER-CREDIT",CarryCreditUsed = 25 }));
         await Assert.ThrowsAsync<BusinessException>(() => service.RecordTaxCorrection(underDeclared with { OperationId = Guid.NewGuid(),CorrectionReference = "NO-FILING",FilingId = Guid.NewGuid() }));
+        await finance.CreateLedger(new(Guid.NewGuid(),6401,"Input GST recovery",LedgerGroup.Asset)); await finance.PostVoucher(new(Guid.NewGuid(),VoucherType.Journal,today,"Unfiled input claim",[new(6401,50,0),new(5100,0,50)],[]));
+        await Assert.ThrowsAsync<BusinessException>(() => service.RecordTaxCorrection(underDeclared with { OperationId = Guid.NewGuid(),CorrectionReference = "WRONG-CARRY",CarryAccount = 6401,CarryCreditUsed = 30,Penalty = 0 }));
         await Assert.ThrowsAsync<BusinessException>(() => business.Reverse(session.Actor,new(Guid.NewGuid(),paid,"Corrections cannot be erased")));
         var corrections = await service.TaxCorrections(); Assert.Equal(2,corrections.Count); Assert.All(corrections,c => Assert.Equal((from,to),(c.From,c.To)));
         Assert.Equal(30,corrections.Single(c => c.CorrectionReference == "NRA-1-AMEND").Paid); Assert.Equal(20,corrections.Single(c => c.CorrectionReference == "NRA-1-INPUT").NewCredit); await Verified();
