@@ -7,25 +7,34 @@
         @if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
         @if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
         <fieldset disabled="@busy">
-            <div class="form-grid"><label>Period cutoff<input type="date" @bind="cutoff" @bind:after="Clear" /></label><label>Archive name<input maxlength="120" @bind="archive" @bind:after="Clear" /></label><label>Continuation name<input maxlength="120" @bind="continuation" @bind:after="Clear" /></label></div>
+            <div class="form-grid"><label>Period cutoff<input type="date" @bind="cutoff" @bind:after="Clear" /></label><label>Archive name<input maxlength="120" @bind="archive" @bind:after="Clear" /></label><label>Continuation name<input maxlength="120" @bind="continuation" @bind:after="Clear" /></label><label class="check"><input type="checkbox" @bind="retrospective" @bind:after="Clear" />Retrospective split: activity after the cutoff already exists</label></div>
+            <p class="hint">A retrospective split keeps the later activity in the continuation, where it stays open; the archive keeps a read-only copy of it for reference and is labelled with how many later documents it holds. A synced branch is split as a coordinated migration: sync with head office first; the continuation keeps the branch's sync connection and the archive stops syncing.</p>
             <button class="secondary" @onclick="Review">Review period split</button>
             @if (preview is { } p)
             {
                 <p>@p.Documents documents, @p.Movements stock movements and @p.JournalLines journal lines. Debits @p.Debit.ToString("N2") equal credits @p.Credit.ToString("N2") NLe.</p>
+                @if (p.LaterDocuments > 0) { <p>@p.LaterDocuments documents are dated after the cutoff. They stay open in the continuation; the archive holds them for reference only.</p> }
+                @if (p.Synced) { <p>Synced branch: everything has reached head office. The continuation keeps the sync connection.</p> }
                 <p class="hint">A safety backup and two checksum-verified company copies will be created. Close this window afterwards and select the continuation company from the company chooser.</p>
                 <button class="primary" @onclick="Split">Create verified archive and continuation</button>
             }
         </fieldset>
     </section>
+    <section class="panel" aria-label="Company compaction">
+        <h2>Compact company database</h2>
+        <p class="hint">Takes a safety backup, rewrites the database file to reclaim unused space and verifies that the integrity check passes and every record and the protected history are unchanged. Works on archives too.</p>
+        <button class="secondary" disabled="@busy" @onclick="Compact">Compact and verify database</button>
+    </section>
 }
 @code {
+    private Task Compact() => Run(async () => { var r = await service!.Compact(); message = $"Database compacted from {r.BytesBefore / 1024:N0} KB to {r.BytesAfter / 1024:N0} KB. Integrity check passed; {r.Documents} documents and the protected history are unchanged. Safety backup: {r.BackupPath}"; });
     private ICompanyPeriodService? service; private bool busy;
     private DateOnly cutoff = new(DateTime.Now.Year - 1, 12, 31);
-    private string archive = "", continuation = "", error = "", message = "";
+    private string archive = "", continuation = "", error = "", message = ""; private bool retrospective;
     private CompanyPeriodPreview? preview; private Guid operation = Guid.NewGuid();
     protected override void OnInitialized() => service = Services.GetService(typeof(ICompanyPeriodService)) as ICompanyPeriodService;
     private void Clear() { preview = null; operation = Guid.NewGuid(); message = ""; }
     private async Task Run(Func<Task> action) { if (busy) return; busy = true; error = message = ""; try { await action(); } catch (Exception ex) when (ex is BusinessException or UnauthorizedAccessException or IOException) { error = ex.Message; } finally { busy = false; } }
-    private Task Review() => Run(async () => { preview = null; operation = Guid.NewGuid(); preview = await service!.Preview(cutoff); });
-    private Task Split() => Run(async () => { if (preview is null) throw new BusinessException("Review the period split first."); var result = await service!.Split(new(operation, cutoff, archive, continuation, preview.HistoryHead)); preview = null; message = $"Created {result.ArchiveName} and {result.ContinuationName}. Opening records verified. Close this window and select {result.ContinuationName} for new trading. Safety backup: {result.BackupPath}"; });
+    private Task Review() => Run(async () => { preview = null; operation = Guid.NewGuid(); preview = await service!.Preview(cutoff, retrospective); });
+    private Task Split() => Run(async () => { if (preview is null) throw new BusinessException("Review the period split first."); var result = await service!.Split(new(operation, cutoff, archive, continuation, preview.HistoryHead, retrospective)); preview = null; message = $"Created {result.ArchiveName} and {result.ContinuationName}. Opening records verified. Close this window and select {result.ContinuationName} for new trading. Safety backup: {result.BackupPath}"; });
 }

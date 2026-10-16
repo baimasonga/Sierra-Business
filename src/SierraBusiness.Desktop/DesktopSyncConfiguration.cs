@@ -28,13 +28,15 @@ public sealed class DesktopSyncConfiguration(string directory) : ISyncSettings
         {
             key = ""; warning = "The saved sync key cannot be unlocked for this Windows account. Enter the branch key again under Branch sync. Local records are unaffected.";
         }
+        // A period archive never syncs: its continuation is the branch's connection to head office.
+        if (CompanyPeriodService.Marker(directory) is { Archive: true }) return new SyncOptions { Role = SyncRole.Off };
         return new SyncOptions { Role = string.IsNullOrWhiteSpace(s.Server) ? SyncRole.Off : SyncRole.Branch, Server = s.Server.Trim(), Key = key };
     }
     public SyncSettingsView Read() { var o = Load(); return new(o.Role, o.Server, o.Key.Length > 0, true, warning); }
     public void Save(string server, string? key)
     {
         server = (server ?? "").Trim();
-        if (server.Length > 0 && File.Exists(Path.Combine(directory, CompanyPeriodService.MarkerFile))) throw new BusinessException("Period-split datasets are standalone. Do not connect copied branch history to head office without a coordinated migration.");
+        if (server.Length > 0 && CompanyPeriodService.Marker(directory) is { } marker && !(marker is { Archive: false, SyncContinuation: true })) throw new BusinessException("Period-split datasets are standalone. Only the continuation of a coordinated branch split may connect to head office.");
         if (server.Length > 0 && (!Uri.TryCreate(server, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps && !uri.IsLoopback)) throw new BusinessException("Enter head office's address starting with https://.");
         var newKey = server.Length == 0 ? "" : key is null ? Load().Key : key.Trim();
         if (server.Length > 0 && newKey.Length < 16) throw new BusinessException("Enter this branch's sync key from head office (at least 16 characters).");
