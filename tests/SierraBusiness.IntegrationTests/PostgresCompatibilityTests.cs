@@ -60,7 +60,8 @@ public sealed class PostgresCompatibilityTests
         foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Convert.ToBase64String(Encoding.Unicode.GetBytes(script)) }) start.ArgumentList.Add(arg);
         using var process = Process.Start(start)!;
         var output = process.StandardOutput.ReadToEndAsync(); var errors = process.StandardError.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        // Cold Windows PowerShell start-up on a busy CI runner can exceed 30 s.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
         try { await process.WaitForExitAsync(timeout.Token); }
         catch (OperationCanceledException) { process.Kill(entireProcessTree: true); throw; }
         var stderr = await errors;
