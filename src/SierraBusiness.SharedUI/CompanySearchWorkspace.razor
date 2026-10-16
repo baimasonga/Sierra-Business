@@ -8,10 +8,19 @@
 <fieldset disabled="@busy"><label>Current company name<input maxlength="120" @bind="company" /></label><button class="secondary" @onclick="Export">Export current company search index</button><label>Load a company index<InputFile accept=".json" OnChange="Load" /></label>
 @foreach (var c in indexes) { <p>@c.Company / @c.Branch · Exported @c.Exported.ToString("yyyy-MM-dd HH:mm") UTC · @c.Entries.Count entries <button class="text-button" @onclick="() => Remove(c)">Remove index</button></p> }
 <label>Master or transaction search<input maxlength="100" @bind="query" @bind:after="ClearResults" /></label><button class="primary" disabled="@(indexes.Count == 0 || query.Trim().Length < 2)" @onclick="Search">Search loaded companies</button></fieldset>
-@if (searched) { <p>@hits.Count results, at most 100. Narrow the search if the limit is reached.</p><div class="table-wrap"><table><thead><tr><th>Company</th><th>Kind</th><th>Reference</th><th>Name / party</th><th>Date</th><th>Amount</th></tr></thead><tbody>@foreach (var h in hits) { <tr><td>@h.Company / @h.Branch</td><td>@h.Entry.Kind</td><td>@h.Entry.Key</td><td>@h.Entry.Name</td><td>@h.Entry.Date</td><td>@h.Entry.Amount?.ToString("N2")</td></tr> }</tbody></table></div> }</section>
+@if (live is not null)
+{
+    <h3>Search companies on this computer</h3><p class="hint">Searches the current records of every company on this computer where you have an owner account. Nothing is exported.</p>
+    <button class="secondary" disabled="@(busy || query.Trim().Length < 2)" @onclick="SearchLive">Search companies on this computer</button>
+    @if (liveResult is { } lr) { <p>Searched: @string.Join(", ", lr.Searched)@if (lr.Skipped.Count > 0) { <span> · Skipped: @string.Join(", ", lr.Skipped)</span> }</p> }
+}
+@if (searched) { <p>@hits.Count results, at most @(liveResult is null ? 100 : 200). Narrow the search if the limit is reached.</p><div class="table-wrap"><table><thead><tr><th>Company</th><th>Kind</th><th>Reference</th><th>Name / party</th><th>Date</th><th>Amount</th></tr></thead><tbody>@foreach (var h in hits) { <tr><td>@h.Company / @h.Branch</td><td>@h.Entry.Kind</td><td>@h.Entry.Key</td><td>@h.Entry.Name</td><td>@h.Entry.Date</td><td>@h.Entry.Amount?.ToString("N2")</td></tr> }</tbody></table></div> }</section>
 @code {
     private string company = "", query = "", error = "", message = ""; private bool busy, searched; private readonly List<CompanySearchIndex> indexes = []; private IReadOnlyList<CompanySearchHit> hits = [];
-    private void ClearResults() { searched = false; hits = []; }
+    private ILiveCompanySearch? live; private LiveCompanySearchResult? liveResult;
+    protected override void OnInitialized() => live = Services.GetService(typeof(ILiveCompanySearch)) as ILiveCompanySearch;
+    private Task SearchLive() => Run(async () => { liveResult = await live!.Search(query); hits = liveResult.Hits; searched = true; });
+    private void ClearResults() { searched = false; hits = []; liveResult = null; }
     private void Remove(CompanySearchIndex index) { indexes.Remove(index); ClearResults(); }
     private async Task Run(Func<Task> work) { if (busy) return; busy = true; error = message = ""; try { await work(); } catch (Exception e) when (e is BusinessException or UnauthorizedAccessException or System.Text.Json.JsonException or IOException or JSException) { error = e is System.Text.Json.JsonException ? "The file is not a valid company search index." : e.Message; } finally { busy = false; } }
     private Task Export() => Run(async () => { var index = await Statements.ExportSearchIndex(company); var bytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(index); var name = $"company-search-{index.SourceId:N}.json"; if (Services.GetService(typeof(IFileExport)) is IFileExport export) message = "Saved to " + await export.Save(name,bytes); else { await JS.InvokeVoidAsync("sierraDownload",name,Convert.ToBase64String(bytes)); message = "Company search index downloaded."; } });

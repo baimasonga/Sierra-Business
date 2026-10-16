@@ -16,6 +16,7 @@ public static class DesktopRegistration
         var companyRoot = companyFolder.Parent?.Name == "Companies" && Guid.TryParseExact(companyFolder.Name, "N", out _) ? companyFolder.Parent.Parent!.FullName : companyFolder.FullName;
         services.TryAddSingleton(new CompanyDirectory(companyRoot));
         services.AddTransient<ICompanyPeriodService, CompanyPeriodService>();
+        services.AddTransient<ILiveCompanySearch, LiveCompanySearch>();
         services.AddSingleton(TimeProvider.System);
         services.AddOptions<TradingOptions>().Configure(options =>
         {

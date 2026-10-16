@@ -32,10 +32,10 @@ public static class ServiceRules
     public const Account WorkInProgress = (Account)1260, Income = (Account)4300, Costs = (Account)5400;
     public static readonly DocumentKind[] StockKinds = [DocumentKind.ServiceIssue, DocumentKind.ServiceReturn, DocumentKind.ServiceClose];
 
-    /// <summary>Customer receivable documents: credit sales, credit service invoices, bounced cheques and reviewed interest charges.</summary>
+    /// <summary>Customer receivable documents: credit sales, credit service invoices, bounced cheques, reviewed interest charges and opening customer bills.</summary>
     public static IQueryable<BusinessDocument> Receivable(IQueryable<BusinessDocument> documents) =>
-        documents.Where(x => (x.Kind == DocumentKind.Sale || x.Kind == DocumentKind.ServiceInvoice) && x.Settlement == "Credit" || x.Kind == DocumentKind.ChequeBounce || x.Kind == DocumentKind.InterestCharge);
-    public static bool IsReceivable(BusinessDocument x) => (x.Kind is DocumentKind.Sale or DocumentKind.ServiceInvoice) && x.Settlement == "Credit" || x.Kind is DocumentKind.ChequeBounce or DocumentKind.InterestCharge;
+        documents.Where(x => (x.Kind == DocumentKind.Sale || x.Kind == DocumentKind.ServiceInvoice) && x.Settlement == "Credit" || x.Kind == DocumentKind.ChequeBounce || x.Kind == DocumentKind.InterestCharge || x.Kind == DocumentKind.OpeningBalance && x.Settlement == "Credit");
+    public static bool IsReceivable(BusinessDocument x) => (x.Kind is DocumentKind.Sale or DocumentKind.ServiceInvoice) && x.Settlement == "Credit" || x.Kind is DocumentKind.ChequeBounce or DocumentKind.InterestCharge || x.Kind == DocumentKind.OpeningBalance && x.Settlement == "Credit";
 
     /// <summary>Credit limit and hold check shared by credit sales and credit service invoices.</summary>
     public static async Task CheckCredit(BusinessDb db, string branch, BusinessParty? customer, string party, decimal amount, CancellationToken ct = default)

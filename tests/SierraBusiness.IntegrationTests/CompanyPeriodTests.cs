@@ -101,4 +101,24 @@ public sealed class CompanyPeriodTests
         var preview = await service.Preview(cutoff); await service.Split(new(Guid.NewGuid(),cutoff,"Prior","Current",preview.HistoryHead));
         Assert.Equal(head,(await service.Compact()).HistoryHead);
     });
+    [Fact] public Task LiveSearchCoversOwnedCompaniesAndSkipsOthers() => WithCompany(async (provider,actor,root) =>
+    {
+        var business = provider.GetRequiredService<IBusinessService>(); var cutoff = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-1);
+        var product = await business.AddProduct(actor,new(Guid.NewGuid(),"LIVE-PAPER","Live search paper","General","unit",50,TrackingMode.Quantity,MinimumPrice:1));
+        await business.Post(actor,new(Guid.NewGuid(),DocumentKind.Receipt,"Paper supplier",cutoff,[new(product,1,20)],null));
+        var service = provider.GetRequiredService<ICompanyPeriodService>(); var preview = await service.Preview(cutoff); await service.Split(new(Guid.NewGuid(),cutoff,"Prior","Current",preview.HistoryHead));
+        var directory = provider.GetRequiredService<CompanyDirectory>(); var other = directory.Create("Someone else");
+        using (var foreign = new ServiceCollection().AddLogging().AddSierraDesktop(other.DataDirectory).BuildServiceProvider())
+        {
+            await foreign.GetRequiredService<DesktopStore>().Initialize(foreign.GetRequiredService<IDbContextFactory<BusinessDb>>());
+            var accounts = foreign.GetRequiredService<LocalAccountService>(); await accounts.CreateOwner("other@example.test","Other-Test-Password-2026!","Other-Test-Password-2026!");
+            var otherActor = await accounts.SignIn("other@example.test","Other-Test-Password-2026!"); await foreign.GetRequiredService<IBusinessService>().AddProduct(otherActor,new(Guid.NewGuid(),"LIVE-PAPER-X","Hidden paper","General","unit",50,TrackingMode.Quantity,MinimumPrice:1));
+        }
+        var result = await provider.GetRequiredService<ILiveCompanySearch>().Search("paper");
+        Assert.Equal(3,result.Searched.Count); Assert.Contains(result.Skipped,s => s.StartsWith("Someone else"));
+        Assert.Equal(3,result.Hits.Count(h => h.Entry.Kind == "Product" && h.Entry.Key == "LIVE-PAPER")); Assert.Equal(3,result.Hits.Count(h => h.Entry.Kind == "Document" && h.Entry.Name == "Paper supplier"));
+        Assert.DoesNotContain(result.Hits,h => h.Entry.Key == "LIVE-PAPER-X");
+        Assert.Empty((await provider.GetRequiredService<ILiveCompanySearch>().Search("100%_literal")).Hits);
+        await Assert.ThrowsAsync<BusinessException>(() => provider.GetRequiredService<ILiveCompanySearch>().Search("p"));
+    });
 }

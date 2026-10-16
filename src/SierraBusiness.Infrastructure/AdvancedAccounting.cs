@@ -140,7 +140,7 @@ public sealed partial class FinanceService
         var returns = await db.ReturnAllocations.AsNoTracking().Where(a => db.Documents.Any(d => d.Id == a.OriginalDocumentId && d.Branch == actor.Branch)).ToListAsync();
         bool Active(Guid id, DateOnly day) => docs.TryGetValue(id, out var d) && d.BusinessDate <= day && (!reverseDates.TryGetValue(id, out var reversed) || reversed > day);
         var rows = new List<InterestRow>();
-        var bills = docs.Values.Where(d => q.Receivable ? ServiceRules.IsReceivable(d) && d.Kind != DocumentKind.InterestCharge : d.Kind is DocumentKind.Receipt or DocumentKind.LandedCost or DocumentKind.SupplierInvoice && d.Settlement.StartsWith("Supplier payable", StringComparison.Ordinal)).Where(d => string.IsNullOrWhiteSpace(q.Party) || d.Party.Equals(q.Party.Trim(), StringComparison.OrdinalIgnoreCase));
+        var bills = docs.Values.Where(d => q.Receivable ? ServiceRules.IsReceivable(d) && d.Kind != DocumentKind.InterestCharge : d.Kind is DocumentKind.Receipt or DocumentKind.LandedCost or DocumentKind.SupplierInvoice or DocumentKind.OpeningBalance && d.Settlement.StartsWith("Supplier payable", StringComparison.Ordinal)).Where(d => string.IsNullOrWhiteSpace(q.Party) || d.Party.Equals(q.Party.Trim(), StringComparison.OrdinalIgnoreCase));
         foreach (var bill in bills)
         {
             var due = bill.DueDate ?? bill.BusinessDate; var startNumber = Math.Max(q.From.DayNumber, Math.Max(bill.BusinessDate.DayNumber, due.DayNumber + q.GraceDays + 1)); if (startNumber > q.To.DayNumber) continue;
