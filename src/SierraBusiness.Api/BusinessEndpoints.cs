@@ -112,6 +112,8 @@ public static class BusinessEndpoints
         group.MapPost("/finance/scenarios", async (ScenarioCommand input, HttpContext context, IAntiforgery antiforgery, IFinanceService service) => { await antiforgery.ValidateRequestAsync(context); return await Result(() => service.SaveScenario(input)); });
         group.MapPost("/finance/scenarios/project", async (ScenarioProjectionRequest input, IFinanceService service) => await Result(() => service.ProjectScenarios(input.From, input.To, input.Ids))).Produces<ScenarioReport>();
         group.MapPost("/finance/interest", async (InterestRequest input, IFinanceService service) => await Result(() => service.Interest(input))).Produces<InterestReport>();
+        group.MapGet("/finance/interest/charges", async (IFinanceService service) => await Result(() => service.InterestCharges())).Produces<IReadOnlyList<InterestChargeView>>();
+        group.MapPost("/finance/interest/charges", async (InterestChargeCommand input, HttpContext context, IAntiforgery antiforgery, IFinanceService service) => { await antiforgery.ValidateRequestAsync(context); return await Result(() => service.PostInterestCharge(input)); });
         group.MapGet("/finance/cash-flow", async (DateOnly from, DateOnly to, IFinanceService service) => await Result(() => service.CashFlow(from, to)));
         group.MapGet("/finance/reconciliation/history", async (IFinanceService service) => await Result(() => service.MatchHistory()));
         group.MapPost("/finance/reconciliation/cancel", async (CancelBankMatchCommand input, HttpContext context, IAntiforgery antiforgery, IFinanceService service) => { await antiforgery.ValidateRequestAsync(context); return await Result(() => service.CancelMatch(input)); });

@@ -11,10 +11,10 @@ namespace SierraBusiness.IntegrationTests;
 
 public sealed class AdvancedAccountingScreenTests : IAsyncLifetime
 {
-    private readonly string path = Path.Combine(Path.GetTempPath(), "rokela-analysis-ui-" + Guid.NewGuid().ToString("N") + ".db"); private readonly BunitContext context = new(); private readonly Session session = new(); private FinanceService finance = null!;
+    private readonly string path = Path.Combine(Path.GetTempPath(), "rokela-analysis-ui-" + Guid.NewGuid().ToString("N") + ".db"); private readonly BunitContext context = new(); private readonly Session session = new(); private FinanceService finance = null!; private Factory factory = null!;
     public async Task InitializeAsync()
     {
-        var factory = new Factory(new DbContextOptionsBuilder<BusinessDb>().UseSqlite("Data Source=" + path + ";Pooling=False").Options); await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db);
+        factory = new Factory(new DbContextOptionsBuilder<BusinessDb>().UseSqlite("Data Source=" + path + ";Pooling=False").Options); await using (var db = factory.CreateDbContext()) await HistoryProtection.MigrateAsync(db);
         finance = new(factory, session, Options.Create(new TradingOptions())); await finance.CreateLedger(new(Guid.NewGuid(), 6001, "Operating expenses", LedgerGroup.Expense));
         context.Services.AddSingleton<IFinanceService>(finance); context.JSInterop.Mode = JSRuntimeMode.Loose;
     }
@@ -44,6 +44,21 @@ public sealed class AdvancedAccountingScreenTests : IAsyncLifetime
         session.Actor = new("reader", "FREETOWN", new HashSet<string> { "accounting.read" }); var screen = Render(); screen.WaitForAssertion(() => Assert.Contains("Grouped balances", screen.Markup)); Assert.DoesNotContain("Save account group", screen.Markup);
         Click(screen, "Interest"); Field(screen, "Annual rate percent").Change("10"); Click(screen, "Calculate interest worksheet"); screen.WaitForAssertion(() => Assert.Contains("No bill or journal has been created", screen.Markup));
         Click(screen, "Scenarios"); Assert.DoesNotContain("Save non posting scenario", screen.Markup);
+    }
+    [Fact] public async Task OwnerChargesReviewedInterestFromTheWorksheet()
+    {
+        await finance.CreateLedger(new(Guid.NewGuid(), 6900, "Interest income", LedgerGroup.Income)); await TestParties.Register(factory, "School");
+        var business = new BusinessService(factory, Options.Create(new TradingOptions())); var date = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-10);
+        var product = await business.AddProduct(session.Actor, new(Guid.NewGuid(), "INT-UI", "Credit item", "General", "piece", 100, TrackingMode.Quantity, MinimumPrice: 1));
+        await business.Post(session.Actor, new(Guid.NewGuid(), DocumentKind.Receipt, "Supplier", date, [new(product, 10, 50)], null));
+        var bill = await business.Post(session.Actor, new(Guid.NewGuid(), DocumentKind.Sale, "School", date, [new(product, 10, 100)], null, DueDate: date));
+        var number = (await business.Read(session.Actor)).Documents.Single(d => d.Id == bill).Number;
+        var screen = Render(); screen.WaitForAssertion(() => Assert.Contains("Grouped balances", screen.Markup));
+        Field(screen, "From").Change(date.AddDays(1).ToString("yyyy-MM-dd")); Click(screen, "Refresh accounting analysis"); Click(screen, "Interest");
+        Field(screen, "Annual rate percent").Change("36.5"); Click(screen, "Calculate interest worksheet"); screen.WaitForAssertion(() => Assert.Contains("Charge interest on " + number, screen.Markup));
+        Field(screen, "Interest income ledger").Change("6900"); Field(screen, "Review reason").Change("Agreed terms");
+        Click(screen, "Charge interest on " + number); screen.WaitForAssertion(() => Assert.Contains("posted to the customer's account", screen.Markup));
+        Assert.Contains("Interest charged", screen.Markup); Assert.Equal(10m, Assert.Single(await finance.InterestCharges()).Amount);
     }
     private sealed class Session : IActorSession { public Actor Actor = new("owner", "FREETOWN", BusinessPermissions.All.ToHashSet()); public Task<Actor> CurrentActor() => Task.FromResult(Actor); }
     private sealed class Factory(DbContextOptions<BusinessDb> options) : IDbContextFactory<BusinessDb> { public BusinessDb CreateDbContext() => new(options); }

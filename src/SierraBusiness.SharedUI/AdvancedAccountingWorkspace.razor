@@ -52,7 +52,21 @@ else if (tab == "Scenarios")
 else if (tab == "Interest")
 {
     <section class="panel"><h2>Interest worksheet</h2><p>This is a calculation using an agreed rate, not an automatic charge or a statutory rate. It starts after the due date plus grace days and uses daily closing balances. Payments and bill credits reduce the balance on their document date; reversals restore it on their reversal date. Each bill is rounded once.</p><div class="form-grid"><label>Annual rate percent<input type="number" min="0" max="100" step="0.01" @bind="rate" /></label><label>Grace days<input type="number" min="0" max="3660" @bind="grace" /></label><label>Day count basis<select @bind="basis"><option value="@InterestBasis.Actual365">Actual days divided by 365</option><option value="@InterestBasis.ActualYear">Actual days divided by days in year</option><option value="@InterestBasis.Actual360">Actual days divided by 360</option></select></label><label>Bill type<select @bind="receivable"><option value="true">Customer receivables</option><option value="false">Supplier payables</option></select></label><label>Exact party optional<input @bind="interestParty" /></label></div><button class="secondary" disabled="@busy" @onclick="CalculateInterest">Calculate interest worksheet</button>
-    @if (interest is not null) { <p>Calculated interest @Money(interest.Total). No bill or journal has been created.</p><div class="table-wrap"><table><thead><tr><th>Document and party</th><th>Due</th><th>Charged days</th><th>Start balance</th><th>End balance</th><th>Interest</th></tr></thead><tbody>@foreach (var r in interest.Rows) { <tr><td>@r.Number · @r.Party</td><td>@r.Due</td><td>@r.ChargedDays</td><td>@Money(r.StartBalance)</td><td>@Money(r.EndBalance)</td><td>@Money(r.Interest)</td></tr> }</tbody></table></div> }</section>
+    @if (interest is not null)
+    {
+        <p>Calculated interest @Money(interest.Total). No bill or journal has been created.</p>
+        @if (interest.Request.Receivable && CanWrite)
+        {
+            <p class="hint">To bill a customer, review the amount, choose an income ledger and charge it. The worksheet is recalculated when posting; a bill cannot be charged twice for the same days. Correct a charge by reversing it.</p>
+            <div class="form-grid"><label>Interest income ledger<select @bind="interestIncome"><option value="0">Choose income ledger</option>@foreach (var a in accounts?.Accounts.Where(a => a.Group == LedgerGroup.Income && !a.Control) ?? []) { <option value="@a.Code">@a.Code · @a.Name</option> }</select></label><label>Charge date<input type="date" @bind="chargeDate" /></label><label>Days allowed to pay<input type="number" min="0" max="365" @bind="chargeDays" /></label><label>Review reason<input maxlength="300" @bind="chargeReason" /></label></div>
+        }
+        <div class="table-wrap"><table><thead><tr><th>Document and party</th><th>Due</th><th>Charged days</th><th>Start balance</th><th>End balance</th><th>Interest</th>@if (interest.Request.Receivable && CanWrite) { <th>Amount to charge</th><th></th> }</tr></thead><tbody>@foreach (var r in interest.Rows) { <tr><td>@r.Number · @r.Party</td><td>@r.Due</td><td>@r.ChargedDays</td><td>@Money(r.StartBalance)</td><td>@Money(r.EndBalance)</td><td>@Money(r.Interest)</td>@if (interest.Request.Receivable && CanWrite) { <td><input type="number" min="0.01" max="@r.Interest" step="0.01" aria-label="@($"Amount to charge on {r.Number}")" value="@ChargeAmount(r)" @onchange="e => chargeAmounts[r.DocumentId] = decimal.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 0" /></td><td><button class="secondary" disabled="@(busy || r.Interest <= 0)" @onclick="() => ChargeInterest(r)">Charge interest on @r.Number</button></td> }</tr> }</tbody></table></div>
+    }
+    @if (interestCharges.Count > 0)
+    {
+        <h3>Interest charged</h3>
+        <div class="table-wrap"><table><thead><tr><th>Charge</th><th>Bill and party</th><th>Period</th><th>Calculated</th><th>Charged</th><th>Status</th></tr></thead><tbody>@foreach (var c in interestCharges) { <tr><td>@c.Number · @c.Date</td><td>@c.BillNumber · @c.Party</td><td>@c.From to @c.To</td><td>@Money(c.Calculated)</td><td>@Money(c.Amount)</td><td>@(c.Reversed ? "Reversed" : "Active")</td></tr> }</tbody></table></div>
+    }</section>
 }
 @code {
     [Parameter] public Actor Actor { get; set; } = default!;
@@ -66,6 +80,7 @@ else if (tab == "Interest")
     private int ledger, allocationAccount, funds = 1000; private bool centreActive = true, income; private DateOnly allocationDate = DateOnly.FromDateTime(DateTime.Today); private decimal amount; private string narration = ""; private readonly Dictionary<Guid, decimal> shares = []; private CentreAllocationPreview? allocationPreview;
     private string scenarioName = "", scenarioNote = ""; private ScenarioKind scenarioKind; private DateOnly scenarioDate = DateOnly.FromDateTime(DateTime.Today); private bool scenarioActive = true; private readonly List<VoucherLine> scenarioLines = []; private int scenarioAccount; private decimal scenarioDebit, scenarioCredit; private readonly HashSet<Guid> chosen = []; private ScenarioReport? projection;
     private decimal rate; private int grace; private InterestBasis basis; private bool receivable = true; private string interestParty = ""; private InterestReport? interest;
+    private int interestIncome, chargeDays = 30; private DateOnly chargeDate = DateOnly.FromDateTime(DateTime.Today); private string chargeReason = ""; private readonly Dictionary<Guid, decimal> chargeAmounts = []; private readonly Dictionary<Guid, Guid> chargeOperations = []; private IReadOnlyList<InterestChargeView> interestCharges = [];
     private Guid groupOperation = Guid.NewGuid(), mappingOperation = Guid.NewGuid(), centreOperation = Guid.NewGuid(), allocationOperation = Guid.NewGuid(), scenarioOperation = Guid.NewGuid();
     private string groupBaseline = "", centreBaseline = "", scenarioBaseline = ""; private Guid mappingBaseline;
     private string GroupValues => System.Text.Json.JsonSerializer.Serialize(new { groupName, nature, groupParent });
@@ -75,7 +90,7 @@ else if (tab == "Interest")
     private IEnumerable<LedgerDefinition> AllocationAccounts => accounts?.Accounts.Where(a => !a.Control && a.Group == (income ? LedgerGroup.Income : LedgerGroup.Expense)) ?? [];
     private static string Money(decimal value) => value.ToString("N2");
     protected override async Task OnInitializedAsync() { await Run(Load); if (accounts is not null) { ledger = accounts.Accounts.First().Code; scenarioAccount = ledger; ChooseLedger(); ChooseAllocationAccount(); } groupBaseline = GroupValues; centreBaseline = CentreValues; scenarioBaseline = ScenarioValues; }
-    private async Task Load() { structure = await Finance.Structure(); accounts = await Finance.Read(from, to); report = await Finance.StructureReport(from, to); scenarios = await Finance.Scenarios(); chosen.RemoveWhere(id => !scenarios.Any(s => s.Id == id && s.Active && s.Date >= from && s.Date <= to)); projection = null; interest = null; }
+    private async Task Load() { structure = await Finance.Structure(); accounts = await Finance.Read(from, to); report = await Finance.StructureReport(from, to); scenarios = await Finance.Scenarios(); interestCharges = await Finance.InterestCharges(); chosen.RemoveWhere(id => !scenarios.Any(s => s.Id == id && s.Active && s.Date >= from && s.Date <= to)); projection = null; interest = null; }
     private Task Refresh() => Run(Load);
     private async Task Run(Func<Task> action) { if (busy) return; busy = true; error = message = ""; try { await action(); } catch (ApprovalRequiredException e) { error = e.Message + " Review the request in Approvals before posting."; } catch (Exception e) when (e is BusinessException or UnauthorizedAccessException or JSException) { error = e.Message; } catch { error = "Accounting analysis could not complete. Refresh and check saved records before retrying."; } finally { busy = false; } }
     private async Task Open(string t) { if (t == tab) return; if (HasDraft && !await JS.InvokeAsync<bool>("confirm", "Leave this accounting editor with unsaved changes?")) return; tab = t; error = message = ""; }
@@ -101,6 +116,16 @@ else if (tab == "Interest")
     private void ChooseScenario(Guid id, bool value) { if (value) chosen.Add(id); else chosen.Remove(id); projection = null; }
     private Task Project() => Run(async () => projection = await Finance.ProjectScenarios(from, to, chosen.ToArray()));
     private InterestRequest InterestRequest() => new(from, to, rate, grace, basis, receivable, interestParty);
-    private Task CalculateInterest() => Run(async () => interest = await Finance.Interest(InterestRequest()));
+    private Task CalculateInterest() => Run(async () => { interest = await Finance.Interest(InterestRequest()); chargeAmounts.Clear(); });
+    private decimal ChargeAmount(InterestRow row) => chargeAmounts.TryGetValue(row.DocumentId, out var value) ? value : row.Interest;
+    private Task ChargeInterest(InterestRow row) => Run(async () =>
+    {
+        if (interest is null) return;
+        if (!chargeOperations.TryGetValue(row.DocumentId, out var operation)) chargeOperations[row.DocumentId] = operation = Guid.NewGuid();
+        await Finance.PostInterestCharge(new(operation, interest.Request, row.DocumentId, ChargeAmount(row), chargeDate, interestIncome, chargeReason, chargeDays));
+        chargeOperations.Remove(row.DocumentId);
+        var request = interest.Request; await Load(); interest = await Finance.Interest(request);
+        message = $"Interest charge on {row.Number} posted to the customer's account.";
+    });
     private Task Export() => Run(async () => { var bytes = await Finance.ExportAdvanced(from, to, chosen.ToArray(), interest?.Request); await JS.InvokeVoidAsync("sierraDownload", "Accounting-analysis.xlsx", Convert.ToBase64String(bytes)); });
 }

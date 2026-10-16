@@ -191,7 +191,7 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
             if (sale && !delivery && input.Payment is null && partyMaster is not null)
             {
                 if (partyMaster.CreditHold) throw new BusinessException("This customer's account is on credit hold.");
-                var bills = await db.Documents.Where(x => x.Branch == actor.Branch && x.Party.ToUpper() == normalizedParty && ((x.Kind == DocumentKind.Sale || x.Kind == DocumentKind.ServiceInvoice) && x.Settlement == "Credit" || x.Kind == DocumentKind.ChequeBounce) && !db.Documents.Any(r => r.Reverses == x.Id)).ToListAsync(cancellationToken);
+                var bills = await db.Documents.Where(x => x.Branch == actor.Branch && x.Party.ToUpper() == normalizedParty && ((x.Kind == DocumentKind.Sale || x.Kind == DocumentKind.ServiceInvoice) && x.Settlement == "Credit" || x.Kind == DocumentKind.ChequeBounce || x.Kind == DocumentKind.InterestCharge) && !db.Documents.Any(r => r.Reverses == x.Id)).ToListAsync(cancellationToken);
                 var ids = bills.Select(x => x.Id).ToList();
                 var allocations = await db.BillAllocations.Where(x => ids.Contains(x.InvoiceId) && !db.Documents.Any(r => r.Reverses == x.VoucherId)).ToListAsync(cancellationToken);
                 var outstanding = bills.Sum(x => x.Total) - allocations.Sum(x => x.Amount);
