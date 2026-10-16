@@ -58,7 +58,7 @@
         }
         <details><summary>Reconcile intercompany transactions</summary>
             <p class="hint">Export this company's documents with the other group company (as named in your books), load both companies' exports, then match them. Pairs have opposite effects on receivables and payables within the allowed days; anything unmatched needs investigation before eliminating balances.</p>
-            <div class="form-grid"><label>Other group company (party name)<input maxlength="160" @bind="counterparty" /></label><label>Days allowed between documents<input type="number" min="0" max="31" @bind="tolerance" @bind:after="ClearMatch" /></label></div>
+            <div class="form-grid"><label>Other group company (party name; must match that company's own export name)<input maxlength="160" @bind="counterparty" /></label><label>Days allowed between documents<input type="number" min="0" max="31" @bind="tolerance" @bind:after="ClearMatch" /></label></div>
             <button class="secondary" @onclick="ExportLedger">Export intercompany transactions</button>
             @foreach (var l in ledgers) { <p>@l.Company / @l.Branch with @l.Counterparty · @l.Transactions.Count transactions <button class="secondary" @onclick="() => { ledgers.Remove(l); ClearMatch(); }">Remove @l.Company transactions</button></p> }
             <button class="secondary" disabled="@(ledgers.Count != 2)" @onclick="MatchLedgers">Match intercompany transactions</button>

@@ -146,6 +146,8 @@ public sealed class ConsolidationTests
             Assert.Equal(2, report.Matched.Count); Assert.Equal(30, Assert.Single(report.LeftOnly).Amount); Assert.Empty(report.RightOnly); Assert.Equal(30, report.Difference); Assert.Equal(1, report.Matched[0].DaysApart);
             var strict = await Service.MatchIntercompanyTransactions(new(left, right, 0)); Assert.Single(strict.Matched); Assert.Equal(2, strict.LeftOnly.Count);
             await Assert.ThrowsAsync<BusinessException>(() => Service.MatchIntercompanyTransactions(new(left, left)));
+            await Assert.ThrowsAsync<BusinessException>(() => Service.MatchIntercompanyTransactions(new(left with { Counterparty = "Company C" }, right)));
+            await Assert.ThrowsAsync<BusinessException>(() => Service.MatchIntercompanyTransactions(new(left, right with { Company = "Company D" })));
             await Assert.ThrowsAsync<BusinessException>(() => Service.MatchIntercompanyTransactions(new(left, right with { From = From.AddDays(1) })));
             await Assert.ThrowsAsync<BusinessException>(() => Service.MatchIntercompanyTransactions(new(left, right with { Transactions = [.. right.Transactions, new("X", To, "Sale", 0)] })));
         }

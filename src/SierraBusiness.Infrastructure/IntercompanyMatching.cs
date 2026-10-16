@@ -59,6 +59,9 @@ public sealed partial class StatementsService
                 throw new BusinessException("Use valid version 1 intercompany ledgers exported from Rokela.");
         }
         if (input.Left.SourceId == input.Right.SourceId) throw new BusinessException("Load the ledgers of two different companies.");
+        // Each export must name the other as its counterparty; otherwise unrelated ledgers could match by coincidence.
+        static bool Same(string a, string b) => a.Trim().Equals(b.Trim(), StringComparison.OrdinalIgnoreCase);
+        if (!Same(input.Left.Counterparty, input.Right.Company) || !Same(input.Right.Counterparty, input.Left.Company)) throw new BusinessException($"These exports are not reciprocal: {input.Left.Company} is with {input.Left.Counterparty} and {input.Right.Company} is with {input.Right.Counterparty}. Export each company with the other's name as its company and counterparty.");
         if (input.Left.From != input.Right.From || input.Left.To != input.Right.To) throw new BusinessException("Export both ledgers for the same period.");
         var open = input.Right.Transactions.ToList(); var matched = new List<IntercompanyTransactionMatch>(); var leftOnly = new List<IntercompanyTransaction>();
         foreach (var left in input.Left.Transactions.OrderBy(t => t.Date).ThenBy(t => t.Number))
