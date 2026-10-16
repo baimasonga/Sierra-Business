@@ -95,6 +95,56 @@ public sealed class ComplianceTests : IAsyncLifetime
         await Assert.ThrowsAsync<BusinessException>(() => returns.Post(new(Guid.NewGuid(),receipt,"Cannot return claimed GST without correction",[new(widget,null,null,null,1)],ReturnDisposition.SupplierCredit)));
         await business.Reverse(session.Actor,new(Guid.NewGuid(),id,"Correct allowable-tax review")); Assert.Equal(before,(await business.Read(session.Actor)).Stock.Where(s => s.ProductId == widget).Sum(s => s.Value)); await Verified();
     }
+    [Fact] public async Task StockInputTaxAfterIssueSplitsBetweenStockAndIssuedGoods()
+    {
+        var service = Compliance(); await service.SaveProfile(new(Guid.NewGuid(),new(LegalName:"Stock tax company",TaxRegistered:true,Identifiers:[new("TIN","123456")]))); var finance = new FinanceService(factory,session,options); await finance.CreateLedger(new(Guid.NewGuid(),6401,"Input GST recovery",LedgerGroup.Asset));
+        var taxed = await business.AddProduct(session.Actor,new(Guid.NewGuid(),"TAXED","Taxed stock","General","piece",200,TrackingMode.Quantity,MinimumPrice:1));
+        var receipt = await business.Post(session.Actor,new(Guid.NewGuid(),DocumentKind.Receipt,"Tax supplier",today,[new(taxed,2,115)],null));
+        await business.Post(session.Actor,new(Guid.NewGuid(),DocumentKind.Sale,"Cash customer",today,[new(taxed,1,200)],PaymentMethod.Cash));
+        var preview = await service.PreviewStockInputTax(receipt,30); Assert.True(preview.LaterIssues); Assert.Equal(15,preview.SuggestedIssued); Assert.Equal(15,preview.SuggestedOnHand);
+        var claim = new InputTaxCommand(Guid.NewGuid(),receipt,today,"Tax supplier","TIN-SUP","GST-ISSUED",false,200,30,30,1200,6401,"Reviewed after partial sale",true);
+        await Assert.ThrowsAsync<BusinessException>(() => service.RecordInputTax(claim));
+        await Assert.ThrowsAsync<BusinessException>(() => service.RecordInputTax(claim with { IssuedTax = 31,IssuedAccount = 5000 }));
+        await Assert.ThrowsAsync<BusinessException>(() => service.RecordInputTax(claim with { IssuedTax = 15,IssuedAccount = 1000 }));
+        var id = await service.RecordInputTax(claim with { IssuedTax = 15,IssuedAccount = 5000 });
+        Assert.Equal(100,(await business.Read(session.Actor)).Stock.Where(s => s.ProductId == taxed).Sum(s => s.Value));
+        await using (var db = factory.CreateDbContext()) { var lines = await db.Journal.Where(j => j.DocumentId == id).ToListAsync(); Assert.Equal(30,lines.Single(l => (int)l.Account == 6401).Debit); Assert.Equal(15,lines.Single(l => l.Account == Account.CostOfSales).Credit); Assert.Equal(15,lines.Single(l => l.Account == Account.Inventory).Credit); }
+        Assert.Equal(30,(await service.NetTaxReturn(today,today)).AllowableInputTax);
+        await business.Reverse(session.Actor,new(Guid.NewGuid(),id,"Allowability corrected")); Assert.Equal(115,(await business.Read(session.Actor)).Stock.Where(s => s.ProductId == taxed).Sum(s => s.Value)); await Verified();
+    }
+    [Fact] public async Task StandardCostStockInputTaxReducesPurchaseVariance()
+    {
+        var service = Compliance(); await service.SaveProfile(new(Guid.NewGuid(),new(LegalName:"Stock tax company",TaxRegistered:true,Identifiers:[new("TIN","123456")]))); var finance = new FinanceService(factory,session,options); await finance.CreateLedger(new(Guid.NewGuid(),6401,"Input GST recovery",LedgerGroup.Asset));
+        var standard = await business.AddProduct(session.Actor,new(Guid.NewGuid(),"STD-TAX","Standard taxed","General","piece",200,TrackingMode.Quantity,MinimumPrice:1));
+        await new InventoryService(factory,session,options).SetCostPolicy(new(Guid.NewGuid(),standard,0,InventoryCostMethod.Standard,90,today,"Standard"));
+        var receipt = await business.Post(session.Actor,new(Guid.NewGuid(),DocumentKind.Receipt,"Tax supplier",today,[new(standard,1,115)],null));
+        var preview = await service.PreviewStockInputTax(receipt,15); Assert.Equal(15,preview.StandardVariance); Assert.False(preview.LaterIssues);
+        var id = await service.RecordInputTax(new(Guid.NewGuid(),receipt,today,"Tax supplier","TIN-SUP","GST-STD",false,100,15,15,1200,6401,"Standard-cost receipt reviewed",true));
+        Assert.Equal(90,(await business.Read(session.Actor)).Stock.Where(s => s.ProductId == standard).Sum(s => s.Value));
+        await using (var db = factory.CreateDbContext()) Assert.Equal(15,(await db.Journal.SingleAsync(j => j.DocumentId == id && (int)j.Account == 5100)).Credit);
+        await Verified();
+    }
+    [Fact] public async Task RecordedReturnsAreCorrectedSeparatelyWithPaymentCreditAndPenalty()
+    {
+        var service = Compliance(); await service.SaveProfile(new(Guid.NewGuid(),new(LegalName:"GST filer",TaxRegistered:true,Identifiers:[new("TIN","123456")]))); var finance = new FinanceService(factory,session,options);
+        await finance.CreateLedger(new(Guid.NewGuid(),6501,"GST carry forward",LedgerGroup.Asset)); await finance.CreateLedger(new(Guid.NewGuid(),6502,"GST corrections",LedgerGroup.Expense)); await finance.CreateLedger(new(Guid.NewGuid(),6503,"Tax penalties",LedgerGroup.Expense));
+        var to = new DateOnly(today.Year,today.Month,1).AddDays(-1); var from = new DateOnly(to.Year,to.Month,1); await MixedSale(to);
+        var preview = await service.PreviewTaxFiling(from,to); var filing = await service.RecordTaxFiling(new(Guid.NewGuid(),from,to,preview.CalculationFingerprint,"NRA-1","Reconciled",1010,6501,0,true));
+        var more = new TaxFilingCorrectionCommand(Guid.NewGuid(),filing,"NRA-1-A1","Missed invoice found on review",20,0,6502,1010,6501,0,5,6503);
+        await Assert.ThrowsAsync<BusinessException>(() => service.RecordTaxFilingCorrection(more with { FilingId = Guid.NewGuid() }));
+        await Assert.ThrowsAsync<BusinessException>(() => service.RecordTaxFilingCorrection(more with { AdjustmentAccount = 2100 }));
+        await Assert.ThrowsAsync<BusinessException>(() => service.RecordTaxFilingCorrection(more with { CarryCreditUsed = 5 }));
+        var id = await service.RecordTaxFilingCorrection(more); Assert.Equal(id,await service.RecordTaxFilingCorrection(more));
+        await Assert.ThrowsAsync<BusinessException>(() => service.RecordTaxFilingCorrection(more with { OperationId = Guid.NewGuid() }));
+        await Assert.ThrowsAsync<BusinessException>(() => business.Reverse(session.Actor,new(Guid.NewGuid(),id,"Declared corrections cannot be erased")));
+        var less = await service.RecordTaxFilingCorrection(new(Guid.NewGuid(),filing,"NRA-1-A2","Input invoice omitted",0,8,6502,1010,6501,0));
+        var views = await service.TaxFilingCorrections(); Assert.Equal(2,views.Count); var first = views.Single(v => v.Id == id); Assert.Equal(20,first.Paid); Assert.Equal(5,first.Penalty); Assert.Equal(from,first.From);
+        Assert.Equal(8,views.Single(v => v.Id == less).NewCredit);
+        var used = await service.RecordTaxFilingCorrection(new(Guid.NewGuid(),filing,"NRA-1-A3","Late output adjustment",10,0,6502,1010,6501,8));
+        Assert.Equal(2,(await service.TaxFilingCorrections()).Single(v => v.Id == used).Paid);
+        var balances = (await finance.Read(from,today)).Balances; Assert.Equal(0,balances.Single(a => a.Code == 6501).Closing); Assert.Equal(22,balances.Single(a => a.Code == 6502).Closing); Assert.Equal(5,balances.Single(a => a.Code == 6503).Closing);
+        Assert.Equal(preview.Report.NetPayable,(await service.NetTaxReturn(from,to)).NetPayable); await Verified();
+    }
     [Fact] public async Task CancellationsAffectTheirOwnTaxPeriodAndDoNotRewriteEarlierOutputOrInput()
     {
         var past = new DateOnly(today.Year,today.Month,1).AddDays(-1); var start = new DateOnly(past.Year,past.Month,1); var invoice = await MixedSale(past); var before = await Compliance().TaxReturn(start,past); Assert.True(before.OutputTax > 0);

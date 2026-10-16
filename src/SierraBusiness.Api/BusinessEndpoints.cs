@@ -17,6 +17,8 @@ public static class BusinessEndpoints
         group.MapGet("/compliance/tax-filings",async (IComplianceService service) => await Result(service.TaxFilings));
         group.MapGet("/compliance/tax-filing-preview",async (DateOnly from,DateOnly to,IComplianceService service) => await Result(() => service.PreviewTaxFiling(from,to)));
         group.MapPost("/compliance/tax-filings",async (TaxFilingCommand input,HttpContext context,IAntiforgery antiforgery,IComplianceService service) => { await antiforgery.ValidateRequestAsync(context); return await Result(() => service.RecordTaxFiling(input)); });
+        group.MapGet("/compliance/tax-filings/corrections",async (IComplianceService service) => await Result(service.TaxFilingCorrections));
+        group.MapPost("/compliance/tax-filings/corrections",async (TaxFilingCorrectionCommand input,HttpContext context,IAntiforgery antiforgery,IComplianceService service) => { await antiforgery.ValidateRequestAsync(context); return await Result(() => service.RecordTaxFilingCorrection(input)); });
         group.MapGet("/compliance/input-tax-sources",async (IComplianceService service) => await Result(service.InputTaxSources));
         group.MapGet("/banking/foreign-advances", async (IBankingService service) => await Result(service.ForeignAdvances));
         group.MapPost("/banking/foreign-advances", async (ForeignAdvanceCommand input,HttpContext context,IAntiforgery antiforgery,IBankingService service) => { await antiforgery.ValidateRequestAsync(context); return await Result(() => service.PostForeignAdvance(input)); });
@@ -34,6 +36,7 @@ public static class BusinessEndpoints
         group.MapPost("/finance/cost-categories/allocate", async (CategoryAllocationCommand input, HttpContext context, IAntiforgery antiforgery, IFinanceService service) => { await antiforgery.ValidateRequestAsync(context); return await Result(() => service.AllocateCategory(input)); });
         group.MapGet("/compliance/net-tax-return", async (DateOnly from, DateOnly to, IComplianceService service) => await Result(() => service.NetTaxReturn(from, to)));
         group.MapPost("/compliance/input-tax", async (InputTaxCommand input, HttpContext context, IAntiforgery antiforgery, IComplianceService service) => { await antiforgery.ValidateRequestAsync(context); return await Result(() => service.RecordInputTax(input)); });
+        group.MapGet("/compliance/input-tax/stock-preview", async (Guid receiptId, decimal allowableTax, IComplianceService service) => await Result(() => service.PreviewStockInputTax(receiptId, allowableTax)));
         group.MapGet("/finance/productivity", async (IFinanceService service) => await Result(service.Productivity));
         group.MapGet("/finance/project-profitability", async (DateOnly from, DateOnly to, IFinanceService service) => await Result(() => service.ProjectProfitability(from, to)));
         group.MapPost("/finance/allocation-classes", async (AllocationClassCommand input, HttpContext context, IAntiforgery antiforgery, IFinanceService service) => { await antiforgery.ValidateRequestAsync(context); return await Result(() => service.SaveAllocationClass(input)); });

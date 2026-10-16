@@ -29,31 +29,48 @@ public sealed partial class ComplianceService
             var recovery = await db.LedgerAccounts.SingleOrDefaultAsync(a => a.Id == input.RecoveryAccount);
             if ((input.Stock ? input.ExpenseAccount != 1200 : expense?.Group != LedgerGroup.Expense || expense.Control) || recovery?.Group != LedgerGroup.Asset || recovery.Control || recovery.CashOrBank) throw new BusinessException("Stock claims credit inventory 1200; expense claims use a custom expense. Choose a separate non-bank custom recovery asset.");
             var expenseAmount = (await db.Journal.Where(j => j.DocumentId == payment.Id && (int)j.Account == input.ExpenseAccount).ToListAsync()).Sum(j => j.Debit - j.Credit);
-            if (expenseAmount != input.NetPurchase + input.TaxPaid) throw new BusinessException("The source expense line must equal this invoice's purchase value plus tax. Split combined invoices into separate source payments before claiming.");
-            var stockChanges = new List<Movement>();
+            if (!input.Stock && expenseAmount != input.NetPurchase + input.TaxPaid) throw new BusinessException("The source expense line must equal this invoice's purchase value plus tax. Split combined invoices into separate source payments before claiming.");
+            var stockChanges = new List<Movement>(); var credits = new List<(int Account,decimal Amount)>();
             if (input.Stock)
             {
                 if (!payment.Party.Equals(input.Supplier.Trim(),StringComparison.OrdinalIgnoreCase)) throw new BusinessException("The reviewed supplier must match the source goods receipt.");
                 if (Grni.IsAwaiting(payment)) throw new BusinessException("Match the supplier invoice before reviewing input tax; this direct-receipt workflow cannot claim from uninvoiced goods.");
-                var sourceRows = await db.Movements.AsNoTracking().Where(m => m.DocumentId == payment.Id && m.Quantity > 0).ToListAsync(); if (sourceRows.Count == 0 || sourceRows.Sum(m => m.Value) != payment.Total || payment.Total != input.NetPurchase+input.TaxPaid) throw new BusinessException("Use a direct receipt whose recorded gross stock value equals the reviewed invoice net plus GST.");
-                var posted = await db.Operations.Where(o => o.ResultId == payment.Id).Select(o => (DateTimeOffset?)o.Time).FirstOrDefaultAsync() ?? throw new BusinessException("Source receipt posting history not found."); var later = (await db.Operations.AsNoTracking().Where(o => o.Branch == actor.Branch).Select(o => new { o.ResultId,o.Time }).ToListAsync()).Where(o => o.Time > posted).Select(o => o.ResultId).ToArray(); var productIds = sourceRows.Select(m => m.ProductId).Distinct().ToArray();
-                if (await db.Movements.AnyAsync(m => m.Branch == actor.Branch && productIds.Contains(m.ProductId) && later.Contains(m.DocumentId) && (m.Quantity < 0 || m.Value < 0) && !db.Documents.Any(r => r.Reverses == m.DocumentId))) throw new BusinessException("Recover included purchase GST before goods are issued, transferred, returned or written down. Later cost corrections require an accountant's allocation review.");
-                decimal allocated = 0,receivedValue = 0;
-                for (var i = 0; i < sourceRows.Count; i++)
+                if (payment.Total != input.NetPurchase+input.TaxPaid) throw new BusinessException("Use a direct receipt whose recorded gross supplier value equals the reviewed invoice net plus GST.");
+                var plan = await StockInputTax.Plan(db,actor.Branch,payment,input.AllowableTax,input.IssuedTax);
+                if (plan.Issued > 0)
                 {
-                    var row = sourceRows[i]; if ((await InventoryCost.Policy(db,actor.Branch,row.ProductId)).Method == InventoryCostMethod.Standard) throw new BusinessException("Standard-cost tax recovery needs its purchase-variance policy; this stock claim supports average/FIFO receipts."); await InventoryCost.GuardDate(db,actor.Branch,row.ProductId,input.Date);
-                    receivedValue += row.Value; var cumulative = i == sourceRows.Count-1 ? input.AllowableTax : AccountingEngine.Money(input.AllowableTax*receivedValue/payment.Total); var value = cumulative-allocated; allocated = cumulative; if (value == 0) continue;
-                    stockChanges.Add(new() { Id = Guid.NewGuid(),Branch = actor.Branch,ProductId = row.ProductId,Location = row.Location,Serial = row.Serial,Batch = row.Batch,Expiry = row.Expiry,Quantity = 0,Value = -value });
+                    var issued = await db.LedgerAccounts.SingleOrDefaultAsync(a => a.Id == input.IssuedAccount);
+                    if (issued?.Group != LedgerGroup.Expense || issued.Control && issued.Id != (int)Account.CostOfSales) throw new BusinessException("Choose cost of sales 5000 or a custom expense ledger for GST included in goods already issued.");
+                    credits.Add((issued.Id,plan.Issued));
                 }
+                else if (input.IssuedAccount != 0) throw new BusinessException("Choose an issued-goods ledger only when part of the GST relates to goods already issued.");
+                if (plan.Standard > 0) credits.Add(((int)StockInputTax.VarianceAccount,plan.Standard));
+                if (plan.OnHand > 0) credits.Add(((int)Account.Inventory,plan.OnHand));
+                foreach (var product in plan.Movements.Select(m => m.ProductId).Distinct()) await InventoryCost.GuardDate(db,actor.Branch,product,input.Date);
+                stockChanges.AddRange(plan.Movements);
+            }
+            else
+            {
+                if (input.IssuedTax is not null || input.IssuedAccount != 0) throw new BusinessException("Issued-goods allocation applies only to stock claims.");
+                credits.Add((input.ExpenseAccount,input.AllowableTax));
             }
             var claims = (await db.Operations.AsNoTracking().Where(o => o.Branch == actor.Branch && o.Action == "tax.input.claim" && !db.Documents.Any(r => r.Reverses == o.ResultId)).ToListAsync()).Select(o => JsonSerializer.Deserialize<InputTaxCommand>(o.Payload)!).ToArray();
             if (claims.Any(c => c.PaymentDocumentId == payment.Id || c.SupplierTin.Trim().Equals(input.SupplierTin.Trim(), StringComparison.OrdinalIgnoreCase) && c.InvoiceReference.Trim().Equals(input.InvoiceReference.Trim(), StringComparison.OrdinalIgnoreCase))) throw new BusinessException("This source payment or supplier invoice already has an active input-tax claim.");
             var doc = new BusinessDocument { Id = Guid.NewGuid(), Branch = actor.Branch, Number = $"{actor.Branch}-{options.Value.Device}-IT-{input.OperationId:N}", Kind = DocumentKind.Journal, BusinessDate = input.Date, Party = input.Supplier.Trim(), Total = input.AllowableTax, Settlement = "Input tax recovery", Detail = JsonSerializer.Serialize(input) };
             db.Documents.Add(doc);
             foreach (var movement in stockChanges) { movement.DocumentId = doc.Id; db.Movements.Add(movement); }
-            db.Journal.AddRange(new JournalLine { Id = Guid.NewGuid(), Branch = actor.Branch, DocumentId = doc.Id, Account = (Account)input.RecoveryAccount, Debit = input.AllowableTax }, new JournalLine { Id = Guid.NewGuid(), Branch = actor.Branch, DocumentId = doc.Id, Account = (Account)input.ExpenseAccount, Credit = input.AllowableTax });
+            db.Journal.Add(new JournalLine { Id = Guid.NewGuid(), Branch = actor.Branch, DocumentId = doc.Id, Account = (Account)input.RecoveryAccount, Debit = input.AllowableTax });
+            foreach (var (account,amount) in credits) db.Journal.Add(new JournalLine { Id = Guid.NewGuid(), Branch = actor.Branch, DocumentId = doc.Id, Account = (Account)account, Credit = amount });
             return doc.Id;
         });
+    }
+    public async Task<StockInputTaxPreview> PreviewStockInputTax(Guid receiptId, decimal allowableTax)
+    {
+        var actor = await Authorize("accounting.read"); if (allowableTax <= 0 || allowableTax > 1_000_000_000 || AccountingEngine.Money(allowableTax) != allowableTax) throw new BusinessException("Enter a positive reviewed allowable GST with two decimal places.");
+        await using var db = await factory.CreateDbContextAsync();
+        var receipt = await db.Documents.AsNoTracking().SingleOrDefaultAsync(d => d.Id == receiptId && d.Branch == actor.Branch && d.Kind == DocumentKind.Receipt && !db.Documents.Any(r => r.Reverses == d.Id)) ?? throw new BusinessException("Choose an active direct goods receipt.");
+        var plan = await StockInputTax.Plan(db,actor.Branch,receipt,allowableTax,null,true);
+        return new(receipt.Id,allowableTax,plan.LaterIssues,plan.Standard,plan.Issued,plan.Lines);
     }
     public async Task<NetTaxReturnReport> NetTaxReturn(DateOnly from, DateOnly to)
     {
