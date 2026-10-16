@@ -31,6 +31,8 @@ This is ongoing source work after the immutable 0.32.0 release. The 0.32.0 insta
 
 ## Still requiring implementation or deeper completion
 
+**Update 16 October 2026:** items 1–6 are implemented in source; see [remaining implementation](remaining-implementation-2026-10-16.md). Items 7–8 and the NRA-acceptance part of item 1 remain external acceptance work.
+
 1. Post-issue inventory input-tax allocation, standard-cost tax treatment, later filed-return corrections and independent jurisdiction acceptance.
 2. Retrospective company partitioning, verified physical compaction and coordinated synced-branch period migration.
 3. Ownership/minority-interest consolidation and functional-currency translation; broader transaction-level intercompany matching.
