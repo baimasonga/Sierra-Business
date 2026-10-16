@@ -24,3 +24,14 @@ public sealed record ConsolidatedStatement(string Statement, DateOnly From, Date
     public bool HasTranslation => Members.Any(m => m.Currency != "NLe");
     public bool HasAdjustments => Adjustments?.Count > 0;
 }
+/// <summary>One company's documents with a named counterparty. Amount is the document's effect on trade receivables and payables
+/// (debit minus credit), so a sale on credit to the other company is positive and the other company's purchase of it is negative.</summary>
+public sealed record IntercompanyTransaction(string Number, DateOnly Date, string Kind, decimal Amount);
+public sealed record IntercompanyLedger(int Version, Guid SourceId, string Company, string Branch, string Counterparty, DateOnly From, DateOnly To, DateTimeOffset Exported, IReadOnlyList<IntercompanyTransaction> Transactions);
+public sealed record IntercompanyMatchRequest(IntercompanyLedger Left, IntercompanyLedger Right, int DateToleranceDays = 3);
+public sealed record IntercompanyTransactionMatch(IntercompanyTransaction Left, IntercompanyTransaction Right, int DaysApart);
+public sealed record IntercompanyMatchReport(IReadOnlyList<IntercompanyTransactionMatch> Matched, IReadOnlyList<IntercompanyTransaction> LeftOnly, IReadOnlyList<IntercompanyTransaction> RightOnly, decimal LeftBalance, decimal RightBalance)
+{
+    /// <summary>Zero when the two companies' intercompany balances are reciprocal.</summary>
+    public decimal Difference => LeftBalance + RightBalance;
+}

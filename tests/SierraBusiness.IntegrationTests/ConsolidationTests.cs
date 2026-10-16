@@ -123,6 +123,34 @@ public sealed class ConsolidationTests
         var matching = query with { Members = [Member("Parent", 50) with { SourceId = parent.SourceId }, foreign] };
         Assert.True(Assert.Single(await Service.ReviewIntercompany(new(matching, [new("IC-FX", parent.SourceId, 5000, foreign.SourceId, 4000, "Reviewed")]))).Matched);
     }
+    [Fact] public async Task IntercompanyTransactionsMatchAcrossCompanyBooks()
+    {
+        var paths = new[] { Path.Combine(Path.GetTempPath(), "rokela-ic-a-" + Guid.NewGuid().ToString("N") + ".db"), Path.Combine(Path.GetTempPath(), "rokela-ic-b-" + Guid.NewGuid().ToString("N") + ".db") };
+        try
+        {
+            var factories = new List<Factory>(); foreach (var p in paths) { var f = new Factory(new DbContextOptionsBuilder<BusinessDb>().UseSqlite("Data Source=" + p + ";Pooling=False").Options); await using (var db = f.CreateDbContext()) await HistoryProtection.MigrateAsync(db); factories.Add(f); }
+            var options = Options.Create(new TradingOptions()); var day = To.AddDays(-5);
+            var a = new BusinessService(factories[0], options); var b = new BusinessService(factories[1], options);
+            await TestParties.Register(factories[0], "Company B"); await TestParties.Register(factories[1], "Company A", PartyType.Supplier);
+            var aItem = await a.AddProduct(session.Actor, new(Guid.NewGuid(), "IC-ITEM", "Intercompany item", "General", "piece", 100, TrackingMode.Quantity, MinimumPrice: 1)); var bItem = await b.AddProduct(session.Actor, new(Guid.NewGuid(), "IC-ITEM", "Intercompany item", "General", "piece", 100, TrackingMode.Quantity, MinimumPrice: 1));
+            await a.Post(session.Actor, new(Guid.NewGuid(), DocumentKind.Receipt, "Maker", day.AddDays(-1), [new(aItem, 10, 50)], null));
+            var sale = await a.Post(session.Actor, new(Guid.NewGuid(), DocumentKind.Sale, "Company B", day, [new(aItem, 2, 100)], null));
+            var receipt = await b.Post(session.Actor, new(Guid.NewGuid(), DocumentKind.Receipt, "Company A", day.AddDays(1), [new(bItem, 2, 100)], null));
+            await new FinanceService(factories[0], session, options).PostVoucher(new(Guid.NewGuid(), VoucherType.Receipt, day.AddDays(2), "Company B", [new(1000, 50, 0), new(1100, 0, 50)], [new(sale, 50)]));
+            await new FinanceService(factories[1], session, options).PostVoucher(new(Guid.NewGuid(), VoucherType.Payment, day.AddDays(2), "Company A", [new(2000, 50, 0), new(1000, 0, 50)], [new(receipt, 50)]));
+            await a.Post(session.Actor, new(Guid.NewGuid(), DocumentKind.Sale, "Company B", day.AddDays(3), [new(aItem, 1, 30)], null));
+            var left = await new StatementsService(factories[0], session, options).ExportIntercompanyLedger("Company A", "company b", From, To);
+            var right = await new StatementsService(factories[1], session, options).ExportIntercompanyLedger("Company B", "Company A", From, To);
+            Assert.Equal(3, left.Transactions.Count); Assert.Equal(2, right.Transactions.Count); Assert.Equal(200, left.Transactions[0].Amount); Assert.Equal(-200, right.Transactions[0].Amount);
+            var report = await Service.MatchIntercompanyTransactions(new(left, right));
+            Assert.Equal(2, report.Matched.Count); Assert.Equal(30, Assert.Single(report.LeftOnly).Amount); Assert.Empty(report.RightOnly); Assert.Equal(30, report.Difference); Assert.Equal(1, report.Matched[0].DaysApart);
+            var strict = await Service.MatchIntercompanyTransactions(new(left, right, 0)); Assert.Single(strict.Matched); Assert.Equal(2, strict.LeftOnly.Count);
+            await Assert.ThrowsAsync<BusinessException>(() => Service.MatchIntercompanyTransactions(new(left, left)));
+            await Assert.ThrowsAsync<BusinessException>(() => Service.MatchIntercompanyTransactions(new(left, right with { From = From.AddDays(1) })));
+            await Assert.ThrowsAsync<BusinessException>(() => Service.MatchIntercompanyTransactions(new(left, right with { Transactions = [.. right.Transactions, new("X", To, "Sale", 0)] })));
+        }
+        finally { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); foreach (var p in paths) File.Delete(p); }
+    }
     [Fact] public async Task MalformedSnapshotsAndMappingsCannotProduceReports()
     {
         var one = Member("One"); var two = Member("Two");

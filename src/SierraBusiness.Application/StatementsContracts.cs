@@ -30,6 +30,8 @@ public interface IStatementsService
     Task<IReadOnlyList<IntercompanyProposal>> ReviewIntercompany(IntercompanyReview input);
     Task ValidateCompanySnapshot(CompanyReportSnapshot input);
     Task<ConsolidatedStatement> Consolidate(ConsolidationRequest input);
+    Task<IntercompanyLedger> ExportIntercompanyLedger(string company, string counterparty, DateOnly from, DateOnly to);
+    Task<IntercompanyMatchReport> MatchIntercompanyTransactions(IntercompanyMatchRequest input);
     Task<byte[]> ExportConsolidation(ConsolidationRequest input);
     Task<ComparativeStatement> Compare(ComparisonRequest input);
     Task<byte[]> ExportComparison(ComparisonRequest input);
