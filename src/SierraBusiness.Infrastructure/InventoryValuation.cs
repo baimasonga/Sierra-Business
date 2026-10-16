@@ -15,7 +15,9 @@ public sealed partial class InventoryService
         var current = await InventoryCost.Policy(db,actor.Branch,input.ProductId); if (current.Version != input.ExpectedVersion) throw new BusinessException("The costing policy changed. Refresh before saving.");
         if (await db.Movements.AnyAsync(m => m.Branch == actor.Branch && m.ProductId == input.ProductId))
         {
-            if (input.From != DateOnly.FromDateTime(DateTime.UtcNow) || input.Method == InventoryCostMethod.Standard || current.Method == InventoryCostMethod.Standard) throw new BusinessException("Existing-stock changes are prospective weighted-average/FIFO transitions dated today. Standard-cost transitions require a separately reviewed stock migration.");
+            if (input.Method == InventoryCostMethod.Standard) throw new BusinessException("Existing stock moves to standard cost through the reviewed standard-cost migration, which revalues it to the standard.");
+            if (input.From != DateOnly.FromDateTime(DateTime.UtcNow)) throw new BusinessException("Existing-stock changes are prospective weighted-average/FIFO transitions dated today.");
+            if (current.Method == InventoryCostMethod.Standard && (await StandardAllowanceBalances(db,actor.Branch)).GetValueOrDefault(input.ProductId) != 0) throw new BusinessException("Release this product's standard-cost allowance before leaving standard costing.");
             if (input.Method == current.Method) throw new BusinessException("The product already uses this method.");
             if (await db.Movements.AnyAsync(m => m.Branch == actor.Branch && m.ProductId == input.ProductId && db.Documents.Any(d => d.Id == m.DocumentId && d.BusinessDate > input.From))) throw new BusinessException("Resolve future stock activity before changing the method.");
         }

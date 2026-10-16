@@ -52,6 +52,73 @@ public sealed class InventoryDepthTests : IAsyncLifetime
         await Assert.ThrowsAsync<BusinessException>(() => inventory.Valuation(new(today,InventoryValuationMethod.Standard)));
         await Assert.ThrowsAsync<BusinessException>(() => inventory.Count(new(Guid.NewGuid(),product,"MAIN",2,3,10,"Wrong standard cost")));
     }
+    [Fact] public async Task ExistingStockMigratesToStandardRevisesAndLeavesStandardProspectively()
+    {
+        await finance.CreateLedger(new(Guid.NewGuid(),6100,"Standard cost revaluation",LedgerGroup.Expense));
+        var receipt = await Receipt(10,10,today.AddDays(-2)); await Receipt(10,20,today.AddDays(-1)); await Sale(5);
+        await Assert.ThrowsAsync<BusinessException>(() => inventory.SetCostPolicy(new(Guid.NewGuid(),product,0,InventoryCostMethod.Standard,12,today,"Not through the plain policy")));
+        var preview = await inventory.PreviewStandardMigration(product,12); Assert.Equal(15,preview.Quantity); Assert.Equal(225,preview.BookValue); Assert.Equal(180,preview.StandardValue); Assert.Equal(-45,preview.Difference);
+        var command = new StandardCostMigrationCommand(Guid.NewGuid(),product,0,12,today,225,6100,"Reviewed standard from supplier price list");
+        await Assert.ThrowsAsync<BusinessException>(() => inventory.MigrateToStandard(command with { OperationId = Guid.NewGuid(),ExpectedBookValue = 224 }));
+        await Assert.ThrowsAsync<BusinessException>(() => inventory.MigrateToStandard(command with { OperationId = Guid.NewGuid(),ExpectedVersion = 1 }));
+        await Assert.ThrowsAsync<BusinessException>(() => inventory.MigrateToStandard(command with { OperationId = Guid.NewGuid(),DifferenceAccount = 1000 }));
+        await Assert.ThrowsAsync<BusinessException>(() => inventory.MigrateToStandard(command with { OperationId = Guid.NewGuid(),From = today.AddDays(-1) }));
+        var migration = await inventory.MigrateToStandard(command); Assert.Equal(migration,await inventory.MigrateToStandard(command));
+        Assert.Equal(180,Assert.Single((await business.Read(session.Actor)).Stock).Value);
+        var policy = Assert.Single(await inventory.CostPolicies()); Assert.Equal(InventoryCostMethod.Standard,policy.Method); Assert.Equal(12,policy.StandardUnitCost); Assert.Equal(1,policy.Version);
+        await using (var db = factory.CreateDbContext()) { var lines = await db.Journal.Where(j => j.DocumentId == migration).ToListAsync(); Assert.Equal(45,lines.Single(l => l.Account == Account.Inventory).Credit); Assert.Equal(45,lines.Single(l => (int)l.Account == 6100).Debit); }
+        var sale = await Sale(1); await using (var db = factory.CreateDbContext()) Assert.Equal(12,(await db.Journal.Where(j => j.DocumentId == sale && j.Account == Account.CostOfSales).ToListAsync()).Sum(j => j.Debit));
+        await Receipt(1,10,today); Assert.Equal(180,Assert.Single((await business.Read(session.Actor)).Stock).Value);
+        await Assert.ThrowsAsync<BusinessException>(() => business.Reverse(session.Actor,new(Guid.NewGuid(),receipt,"Earlier costing history")));
+        await Assert.ThrowsAsync<BusinessException>(() => inventory.MigrateToStandard(new(Guid.NewGuid(),product,1,12,today,180,6100,"Same standard")));
+        var revision = await inventory.MigrateToStandard(new(Guid.NewGuid(),product,1,15,today,180,6100,"Annual standard revision"));
+        Assert.Equal(225,Assert.Single((await business.Read(session.Actor)).Stock).Value); Assert.Equal(15,Assert.Single(await inventory.CostPolicies()).StandardUnitCost);
+        await using (var db = factory.CreateDbContext()) Assert.Equal(45,(await db.Journal.SingleAsync(j => j.DocumentId == revision && j.Account == Account.Inventory)).Debit);
+        await inventory.SetCostPolicy(new(Guid.NewGuid(),product,2,InventoryCostMethod.WeightedAverage,0,today,"Back to average at standard carrying value"));
+        Assert.Equal(225,Assert.Single((await business.Read(session.Actor)).Stock).Value); await Receipt(15,25,today); Assert.Equal(600,Assert.Single((await business.Read(session.Actor)).Stock).Value);
+        await using (var db = factory.CreateDbContext()) Assert.True((await HistoryProtection.Verify(db)).Ok);
+    }
+    [Fact] public async Task StandardAllowanceRaisesAndReleasesWithoutChangingStandardValue()
+    {
+        await finance.CreateLedger(new(Guid.NewGuid(),6200,"Stock impairment",LedgerGroup.Expense)); await finance.CreateLedger(new(Guid.NewGuid(),6300,"Inventory allowance",LedgerGroup.Asset)); await finance.CreateLedger(new(Guid.NewGuid(),6301,"Other allowance",LedgerGroup.Asset));
+        await inventory.SetCostPolicy(new(Guid.NewGuid(),product,0,InventoryCostMethod.Standard,12,today.AddDays(-1),"Initial standard")); await Receipt(10,12,today.AddDays(-1));
+        var command = new StandardAllowanceCommand(Guid.NewGuid(),120,new Dictionary<Guid,decimal> { { product,9 } },6200,6300,"Damaged packaging; reviewed selling price");
+        await Assert.ThrowsAsync<BusinessException>(() => inventory.ReviewStandardAllowance(command with { OperationId = Guid.NewGuid(),ExpectedStandardValue = 100 }));
+        await Assert.ThrowsAsync<BusinessException>(() => inventory.ReviewStandardAllowance(command with { OperationId = Guid.NewGuid(),UnitValues = new Dictionary<Guid,decimal>() }));
+        await Assert.ThrowsAsync<BusinessException>(() => inventory.ReviewStandardAllowance(command with { OperationId = Guid.NewGuid(),AllowanceAccount = 1000 }));
+        var raised = await inventory.ReviewStandardAllowance(command);
+        var view = Assert.Single(await inventory.StandardAllowances()); Assert.Equal(30,view.Allowance); Assert.Equal(90,view.NetValue); Assert.Equal(120,Assert.Single((await business.Read(session.Actor)).Stock).Value);
+        await using (var db = factory.CreateDbContext()) { var lines = await db.Journal.Where(j => j.DocumentId == raised).ToListAsync(); Assert.Equal(30,lines.Single(l => (int)l.Account == 6200).Debit); Assert.Equal(30,lines.Single(l => (int)l.Account == 6300).Credit); }
+        await Assert.ThrowsAsync<BusinessException>(() => inventory.ReviewStandardAllowance(command with { OperationId = Guid.NewGuid(),AllowanceAccount = 6301 }));
+        await Assert.ThrowsAsync<BusinessException>(() => inventory.ReviewStandardAllowance(command with { OperationId = Guid.NewGuid() }));
+        await Assert.ThrowsAsync<BusinessException>(() => inventory.SetCostPolicy(new(Guid.NewGuid(),product,1,InventoryCostMethod.WeightedAverage,0,today,"Leave standard with allowance")));
+        var released = await inventory.ReviewStandardAllowance(command with { OperationId = Guid.NewGuid(),UnitValues = new Dictionary<Guid,decimal> { { product,11 } } });
+        Assert.Equal(10,Assert.Single(await inventory.StandardAllowances()).Allowance);
+        await using (var db = factory.CreateDbContext()) Assert.Equal(20,(await db.Journal.SingleAsync(j => j.DocumentId == released && (int)j.Account == 6300)).Debit);
+        for (var i = 0; i < 10; i++) await Sale(1);
+        await inventory.ReviewStandardAllowance(new(Guid.NewGuid(),0,new Dictionary<Guid,decimal>(),6200,6300,"Goods sold; release remaining allowance"));
+        Assert.Equal(0,Assert.Single(await inventory.StandardAllowances()).Allowance);
+        await inventory.SetCostPolicy(new(Guid.NewGuid(),product,1,InventoryCostMethod.WeightedAverage,0,today,"Leave standard"));
+        await using (var db = factory.CreateDbContext()) Assert.True((await HistoryProtection.Verify(db)).Ok);
+    }
+    [Fact] public async Task ScreenMigratesToStandardAndPostsAllowance()
+    {
+        await finance.CreateLedger(new(Guid.NewGuid(),6100,"Standard cost revaluation",LedgerGroup.Expense)); await finance.CreateLedger(new(Guid.NewGuid(),6200,"Stock impairment",LedgerGroup.Expense)); await finance.CreateLedger(new(Guid.NewGuid(),6300,"Inventory allowance",LedgerGroup.Asset));
+        await Receipt(10,10,today.AddDays(-1));
+        using var context = new BunitContext(); context.Services.AddSingleton<IInventoryService>(inventory); context.Services.AddSingleton<IBusinessService>(business); context.JSInterop.Mode = JSRuntimeMode.Loose;
+        var screen = context.Render<InventoryValuationWorkspace>(p => p.Add(x => x.Actor,session.Actor));
+        AngleSharp.Dom.IElement Field(string label) => screen.FindAll("label").First(l => l.TextContent.Trim().StartsWith(label,StringComparison.Ordinal)).QuerySelector("select,input")!;
+        void Click(string text) => screen.FindAll("button").Single(b => b.TextContent == text).Click();
+        screen.WaitForAssertion(() => Assert.Contains("Migrate existing stock to standard cost",screen.Markup));
+        Field("Migration product").Change(product.ToString()); Field("New standard unit cost").Change("12"); Click("Preview standard-cost migration");
+        screen.WaitForAssertion(() => Assert.Contains("difference 20.00 NLe",screen.Markup)); Field("Migration review reason").Change("Reviewed standard");
+        Click("Post reviewed standard-cost migration"); screen.WaitForAssertion(() => Assert.Contains("Standard-cost migration posted",screen.Markup));
+        Assert.Equal(120,Assert.Single((await business.Read(session.Actor)).Stock).Value);
+        Field("Valuation basis").Change("Market"); screen.FindAll("input").Single(i => i.GetAttribute("aria-label") == "Reference price for DEPTH").Change("9"); Click("Build valuation comparison");
+        screen.WaitForAssertion(() => Assert.Contains("Post reviewed standard-cost allowance",screen.Markup)); Field("Allowance review reason").Change("Damaged packaging");
+        Click("Post reviewed standard-cost allowance"); screen.WaitForAssertion(() => Assert.Contains("Reviewed standard-cost allowance posted",screen.Markup));
+        Assert.Contains("Standard-cost allowances",screen.Markup); Assert.Equal(30,Assert.Single(await inventory.StandardAllowances()).Allowance);
+    }
     [Fact] public async Task StandardReceiptsSupportForeignBillsAndLaterInvoicesWithoutChangingStandardValue()
     {
         await inventory.SetCostPolicy(new(Guid.NewGuid(),product,0,InventoryCostMethod.Standard,12,today,"Initial standard"));

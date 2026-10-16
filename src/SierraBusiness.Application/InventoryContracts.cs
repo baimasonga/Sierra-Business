@@ -21,6 +21,10 @@ public interface IInventoryService
     Task<IReadOnlyList<InventoryCostPolicy>> CostPolicies();
     Task<Guid> WriteDown(InventoryWriteDownCommand input);
     Task<Guid> SetCostPolicy(InventoryCostCommand input);
+    Task<StandardCostMigrationPreview> PreviewStandardMigration(Guid productId, decimal standardUnitCost);
+    Task<Guid> MigrateToStandard(StandardCostMigrationCommand input);
+    Task<IReadOnlyList<StandardAllowanceView>> StandardAllowances();
+    Task<Guid> ReviewStandardAllowance(StandardAllowanceCommand input);
     Task<InventoryValuationReport> Valuation(InventoryValuationRequest input);
     Task<byte[]> ExportValuation(InventoryValuationRequest input);
     Task<IReadOnlyList<LocationView>> Locations();

@@ -18,9 +18,10 @@ public sealed partial class InventoryService
         {
             var quantity = group.Sum(m => m.Quantity); var book = group.Sum(m => m.Value); if (quantity == 0 && book == 0) continue;
             if (quantity <= 0 || book < 0) throw new BusinessException("Stock history needs reconciliation before a write-down.");
+            // Standard-cost items keep their standard value; their impairment is reviewed through the standard-cost allowance.
+            if ((await InventoryCost.Policy(db,actor.Branch,group.Key.Product)).Method == InventoryCostMethod.Standard) continue;
             if (!input.UnitValues.TryGetValue(group.Key.Product,out var unit)) throw new BusinessException("Provide a reviewed unit value for every stock product.");
             var target = Math.Min(book,AccountingEngine.Money(quantity*unit)); if (target == book) continue;
-            if ((await InventoryCost.Policy(db,actor.Branch,group.Key.Product)).Method == InventoryCostMethod.Standard) throw new BusinessException("Standard-cost impairment needs a separate allowance policy; this workflow cannot change configured standard values.");
             await InventoryCost.GuardDate(db,actor.Branch,group.Key.Product,today);
             var amount = book-target; reduction += amount; changes.Add(new Movement { Id = Guid.NewGuid(),Branch = actor.Branch,ProductId = group.Key.Product,Location = group.Key.Location,Serial = group.Key.Serial,Batch = group.Key.Batch,Expiry = group.Key.Expiry,Quantity = 0,Value = -amount });
         }
