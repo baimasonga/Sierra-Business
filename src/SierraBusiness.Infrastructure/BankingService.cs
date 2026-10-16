@@ -61,7 +61,7 @@ public sealed partial class BankingService(IDbContextFactory<BusinessDb> factory
     });
     public Task<Guid> ReceiveCheque(ReceiveChequeCommand input) => Execute(input.OperationId, "accounting.write", "cheque.receive", input, async (db, actor) => {
         var date = DateOnly.FromDateTime(DateTime.UtcNow); await OpenDate(db, actor, date); Amount(input.Amount);
-        var invoice = await db.Documents.SingleOrDefaultAsync(x => x.Id == input.InvoiceId && x.Branch == actor.Branch && ((x.Kind == DocumentKind.Sale || x.Kind == DocumentKind.ServiceInvoice) && x.Settlement == "Credit" || x.Kind == DocumentKind.ChequeBounce) && !db.Documents.Any(d => d.Reverses == x.Id)) ?? throw new BusinessException("Select an outstanding customer invoice.");
+        var invoice = await db.Documents.SingleOrDefaultAsync(x => x.Id == input.InvoiceId && x.Branch == actor.Branch && ((x.Kind == DocumentKind.Sale || x.Kind == DocumentKind.ServiceInvoice) && x.Settlement == "Credit" || x.Kind == DocumentKind.ChequeBounce || x.Kind == DocumentKind.InterestCharge || x.Kind == DocumentKind.OpeningBalance && x.Settlement == "Credit") && !db.Documents.Any(d => d.Reverses == x.Id)) ?? throw new BusinessException("Select an outstanding customer invoice.");
         if (input.Amount > await Outstanding(db, invoice)) throw new BusinessException("Cheque amount exceeds the outstanding invoice.");
         var doc = Document(actor, input.OperationId, DocumentKind.ChequeReceipt, date, invoice.Party, input.Amount, "Cheque received", input);
         Journal(db, doc, new(Account.ChequesInHand, input.Amount, 0), new(Account.Receivables, 0, input.Amount));
@@ -124,7 +124,7 @@ public sealed partial class BankingService(IDbContextFactory<BusinessDb> factory
         if (input.RefundAccount is not null) await Funds(db, destination);
         else
         {
-            var invoice = await db.Documents.SingleOrDefaultAsync(x => x.Id == input.InvoiceId && x.Branch == actor.Branch && (x.Kind == DocumentKind.Receipt || x.Kind == DocumentKind.SupplierInvoice) && x.Settlement.StartsWith("Supplier payable") && x.Party.ToUpper() == source.Party.ToUpper() && !db.Documents.Any(d => d.Reverses == x.Id)) ?? throw new BusinessException("Select an outstanding purchase bill for the same supplier."); await Fx.RejectLocalSettlement(db, invoice.Id);
+            var invoice = await db.Documents.SingleOrDefaultAsync(x => x.Id == input.InvoiceId && x.Branch == actor.Branch && (x.Kind == DocumentKind.Receipt || x.Kind == DocumentKind.SupplierInvoice || x.Kind == DocumentKind.OpeningBalance) && x.Settlement.StartsWith("Supplier payable") && x.Party.ToUpper() == source.Party.ToUpper() && !db.Documents.Any(d => d.Reverses == x.Id)) ?? throw new BusinessException("Select an outstanding purchase bill for the same supplier."); await Fx.RejectLocalSettlement(db, invoice.Id);
             if (input.Amount > await Outstanding(db, invoice)) throw new BusinessException("Credit exceeds the outstanding purchase bill.");
             db.BillAllocations.Add(new() { Id = Guid.NewGuid(), InvoiceId = invoice.Id, VoucherId = doc.Id, Amount = input.Amount });
         }

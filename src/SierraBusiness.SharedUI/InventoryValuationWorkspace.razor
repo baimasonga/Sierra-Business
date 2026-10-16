@@ -4,12 +4,25 @@
 @inject Microsoft.JSInterop.IJSRuntime JS
 <section class="panel" aria-label="Inventory valuation methods">
     <h2>Inventory costing and valuation</h2>
-    <p class="hint">Initial book costing is chosen before an item's first stock movement. Existing stock can move prospectively between weighted-average and FIFO today while retaining its carrying value and posted history. Earlier stock documents cannot then be reversed; use current reviewed returns or adjustments. Standard-cost transitions need a separate migration. Alternative valuation reports leave journals unchanged.</p>
+    <p class="hint">Initial book costing is chosen before an item's first stock movement. Existing stock can move prospectively between weighted-average and FIFO today while retaining its carrying value and posted history. Earlier stock documents cannot then be reversed; use current reviewed returns or adjustments. Existing stock moves to standard cost, or to a revised standard, through the reviewed migration below, which revalues it today. Alternative valuation reports leave journals unchanged.</p>
     @if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
     @if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
     @if (CanConfigure)
     {
         <fieldset disabled="@busy"><legend>Review a prospective costing policy</legend><div class="form-grid"><label>Costing product<select @bind="product" @bind:after="SelectProduct"><option value="@Guid.Empty">Choose product</option>@foreach (var p in products) { <option value="@p.Id">@p.Sku · @p.Name</option> }</select></label><label>Book costing method<select @bind="costMethod"><option value="@InventoryCostMethod.WeightedAverage">Weighted average</option><option value="@InventoryCostMethod.Fifo">FIFO</option><option value="@InventoryCostMethod.Standard">Standard cost</option></select></label>@if (costMethod == InventoryCostMethod.Standard) { <label>Standard unit cost (NLe)<input type="number" step="0.0001" min="0.0001" @bind="standardCost" /></label> }<label>Costing policy from<input type="date" @bind="policyFrom" /></label><label>Costing reason<input maxlength="160" @bind="reason" /></label></div><p class="hint">Standard-cost receipts support local and foreign bills and invoice-later matching. Purchase-price differences are expensed; standard stock retains its configured value. Exchange differences remain separate. Landed costs are expensed through cost of sales.</p><button class="secondary" @onclick="SavePolicy">Save reviewed costing policy</button></fieldset>
+    }
+    @if (CanMigrate)
+    {
+        <fieldset disabled="@busy"><legend>Migrate existing stock to standard cost</legend>
+            <p class="hint">Revalues every stock identity of the product to quantity × standard today, posts the difference to the ledger you choose and makes standard the costing policy. Use it again to revise an existing standard. Earlier stock documents cannot then be reversed.</p>
+            <div class="form-grid"><label>Migration product<select @bind="migrationProduct" @bind:after="ClearMigration"><option value="@Guid.Empty">Choose product</option>@foreach (var p in products) { <option value="@p.Id">@p.Sku · @p.Name</option> }</select></label><label>New standard unit cost (NLe)<input type="number" min="0.0001" step="0.0001" @bind="migrationCost" @bind:after="ClearMigration" /></label><label>Revaluation difference ledger code<input type="number" min="1" @bind="migrationAccount" /></label><label>Migration review reason<input maxlength="200" @bind="migrationReason" /></label></div>
+            <button class="secondary" @onclick="PreviewMigration">Preview standard-cost migration</button>
+            @if (migration is { } m)
+            {
+                <p>Current method @m.CurrentMethod. Quantity @m.Quantity; book value @m.BookValue.ToString("N2"); standard value @m.StandardValue.ToString("N2"); difference @m.Difference.ToString("N2") NLe.</p>
+                <button class="primary" disabled="@(busy || string.IsNullOrWhiteSpace(migrationReason))" @onclick="PostMigration">Post reviewed standard-cost migration</button>
+            }
+        </fieldset>
     }
     <fieldset disabled="@busy"><legend>Compare stock valuations</legend><div class="form-grid"><label>Valuation date<input type="date" @bind="asAt" @bind:after="Clear" /></label><label>Valuation basis<select @bind="method" @bind:after="Clear">@foreach (var value in Enum.GetValues<InventoryValuationMethod>()) { <option value="@value">@Label(value)</option> }</select></label></div>
         @if (method is InventoryValuationMethod.Standard or InventoryValuationMethod.Market)
@@ -24,9 +37,20 @@
         <p>@Label(r.Request.Method) at @r.Request.AsAt.ToString("dd MMM yyyy"). Book value @r.BookValue.ToString("N2"); selected value @r.SelectedValue.ToString("N2") NLe.</p>
         @if (CanConfigure && r.Request.Method == InventoryValuationMethod.Market && r.Request.AsAt == DateOnly.FromDateTime(DateTime.UtcNow))
         {
-            <p>Review an impairment of @r.Rows.Sum(row => Math.Max(0,-row.Difference)).ToString("N2") NLe. Values above book value are capped. Standard-cost reductions require a separate allowance policy.</p><div class="form-grid"><label>Write-down expense ledger code<input type="number" min="1" @bind="writeDownExpense" /></label><label>Write-down review reason<input maxlength="200" @bind="writeDownReason" /></label></div><button class="primary" disabled="@(busy || string.IsNullOrWhiteSpace(writeDownReason))" @onclick="PostWriteDown">Post reviewed stock write-down</button>
+            <p>Review an impairment of @r.Rows.Sum(row => Math.Max(0,-row.Difference)).ToString("N2") NLe. Values above book value are capped. Standard-cost items are excluded from the write-down; review their allowance below.</p><div class="form-grid"><label>Write-down expense ledger code<input type="number" min="1" @bind="writeDownExpense" /></label><label>Write-down review reason<input maxlength="200" @bind="writeDownReason" /></label></div><button class="primary" disabled="@(busy || string.IsNullOrWhiteSpace(writeDownReason))" @onclick="PostWriteDown">Post reviewed stock write-down</button>
+        }
+        @if (CanMigrate && r.Request.Method == InventoryValuationMethod.Market && r.Request.AsAt == DateOnly.FromDateTime(DateTime.UtcNow) && policies.Any(p => p.Method == InventoryCostMethod.Standard))
+        {
+            <p class="hint">Standard-cost allowance: a contra-asset holds the shortfall of reviewed values below standard. Standard carrying values are unchanged; a later review raises or releases the allowance, including when goods are sold.</p>
+            <div class="form-grid"><label>Allowance expense ledger code<input type="number" min="1" @bind="allowanceExpense" /></label><label>Allowance (contra-asset) ledger code<input type="number" min="1" @bind="allowanceAccount" /></label><label>Allowance review reason<input maxlength="200" @bind="allowanceReason" /></label></div>
+            <button class="primary" disabled="@(busy || string.IsNullOrWhiteSpace(allowanceReason))" @onclick="PostAllowance">Post reviewed standard-cost allowance</button>
         }
         <div class="table-wrap"><table><thead><tr><th>Product / identity</th><th>Location</th><th class="numeric">Quantity</th><th class="numeric">Book value</th><th class="numeric">Selected value</th><th class="numeric">Difference</th></tr></thead><tbody>@foreach (var row in r.Rows) { <tr><td>@row.Sku · @row.Name<br />@row.Serial @row.Batch @row.Expiry</td><td>@row.Location</td><td class="numeric">@row.Quantity @row.Unit</td><td class="numeric">@row.BookValue.ToString("N2")</td><td class="numeric">@row.SelectedValue.ToString("N2")</td><td class="numeric">@row.Difference.ToString("N2")</td></tr> }</tbody></table></div>
+    }
+    @if (allowances.Count > 0)
+    {
+        <h3>Standard-cost allowances</h3>
+        <div class="table-wrap"><table><thead><tr><th>Product</th><th class="numeric">Quantity</th><th class="numeric">Standard value</th><th class="numeric">Allowance</th><th class="numeric">Net value</th></tr></thead><tbody>@foreach (var a in allowances) { <tr><td>@a.Sku · @a.Name</td><td class="numeric">@a.Quantity</td><td class="numeric">@a.StandardValue.ToString("N2")</td><td class="numeric">@a.Allowance.ToString("N2")</td><td class="numeric">@a.NetValue.ToString("N2")</td></tr> }</tbody></table></div>
     }
 </section>
 @code {
@@ -35,9 +59,29 @@
     private IReadOnlyList<ProductView> products = []; private IReadOnlyList<InventoryCostPolicy> policies = []; private readonly Dictionary<Guid,decimal> prices = []; private InventoryValuationReport? report;
     private bool CanConfigure => Actor.Permissions.Contains("accounting.write") && Actor.Permissions.Contains("inventory.receive") && Actor.Permissions.Contains("documents.reverse");
     private string writeDownReason = ""; private int writeDownExpense = 5100; private Guid writeDownOperation = Guid.NewGuid();
-    public bool HasDraft => reason.Length > 0 || writeDownReason.Length > 0;
+    private bool CanMigrate => CanConfigure && Actor.Permissions.Contains("accounting.read");
+    private Guid migrationProduct; private decimal migrationCost; private int migrationAccount = 6100; private string migrationReason = ""; private StandardCostMigrationPreview? migration; private Guid migrationOperation = Guid.NewGuid();
+    private int allowanceExpense = 6200, allowanceAccount = 6300; private string allowanceReason = ""; private Guid allowanceOperation = Guid.NewGuid(); private IReadOnlyList<StandardAllowanceView> allowances = [];
+    public bool HasDraft => reason.Length > 0 || writeDownReason.Length > 0 || migrationReason.Length > 0 || allowanceReason.Length > 0;
+    private void ClearMigration() { migration = null; migrationOperation = Guid.NewGuid(); }
+    private Task PreviewMigration() => Run(async () => { migration = null; migration = await Inventory.PreviewStandardMigration(migrationProduct,migrationCost); migrationOperation = Guid.NewGuid(); });
+    private Task PostMigration() => Run(async () =>
+    {
+        if (migration is null) throw new BusinessException("Preview the migration first.");
+        await Inventory.MigrateToStandard(new(migrationOperation,migration.ProductId,migration.Version,migrationCost,DateOnly.FromDateTime(DateTime.UtcNow),migration.BookValue,migrationAccount,migrationReason));
+        migration = null; migrationReason = ""; migrationOperation = Guid.NewGuid(); report = null; policies = await Inventory.CostPolicies(); allowances = await Inventory.StandardAllowances(); SelectProduct();
+        message = "Standard-cost migration posted. Stock now carries the standard value.";
+    });
+    private Task PostAllowance() => Run(async () =>
+    {
+        if (report is null || report.Request.ReferencePrices is null) throw new BusinessException("Build and review the current market valuation first.");
+        var standard = (await Inventory.StandardAllowances()).Where(a => a.Quantity > 0 || a.Allowance != 0).ToArray();
+        var standardIds = policies.Where(p => p.Method == InventoryCostMethod.Standard).Select(p => p.ProductId).ToHashSet();
+        await Inventory.ReviewStandardAllowance(new(allowanceOperation,standard.Where(a => standardIds.Contains(a.ProductId)).Sum(a => a.StandardValue),report.Request.ReferencePrices.Where(p => standardIds.Contains(p.Key)).ToDictionary(p => p.Key,p => p.Value),allowanceExpense,allowanceAccount,allowanceReason));
+        allowanceOperation = Guid.NewGuid(); allowanceReason = ""; allowances = await Inventory.StandardAllowances(); message = "Reviewed standard-cost allowance posted.";
+    });
     private Task PostWriteDown() => Run(async () => { if (report is null || report.Request.ReferencePrices is null) throw new BusinessException("Build and review the current market valuation first."); await Inventory.WriteDown(new(writeDownOperation,report.BookValue,new Dictionary<Guid,decimal>(report.Request.ReferencePrices),writeDownExpense,writeDownReason)); writeDownOperation = Guid.NewGuid(); writeDownReason = ""; report = null; message = "Reviewed stock write-down posted. Refresh the valuation to inspect carrying values."; });
-    protected override Task OnInitializedAsync() => Run(async () => { products = (await Business.Read(Actor)).Products; policies = await Inventory.CostPolicies(); foreach (var p in products) prices.TryAdd(p.Id,p.Price); });
+    protected override Task OnInitializedAsync() => Run(async () => { products = (await Business.Read(Actor)).Products; policies = await Inventory.CostPolicies(); if (Actor.Permissions.Contains("accounting.read")) allowances = await Inventory.StandardAllowances(); foreach (var p in products) prices.TryAdd(p.Id,p.Price); });
     private void SelectProduct() { var current = policies.SingleOrDefault(p => p.ProductId == product); version = current?.Version ?? 0; costMethod = current?.Method ?? InventoryCostMethod.WeightedAverage; standardCost = current?.StandardUnitCost ?? 0; policyFrom = current?.From ?? DateOnly.FromDateTime(DateTime.UtcNow); }
     private void Clear() { report = null; message = ""; }
     private InventoryValuationRequest Query => new(asAt,method,method is InventoryValuationMethod.Standard or InventoryValuationMethod.Market ? new Dictionary<Guid,decimal>(prices) : null);

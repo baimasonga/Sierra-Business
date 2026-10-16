@@ -3,7 +3,7 @@
 @inject IServiceProvider Services
 <section class="panel" aria-label="Group company reporting">
     <h2>Group company reporting</h2>
-    <p class="hint">Export a snapshot while signed in to each company, then load the members here. Reports use NLe and matching periods. Loaded files are reporting copies; review their origin before using them. Group adjustments apply only to this report and are shown separately from member balances.</p>
+    <p class="hint">Export a snapshot while signed in to each company, then load the members here. Reports use NLe and matching periods; a member reporting in another currency is translated with the rates you enter. Loaded files are reporting copies; review their origin before using them. Group adjustments apply only to this report and are shown separately from member balances.</p>
     @if (error.Length > 0) { <div class="notice error" role="alert">@error</div> }
     @if (message.Length > 0) { <div class="notice success" role="status">@message</div> }
     <fieldset disabled="@busy">
@@ -17,8 +17,16 @@
         @if (members.Count == 0) { <p>Load snapshots from at least two companies to begin.</p> }
         @foreach (var member in members)
         {
-            <div class="panel-title"><p><strong>@member.Company</strong> / @member.Branch — @member.From.ToString("dd MMM yyyy") to @member.To.ToString("dd MMM yyyy")<br /><small>Exported @member.Exported.ToUniversalTime().ToString("dd MMM yyyy HH:mm 'UTC'")</small></p><button class="secondary" @onclick="() => Remove(member)">Remove @member.Company</button></div>
+            var t = TermsFor(member);
+            <div class="panel-title"><p><strong>@member.Company</strong> / @member.Branch — @member.From.ToString("dd MMM yyyy") to @member.To.ToString("dd MMM yyyy") · @member.Currency<br /><small>Exported @member.Exported.ToUniversalTime().ToString("dd MMM yyyy HH:mm 'UTC'")</small></p><button class="secondary" @onclick="() => Remove(member)">Remove @member.Company</button></div>
+            <div class="form-grid"><label>Parent ownership % for @member.Company<input type="number" min="0.0001" max="100" step="0.0001" @bind="t.Ownership" @bind:after="Invalidate" /></label>
+            @if (member.Currency != "NLe")
+            {
+                <label>Closing rate (NLe per @member.Currency)<input type="number" min="0" step="0.00000001" @bind="t.Closing" @bind:after="Invalidate" /></label><label>Average rate (NLe per @member.Currency)<input type="number" min="0" step="0.00000001" @bind="t.Average" @bind:after="Invalidate" /></label><label>Historical equity rate (NLe per @member.Currency)<input type="number" min="0" step="0.00000001" @bind="t.Equity" @bind:after="Invalidate" /></label>
+            }
+            </div>
         }
+        @if (members.Count > 0) { <p class="hint">Ownership below 100% shows non-controlling interests separately. Eliminate the parent's investment against its share of the member's equity with a reviewed group adjustment.</p> }
         @if (members.Count > 0)
         {
             <details><summary>Map member accounts to group accounts</summary>
@@ -48,6 +56,22 @@
             <label>Credit-side company<select @bind="pairCreditSource" @bind:after="ClearProposals"><option value="@Guid.Empty">Choose company</option>@foreach (var m in members) { <option value="@m.SourceId">@m.Company</option> }</select></label><label>Credit-side account<select @bind="pairCreditAccount" @bind:after="ClearProposals"><option value="0">Choose account</option>@foreach (var a in members.FirstOrDefault(m => m.SourceId == pairCreditSource)?.Accounts.Where(a => a.Nature == (kind == "Profit and loss" ? LedgerGroup.Income : LedgerGroup.Liability)) ?? []) { <option value="@a.Code">@a.Code · @a.Name</option> }</select></label></div>
             <button class="secondary" @onclick="ReviewPair">Review reciprocal balances</button>@foreach (var proposal in proposals) { <p>@proposal.Message Debit @proposal.DebitBalance.ToString("N2") · Credit @proposal.CreditBalance.ToString("N2")</p>@if (proposal.Adjustment is not null) { <button class="secondary" @onclick="() => AcceptPair(proposal)">Add reviewed elimination @proposal.Reference</button> } }</details>
         }
+        <details><summary>Reconcile intercompany transactions</summary>
+            <p class="hint">Export this company's documents with the other group company (as named in your books), load both companies' exports, then match them. Pairs have opposite effects on receivables and payables within the allowed days; anything unmatched needs investigation before eliminating balances.</p>
+            <div class="form-grid"><label>Other group company (party name; must match that company's own export name)<input maxlength="160" @bind="counterparty" /></label><label>Days allowed between documents<input type="number" min="0" max="31" @bind="tolerance" @bind:after="ClearMatch" /></label></div>
+            <button class="secondary" @onclick="ExportLedger">Export intercompany transactions</button>
+            @foreach (var l in ledgers) { <p>@l.Company / @l.Branch with @l.Counterparty · @l.Transactions.Count transactions <button class="secondary" @onclick="() => { ledgers.Remove(l); ClearMatch(); }">Remove @l.Company transactions</button></p> }
+            <button class="secondary" disabled="@(ledgers.Count != 2)" @onclick="MatchLedgers">Match intercompany transactions</button>
+            @if (match is { } mr)
+            {
+                <p>@mr.Matched.Count matched · @mr.LeftOnly.Count only in @ledgers[0].Company · @mr.RightOnly.Count only in @ledgers[1].Company · Difference @mr.Difference.ToString("N2") NLe</p>
+                <div class="table-wrap"><table><thead><tr><th>@ledgers[0].Company</th><th>@ledgers[1].Company</th><th class="numeric">Amount</th><th>Days apart</th></tr></thead><tbody>
+                @foreach (var m in mr.Matched) { <tr><td>@m.Left.Number · @m.Left.Date</td><td>@m.Right.Number · @m.Right.Date</td><td class="numeric">@m.Left.Amount.ToString("N2")</td><td>@m.DaysApart</td></tr> }
+                @foreach (var t in mr.LeftOnly) { <tr><td>@t.Number · @t.Date</td><td>Unmatched</td><td class="numeric">@t.Amount.ToString("N2")</td><td></td></tr> }
+                @foreach (var t in mr.RightOnly) { <tr><td>Unmatched</td><td>@t.Number · @t.Date</td><td class="numeric">@t.Amount.ToString("N2")</td><td></td></tr> }
+                </tbody></table></div>
+            }
+        </details>
         <button class="primary" disabled="@(members.Count < 2)" @onclick="Build">Build group report</button>
         <button class="secondary" disabled="@(members.Count < 2)" @onclick="SaveGroup">Save group and mappings</button>
         @if (report is not null) { <button class="secondary" @onclick="ExportReport">Export group report to Excel</button> }
@@ -71,6 +95,10 @@
     private ConsolidatedStatement? report;
     private string pairReference = "", pairReason = ""; private Guid pairDebitSource, pairCreditSource; private int pairDebitAccount, pairCreditAccount; private IReadOnlyList<IntercompanyProposal> proposals = [];
     private void ClearProposals() => proposals = [];
+    private string counterparty = ""; private int tolerance = 3; private readonly List<IntercompanyLedger> ledgers = []; private IntercompanyMatchReport? match;
+    private void ClearMatch() => match = null;
+    private Task ExportLedger() => Run(async () => { var ledger = await Statements.ExportIntercompanyLedger(company, counterparty, from, to); message = await Download($"intercompany-{ledger.SourceId:N}-{to:yyyy-MM-dd}.json", System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(ledger), "application/json") + $" {ledger.Transactions.Count} transactions with {ledger.Counterparty}."; });
+    private Task MatchLedgers() => Run(async () => { match = null; match = await Statements.MatchIntercompanyTransactions(new(ledgers[0], ledgers[1], tolerance)); });
     private Task ReviewPair() => Run(async () => proposals = await Statements.ReviewIntercompany(new(Query, [new(pairReference, pairDebitSource, pairDebitAccount, pairCreditSource, pairCreditAccount, pairReason)])));
     private void AcceptPair(IntercompanyProposal proposal) { if (proposal.Adjustment is null) return; if (adjustments.Any(a => a.Reference.Equals(proposal.Reference, StringComparison.OrdinalIgnoreCase))) { error = "An adjustment with this reference already exists."; return; } adjustments.Add(proposal.Adjustment); Invalidate(); message = "Reviewed reciprocal elimination added. Build the report to check group totals."; }
     private sealed class Mapping
@@ -78,9 +106,18 @@
         public Guid SourceId { get; init; } public int SourceCode { get; init; } public string Company { get; init; } = ""; public string SourceName { get; init; } = ""; public LedgerGroup Nature { get; init; }
         public int Code { get; set; } public string Name { get; set; } = "";
     }
-    private ConsolidationRequest Query => new(kind, members.ToArray(), maps.Select(m => new ConsolidationMapping(m.SourceId, m.SourceCode, m.Code, m.Name)).ToArray(), adjustments.Count == 0 ? null : adjustments.ToArray());
+    private sealed class Terms { public decimal Ownership { get; set; } = 100; public decimal Closing { get; set; } = 1; public decimal Average { get; set; } = 1; public decimal Equity { get; set; } = 1; }
+    private readonly Dictionary<Guid, Terms> terms = [];
+    // Foreign members start without rates so a report cannot be built at an assumed 1:1 rate.
+    private Terms TermsFor(CompanyReportSnapshot member) { if (!terms.TryGetValue(member.SourceId, out var t)) terms[member.SourceId] = t = member.Currency == "NLe" ? new() : new() { Closing = 0, Average = 0, Equity = 0 }; return t; }
+    private ConsolidationMemberTerms[]? TermsQuery()
+    {
+        var list = members.Select(m => (Member: m, Terms: TermsFor(m))).Where(x => x.Terms.Ownership != 100 || x.Member.Currency != "NLe").Select(x => new ConsolidationMemberTerms(x.Member.SourceId, x.Terms.Ownership, x.Member.Currency == "NLe" ? 1 : x.Terms.Closing, x.Member.Currency == "NLe" ? 1 : x.Terms.Average, x.Member.Currency == "NLe" ? 1 : x.Terms.Equity)).ToArray();
+        return list.Length == 0 ? null : list;
+    }
+    private ConsolidationRequest Query => new(kind, members.ToArray(), maps.Select(m => new ConsolidationMapping(m.SourceId, m.SourceCode, m.Code, m.Name)).ToArray(), adjustments.Count == 0 ? null : adjustments.ToArray(), TermsQuery());
     private void Invalidate() { report = null; message = ""; ClearProposals(); }
-    private void Remove(CompanyReportSnapshot member) { members.Remove(member); maps.RemoveAll(m => m.SourceId == member.SourceId); Invalidate(); }
+    private void Remove(CompanyReportSnapshot member) { members.Remove(member); terms.Remove(member.SourceId); maps.RemoveAll(m => m.SourceId == member.SourceId); Invalidate(); }
     private async Task Run(Func<Task> action)
     {
         if (busy) return; busy = true; error = message = "";
@@ -102,10 +139,18 @@
         {
             var saved = System.Text.Json.JsonSerializer.Deserialize<ConsolidationRequest>(json.RootElement.GetRawText()) ?? throw new BusinessException("The saved group file is empty.");
             var validated = await Statements.Consolidate(saved);
-            members.Clear(); members.AddRange(validated.Members); maps.Clear();
+            members.Clear(); members.AddRange(validated.Members); maps.Clear(); terms.Clear();
+            foreach (var t in saved.Terms ?? []) terms[t.SourceId] = new Terms { Ownership = t.OwnershipPercent, Closing = t.ClosingRate, Average = t.AverageRate, Equity = t.EquityRate };
             foreach (var m in members) AddMaps(m, saved.Mappings);
             adjustments.Clear(); adjustments.AddRange(saved.Adjustments ?? []); adjustmentDate = members[0].To;
             kind = validated.Statement; Invalidate(); message = "Saved group and mappings loaded. Build the report to review its totals."; return;
+        }
+        if (json.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object && json.RootElement.TryGetProperty("Transactions", out _))
+        {
+            var ledger = System.Text.Json.JsonSerializer.Deserialize<IntercompanyLedger>(json.RootElement.GetRawText()) ?? throw new BusinessException("The intercompany file is empty.");
+            if (ledgers.Count >= 2) throw new BusinessException("Remove a loaded intercompany export first; match two companies at a time.");
+            if (ledgers.Any(l => l.SourceId == ledger.SourceId)) throw new BusinessException("This company's intercompany export is already loaded.");
+            ledgers.Add(ledger); ClearMatch(); message = $"{ledger.Company} intercompany transactions loaded."; return;
         }
         if (members.Count >= 20) throw new BusinessException("Use at most twenty member companies.");
         var member = System.Text.Json.JsonSerializer.Deserialize<CompanyReportSnapshot>(json.RootElement.GetRawText()) ?? throw new BusinessException("The snapshot file is empty.");

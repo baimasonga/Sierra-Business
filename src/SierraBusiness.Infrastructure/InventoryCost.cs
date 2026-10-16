@@ -7,6 +7,7 @@ namespace SierraBusiness.Infrastructure;
 
 internal static class InventoryCost
 {
+    internal const string StandardMigrationAction = "inventory.standard-migration", StandardAllowanceAction = "inventory.standard-allowance";
     internal sealed record Identity(Guid Product,string Location,string? Serial,string? Batch,DateOnly? Expiry);
     private sealed class Lot(decimal quantity,decimal value,long order,Guid origin,Guid added)
     {
@@ -18,8 +19,9 @@ internal static class InventoryCost
     internal static async Task<Dictionary<Guid,InventoryCostPolicy>> PolicyMap(BusinessDb db,string branch)
     {
         var cache = Policies.GetValue(db,_ => new Cache()); if (cache.Branches.TryGetValue(branch,out var map)) return map;
-        var ops = await db.Operations.AsNoTracking().Where(o => o.Branch == branch && o.Action == "inventory.cost-method").ToListAsync();
-        map = ops.Select(o => JsonSerializer.Deserialize<InventoryCostCommand>(o.Payload)!).GroupBy(c => c.ProductId).ToDictionary(g => g.Key,g => { var c = g.OrderByDescending(c => c.ExpectedVersion).First(); return new InventoryCostPolicy(c.ProductId,c.ExpectedVersion+1,c.Method,c.StandardUnitCost,c.From); });
+        var ops = await db.Operations.AsNoTracking().Where(o => o.Branch == branch && (o.Action == "inventory.cost-method" || o.Action == StandardMigrationAction)).ToListAsync();
+        // A standard-cost migration is also a policy version: standard from its date at its unit cost.
+        map = ops.Select(o => o.Action == StandardMigrationAction ? JsonSerializer.Deserialize<StandardCostMigrationCommand>(o.Payload) is { } m ? new InventoryCostCommand(m.OperationId,m.ProductId,m.ExpectedVersion,InventoryCostMethod.Standard,m.StandardUnitCost,m.From,m.Reason) : null! : JsonSerializer.Deserialize<InventoryCostCommand>(o.Payload)!).GroupBy(c => c.ProductId).ToDictionary(g => g.Key,g => { var c = g.OrderByDescending(c => c.ExpectedVersion).First(); return new InventoryCostPolicy(c.ProductId,c.ExpectedVersion+1,c.Method,c.StandardUnitCost,c.From); });
         return cache.Branches[branch] = map;
     }
     internal static async Task<InventoryCostPolicy> Policy(BusinessDb db,string branch,Guid product) => (await PolicyMap(db,branch)).GetValueOrDefault(product) ?? new(product,0,InventoryCostMethod.WeightedAverage,0,new(2000,1,1));

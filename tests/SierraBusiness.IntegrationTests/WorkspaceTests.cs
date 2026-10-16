@@ -93,6 +93,10 @@ public sealed class WorkspaceTests
         public Task<IReadOnlyList<InventoryCostPolicy>> CostPolicies() => throw new NotImplementedException();
         public Task<Guid> WriteDown(InventoryWriteDownCommand input) => throw new NotImplementedException();
         public Task<Guid> SetCostPolicy(InventoryCostCommand input) => throw new NotImplementedException();
+        public Task<StandardCostMigrationPreview> PreviewStandardMigration(Guid productId, decimal standardUnitCost) => throw new NotImplementedException();
+        public Task<Guid> MigrateToStandard(StandardCostMigrationCommand input) => throw new NotImplementedException();
+        public Task<IReadOnlyList<StandardAllowanceView>> StandardAllowances() => throw new NotImplementedException();
+        public Task<Guid> ReviewStandardAllowance(StandardAllowanceCommand input) => throw new NotImplementedException();
         public Task<InventoryValuationReport> Valuation(InventoryValuationRequest input) => throw new NotImplementedException();
         public Task<byte[]> ExportValuation(InventoryValuationRequest input) => throw new NotImplementedException();
         public Task<IReadOnlyList<ConsignmentSiteView>> ConsignmentSites() => throw new NotImplementedException();

@@ -68,10 +68,13 @@ public sealed record FiscalRunResult(int Tried, int Registered, int StillPending
 public interface IComplianceService
 {
     Task<Guid> RecordInputTax(InputTaxCommand input);
+    Task<StockInputTaxPreview> PreviewStockInputTax(Guid receiptId, decimal allowableTax);
     Task<IReadOnlyList<InputTaxSource>> InputTaxSources();
     Task<TaxFilingPreview> PreviewTaxFiling(DateOnly from,DateOnly to);
     Task<Guid> RecordTaxFiling(TaxFilingCommand input);
     Task<IReadOnlyList<TaxFilingView>> TaxFilings();
+    Task<Guid> RecordTaxFilingCorrection(TaxFilingCorrectionCommand input);
+    Task<IReadOnlyList<TaxFilingCorrectionView>> TaxFilingCorrections();
     Task<Guid> RecordReliefGrant(TaxReliefGrantCommand input);
     Task<IReadOnlyList<TaxReliefGrantView>> ReliefGrants();
     Task<NetTaxReturnReport> NetTaxReturn(DateOnly from, DateOnly to);

@@ -23,3 +23,6 @@ public enum InterestBasis { Actual365, ActualYear, Actual360 }
 public sealed record InterestRequest(DateOnly From, DateOnly To, decimal AnnualPercent, int GraceDays, InterestBasis Basis, bool Receivable = true, string Party = "");
 public sealed record InterestRow(Guid DocumentId, string Number, string Party, DateOnly Due, int ChargedDays, decimal StartBalance, decimal EndBalance, decimal Interest);
 public sealed record InterestReport(InterestRequest Request, IReadOnlyList<InterestRow> Rows, decimal Total);
+/// <summary>Bills a reviewed worksheet amount to the customer: debit receivables, credit an income ledger. The worksheet is recalculated when posting.</summary>
+public sealed record InterestChargeCommand(Guid OperationId, InterestRequest Request, Guid BillId, decimal Amount, DateOnly Date, int IncomeAccount, string Reason, int PaymentDays = 0);
+public sealed record InterestChargeView(Guid DocumentId, string Number, Guid BillId, string BillNumber, string Party, DateOnly Date, DateOnly From, DateOnly To, decimal Calculated, decimal Amount, bool Reversed);

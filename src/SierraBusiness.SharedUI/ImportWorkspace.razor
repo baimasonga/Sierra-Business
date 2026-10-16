@@ -18,15 +18,24 @@
     }
 </section>
 
+@if (Actor.Permissions.Contains("accounting.read"))
+{
+    <section class="panel">
+        <h2>Export for Tally and reporting tools</h2>
+        <p class="hint">Creates a Tally-compatible XML file with the ledger masters and every posted document's ledger entries in the period. Cost-centre and inventory details are not included.</p>
+        <div class="form-grid"><label>Export from<input type="date" @bind="exportFrom" /></label><label>Export to<input type="date" @bind="exportTo" /></label></div>
+        <button class="secondary" disabled="@busy" @onclick="ExportTally">Export Tally XML</button>
+    </section>
+}
 <section class="panel">
     <h2>2. Choose your workbook</h2>
     <label>Excel or exchange file (.xlsx, .json, .xml)<InputFile OnChange="LoadFile" accept=".xlsx,.json,.xml,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled="@busy" /></label>
-    <p class="hint">JSON uses Version 1, the selected Type and Rows with template field keys. Tally XML supports plain accounting vouchers with existing uniquely named ledgers. Unsupported inventory, bill and cost-centre details are refused. Conversion still requires mapping, validation and review before posting.</p>
+    <p class="hint">JSON uses Version 1, the selected Type and Rows with template field keys. Tally XML converts ledgers (customers and suppliers become parties), stock items, opening stock, opening balances with open bills, and plain accounting vouchers with existing uniquely named ledgers. Import in that order. Unsupported inventory, bill and cost-centre details are refused. Conversion still requires mapping, validation and review before posting.</p>
     @if (sheets.Count > 0)
     {
         <div class="form-grid">
             <label>Sheet<select value="@sheet" @onchange="ChangeSheet" disabled="@busy">@foreach (var s in sheets) { <option value="@s.Name">@s.Name (@s.Rows rows)</option> }</select></label>
-            @if (IsStock) { <label>Stock as at<input type="date" @bind="asAt" @bind:after="ClearPreview" /></label> }
+            @if (IsStock || type == ImportType.OpeningBalances) { <label>@(IsStock ? "Stock as at" : "Balances as at")<input type="date" @bind="asAt" @bind:after="ClearPreview" /></label> }
             @if (type == ImportType.StockCount) { <label>Count session name<input maxlength="120" @bind="sessionName" @bind:after="ClearPreview" placeholder="Imported count" /></label> }
         </div>
     }
@@ -149,7 +158,7 @@
     private Task Validate() => Run(async () =>
     {
         validating = true;
-        preview = await Imports.Validate(new(type, fileName, content ?? throw new BusinessException("Choose a file first."), sheet, mapping, IsStock ? asAt : null, sessionName));
+        preview = await Imports.Validate(new(type, fileName, content ?? throw new BusinessException("Choose a file first."), sheet, mapping, IsStock || type == ImportType.OpeningBalances ? asAt : null, sessionName));
         commitOperation = Guid.NewGuid(); problemsOnly = preview.Errors > 0;
     });
     private async Task Commit()
@@ -162,6 +171,8 @@
             history = (await Imports.History()).ToList();
         });
     }
+    private DateOnly exportFrom = new(DateTime.UtcNow.Year, 1, 1), exportTo = DateOnly.FromDateTime(DateTime.UtcNow);
+    private Task ExportTally() => Run(async () => message = await Deliver($"Rokela Business Admin - Tally export {exportFrom:yyyy-MM-dd} to {exportTo:yyyy-MM-dd}.xml", await Imports.ExportTally(exportFrom, exportTo)));
     private Task DownloadTemplate() => Run(async () => message = await Deliver($"Rokela Business Admin - {Current!.Title} template.xlsx", await Imports.Template(type)));
     private Task DownloadErrors() => Run(async () => message = await Deliver($"{Path.GetFileNameWithoutExtension(fileName)} - rows to fix.xlsx", await Imports.ErrorWorkbook(preview!.BatchId)));
     private async Task<string> Deliver(string name, byte[] bytes)

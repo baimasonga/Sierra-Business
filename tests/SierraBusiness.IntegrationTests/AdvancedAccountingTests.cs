@@ -70,6 +70,39 @@ public sealed class AdvancedAccountingTests : IAsyncLifetime
         Assert.Equal(7.60m, (await finance.Interest(new(date.AddDays(1), today, 36.5m, 0, InterestBasis.Actual360))).Total);
         var count = (await business.Read(session.Actor)).Documents.Count; await finance.ExportAdvanced(date, today, [], report.Request); Assert.Equal(count, (await business.Read(session.Actor)).Documents.Count);
     }
+    [Fact] public async Task ReviewedInterestChargesBecomeCustomerBillsOncePerPeriod()
+    {
+        await TestParties.Register(factory, "School"); var date = today.AddDays(-10);
+        var product = await business.AddProduct(session.Actor, new(Guid.NewGuid(), "INT-CHG", "Credit item", "General", "piece", 100, TrackingMode.Quantity, MinimumPrice: 1));
+        await business.Post(session.Actor, new(Guid.NewGuid(), DocumentKind.Receipt, "Supplier", date, [new(product, 10, 50)], null));
+        var bill = await business.Post(session.Actor, new(Guid.NewGuid(), DocumentKind.Sale, "School", date, [new(product, 10, 100)], null, DueDate: date));
+        var request = new InterestRequest(date.AddDays(1), today, 36.5m, 0, InterestBasis.Actual365);
+        Assert.Equal(10m, Assert.Single((await finance.Interest(request)).Rows).Interest);
+        var command = new InterestChargeCommand(Guid.NewGuid(), request, bill, 10m, today, 6002, "Agreed late-payment terms reviewed", 14);
+        await Assert.ThrowsAsync<BusinessException>(() => finance.PostInterestCharge(command with { OperationId = Guid.NewGuid(), Amount = 10.01m }));
+        await Assert.ThrowsAsync<BusinessException>(() => finance.PostInterestCharge(command with { OperationId = Guid.NewGuid(), IncomeAccount = 6001 }));
+        await Assert.ThrowsAsync<BusinessException>(() => finance.PostInterestCharge(command with { OperationId = Guid.NewGuid(), Request = request with { Receivable = false } }));
+        await Assert.ThrowsAsync<BusinessException>(() => finance.PostInterestCharge(command with { OperationId = Guid.NewGuid(), Date = today.AddDays(-1) }));
+        var charge = await finance.PostInterestCharge(command); Assert.Equal(charge, await finance.PostInterestCharge(command));
+        await using (var db = factory.CreateDbContext())
+        {
+            var doc = await db.Documents.SingleAsync(d => d.Id == charge); Assert.Equal(DocumentKind.InterestCharge, doc.Kind); Assert.Equal("School", doc.Party); Assert.Equal(today.AddDays(14), doc.DueDate);
+            var lines = await db.Journal.Where(j => j.DocumentId == charge).ToListAsync(); Assert.Equal(10m, lines.Single(l => l.Account == Account.Receivables).Debit); Assert.Equal(10m, lines.Single(l => (int)l.Account == 6002).Credit);
+        }
+        Assert.Contains((await finance.Read(date, today)).Bills, b => b.Id == charge && b.Outstanding == 10m);
+        var view = Assert.Single(await finance.InterestCharges()); Assert.Equal(bill, view.BillId); Assert.Equal(10m, view.Calculated); Assert.False(view.Reversed);
+        // No interest on interest, and the same days cannot be charged twice.
+        Assert.Single((await finance.Interest(request)).Rows);
+        await Assert.ThrowsAsync<BusinessException>(() => finance.PostInterestCharge(command with { OperationId = Guid.NewGuid(), Amount = 5m }));
+        var payment = await finance.PostVoucher(new(Guid.NewGuid(), VoucherType.Receipt, today, "Interest paid", [new(1000, 10, 0), new(1100, 0, 10)], [new(charge, 10)]));
+        await Assert.ThrowsAsync<BusinessException>(() => business.Reverse(session.Actor, new(Guid.NewGuid(), charge, "Waived")));
+        await business.Reverse(session.Actor, new(Guid.NewGuid(), payment, "Refunded"));
+        await business.Reverse(session.Actor, new(Guid.NewGuid(), charge, "Waived after review"));
+        Assert.True(Assert.Single(await finance.InterestCharges()).Reversed);
+        await finance.PostInterestCharge(command with { OperationId = Guid.NewGuid(), Amount = 4m });
+        session.Actor = new("reader", "FREETOWN", new HashSet<string> { "accounting.read", "business.read" });
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => finance.PostInterestCharge(command with { OperationId = Guid.NewGuid() }));
+    }
     [Fact] public async Task ReadOnlyUsersMayAnalyzeButCannotChangeStructures()
     {
         session.Actor = new("reader", "FREETOWN", new HashSet<string> { "accounting.read", "business.read" }); Assert.Empty((await finance.Structure()).Groups);

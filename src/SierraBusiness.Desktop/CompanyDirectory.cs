@@ -10,7 +10,7 @@ public sealed class CompanyDirectory(string legacyDataDirectory)
     {
         if (!CompanyPeriodService.IsArchive(directory)) return name;
         var marker = JsonSerializer.Deserialize<CompanyPeriodMarker>(File.ReadAllText(Path.Combine(directory,CompanyPeriodService.MarkerFile)))!;
-        return name+" — archive through "+marker.Cutoff.ToString("yyyy-MM-dd");
+        return name+" — archive through "+marker.Cutoff.ToString("yyyy-MM-dd")+(marker.LaterDocuments > 0 ? $" (also holds {marker.LaterDocuments} later document{(marker.LaterDocuments == 1 ? "" : "s")} for reference)" : "");
     }
     private string Root => Path.Combine(Path.GetFullPath(legacyDataDirectory), "Companies");
     public IReadOnlyList<CompanyInfo> List()

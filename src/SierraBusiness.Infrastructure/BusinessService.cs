@@ -191,7 +191,7 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
             if (sale && !delivery && input.Payment is null && partyMaster is not null)
             {
                 if (partyMaster.CreditHold) throw new BusinessException("This customer's account is on credit hold.");
-                var bills = await db.Documents.Where(x => x.Branch == actor.Branch && x.Party.ToUpper() == normalizedParty && ((x.Kind == DocumentKind.Sale || x.Kind == DocumentKind.ServiceInvoice) && x.Settlement == "Credit" || x.Kind == DocumentKind.ChequeBounce) && !db.Documents.Any(r => r.Reverses == x.Id)).ToListAsync(cancellationToken);
+                var bills = await db.Documents.Where(x => x.Branch == actor.Branch && x.Party.ToUpper() == normalizedParty && ((x.Kind == DocumentKind.Sale || x.Kind == DocumentKind.ServiceInvoice) && x.Settlement == "Credit" || x.Kind == DocumentKind.ChequeBounce || x.Kind == DocumentKind.InterestCharge || x.Kind == DocumentKind.OpeningBalance && x.Settlement == "Credit") && !db.Documents.Any(r => r.Reverses == x.Id)).ToListAsync(cancellationToken);
                 var ids = bills.Select(x => x.Id).ToList();
                 var allocations = await db.BillAllocations.Where(x => ids.Contains(x.InvoiceId) && !db.Documents.Any(r => r.Reverses == x.VoucherId)).ToListAsync(cancellationToken);
                 var outstanding = bills.Sum(x => x.Total) - allocations.Sum(x => x.Amount);
@@ -231,7 +231,7 @@ public sealed class BusinessService(IDbContextFactory<BusinessDb> factory, IOpti
             Rules.Required(input.Reason, "Reversal reason");
             var original = await db.Documents.SingleOrDefaultAsync(x => x.Id == input.DocumentId && x.Branch == actor.Branch, cancellationToken) ?? throw new BusinessException("Document not found.");
             if (original.Kind == DocumentKind.Reversal || await db.Documents.AnyAsync(x => x.Reverses == original.Id, cancellationToken)) throw new BusinessException("This document cannot be reversed again.");
-            if (original.Settlement == "Reviewed GST return settlement") throw new BusinessException("Recorded GST returns are immutable. Record an accountant-reviewed later correction rather than reversing a declared return.");
+            if (original.Settlement is "Reviewed GST return settlement" or "Reviewed GST return correction") throw new BusinessException("Recorded GST returns are immutable. Record an accountant-reviewed later correction rather than reversing a declared return.");
             if (await db.IssuedChequeEvents.AnyAsync(e => e.State == IssuedChequeState.Presented && db.IssuedCheques.Any(c => c.Id == e.ChequeId && c.VoucherId == original.Id),cancellationToken)) throw new BusinessException("A cheque paid by the bank cannot be cancelled by reversing its payment. Record the supplier refund instead.");
             var originalProducts = await db.Movements.Where(m => m.DocumentId == original.Id).Select(m => m.ProductId).Distinct().ToArrayAsync(cancellationToken);
             foreach (var productId in originalProducts) if ((await InventoryCost.Policy(db,actor.Branch,productId)) is { Version: > 0 } changed && original.BusinessDate < changed.From) throw new BusinessException("This stock document predates a prospective costing-method transition. Use a current reviewed return or adjustment instead of reversing earlier costing history.");

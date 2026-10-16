@@ -51,6 +51,8 @@ public interface IFinanceService
     Task<Guid> SaveScenario(ScenarioCommand input);
     Task<ScenarioReport> ProjectScenarios(DateOnly from, DateOnly to, IReadOnlyList<Guid> ids);
     Task<InterestReport> Interest(InterestRequest input);
+    Task<Guid> PostInterestCharge(InterestChargeCommand input);
+    Task<IReadOnlyList<InterestChargeView>> InterestCharges();
     Task<byte[]> ExportAdvanced(DateOnly from, DateOnly to, IReadOnlyList<Guid> scenarioIds, InterestRequest? interest = null);
     Task<FinanceSnapshot> Read(DateOnly from, DateOnly to);
     Task<Guid> CreateLedger(LedgerInput input);

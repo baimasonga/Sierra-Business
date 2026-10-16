@@ -62,6 +62,8 @@ public sealed partial class ImportService(IDbContextFactory<BusinessDb> factory,
             [F("account_code","Account code",true,"Custom code 6000–999999."), F("name","Account name",true,"Up to 160 characters."), F("group","Account type",true,"Asset, Liability, Equity, Income or Expense."), F("cash_bank","Cash or bank",false,"Yes or No. Only assets may be cash/bank accounts.")]),
         new(ImportType.Vouchers, "Accounting vouchers", "Import balanced vouchers, grouped by voucher reference. Each group is one journal, receipt, payment or contra. The batch commits together after every group passes domain checks.", "accounting.read,accounting.write",
             [F("voucher_key","Voucher reference",true,"Group key shared by all lines of one voucher."), F("date","Voucher date",true,"An open-period date, not in the future."), F("voucher_type","Voucher type",true,"Journal, Receipt, Payment or Contra."), F("narration","Narration",true,"Same narration on every line of the group."), F("account_code","Account code",true,"An existing ledger code."), F("debit","Debit",false,"NLe debit, at most two decimal places."), F("credit","Credit",false,"NLe credit, at most two decimal places."), F("cost_centre","Cost centre",false,"Income/expense allocation code."), F("bill_number","Allocated bill number",false,"Existing customer/supplier credit bill number, if settling trade controls."), F("bill_amount","Bill allocation amount",false,"Positive local amount against the bill.")]),
+        new(ImportType.OpeningBalances, "Opening balances", "Ledger balances and open customer/supplier bills brought forward from another system, as at one date. The difference goes to opening balance equity. Stock comes from the opening stock templates.", "accounting.read,accounting.write",
+            [F("account_code","Account code",true,"An existing ledger. Use 1100 for customer bills and 2000 for supplier bills."), F("debit","Debit",false,"NLe debit, at most two decimal places."), F("credit","Credit",false,"NLe credit, at most two decimal places."), F("party","Customer or supplier",false,"Required for 1100/2000: a registered party name."), F("bill_number","Bill number",false,"Required for 1100/2000: the original invoice or bill reference, unique."), F("bill_date","Bill date",false,"Original bill date, on or before the opening date."), F("due_date","Due date",false,"When the bill falls due; defaults to the bill date.")]),
         new(ImportType.Products, "Product catalogue", "Create new products, with optional confidential minimum price and barcode.", "catalogue.write",
             [F("sku", "SKU", true, "Up to 40 characters. Must not already exist."), F("name", "Product name", true, "Up to 160 characters."), F("category", "Category", true, "For example Stationery."), F("unit", "Base unit", true, "Smallest unit you sell or count, e.g. piece, ream, box."),
              F("price", "Selling price", true, "Asking price per base unit in NLe."), F("tracking", "Tracking", false, "Quantity (default), Serial, Batch, or Batch+Expiry."),
@@ -90,6 +92,7 @@ public sealed partial class ImportService(IDbContextFactory<BusinessDb> factory,
     public IReadOnlyList<ImportTemplate> Templates() => All.OrderBy(t => (int)t.Type).ToArray();
     private static ImportTemplate Get(ImportType type) => All.SingleOrDefault(x => x.Type == type) ?? throw new BusinessException("Unknown import type.");
     private static bool IsStock(ImportType type) => type is ImportType.OpeningStock or ImportType.SerialStock or ImportType.BatchStock;
+    private static bool NeedsDate(ImportType type) => IsStock(type) || type == ImportType.OpeningBalances;
 
     private async Task<Actor> Authorize(ImportType? type = null)
     {
@@ -218,6 +221,7 @@ public sealed partial class ImportService(IDbContextFactory<BusinessDb> factory,
             case ImportType.Parties: await CheckParties(db, actor, lines); break;
             case ImportType.Ledgers: await CheckLedgers(db, lines); break;
             case ImportType.Vouchers: await CheckVouchers(db, actor, lines); break;
+            case ImportType.OpeningBalances: break; // checked with its opening date
             case ImportType.Products:
             {
                 var barcodes = (await db.ProductBarcodes.AsNoTracking().Select(x => x.Code).ToListAsync()).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -361,16 +365,17 @@ public sealed partial class ImportService(IDbContextFactory<BusinessDb> factory,
         if (sheet.Rows.Count == 0) throw new BusinessException("The sheet has no data rows below the header row.");
         await using var db = await factory.CreateDbContextAsync();
         DateOnly? asAt = null;
-        if (IsStock(input.Type))
+        if (NeedsDate(input.Type))
         {
-            asAt = input.AsAt ?? throw new BusinessException("Choose the date the opening stock applies from.");
-            if (asAt <= await PeriodControls.ClosedThrough(db, actor.Branch, options.Value.ClosedThrough) || asAt > DateOnly.FromDateTime(DateTime.UtcNow)) throw new BusinessException("The opening stock date must be in an open accounting period and not in the future.");
+            asAt = input.AsAt ?? throw new BusinessException("Choose the date the opening balances apply from.");
+            if (asAt <= await PeriodControls.ClosedThrough(db, actor.Branch, options.Value.ClosedThrough) || asAt > DateOnly.FromDateTime(DateTime.UtcNow)) throw new BusinessException("The opening date must be in an open accounting period and not in the future.");
         }
         var sessionName = input.Type == ImportType.StockCount ? (input.SessionName ?? "").Trim() is { Length: > 0 } name ? Rules.Required(name, "Count session name", 120) : $"Imported count {DateTime.UtcNow:yyyy-MM-dd}" : "";
         var index = sheet.Headers.Select((h, i) => (h, i)).ToDictionary(x => x.h, x => x.i);
         var lines = sheet.Rows.Select(r => new Line { Row = r.Number, Values = mapping.ToDictionary(m => m.Key, m => r.Cells[index[m.Value]]) }).ToList();
         await Check(db, actor, input.Type, lines);
         if (IsStock(input.Type)) await CheckStockCostDates(db,actor,lines,asAt!.Value);
+        if (input.Type == ImportType.OpeningBalances) await CheckOpeningBalances(db,actor,lines,asAt!.Value);
         var key = KeyFor(input.Type, actor.Branch, asAt, sessionName, lines);
         var previous = await db.ImportBatches.AsNoTracking().Where(x => x.Branch == actor.Branch && x.Key == key && x.Status == Committed).FirstOrDefaultAsync();
 
@@ -448,6 +453,10 @@ public sealed partial class ImportService(IDbContextFactory<BusinessDb> factory,
                     await db.SaveChangesAsync(); // Visible to later groups in this transaction; any failure rolls back the entire batch.
                 }
                 summary = $"Posted {documents.Count} balanced accounting vouchers."; break;
+            case ImportType.OpeningBalances:
+                documents.AddRange(PostOpeningBalances(db,actor,batch,lines));
+                summary = $"Posted opening balances as at {batch.AsAt:dd MMM yyyy}: {lines.Count(l => l.V("bill_number").Length > 0)} open bill(s) and {lines.Count(l => l.V("bill_number").Length == 0)} ledger balance(s); the difference is in opening balance equity.";
+                break;
             case ImportType.Products:
             {
                 foreach (var line in lines)
@@ -544,12 +553,13 @@ public sealed partial class ImportService(IDbContextFactory<BusinessDb> factory,
         var lines = rows.Select(r => new Line { Row = r.RowNumber, Values = JsonSerializer.Deserialize<Dictionary<string, string>>(r.ValuesJson) ?? [] }).ToList();
         await Check(db, actor, batch.Type, lines);
         if (IsStock(batch.Type)) await CheckStockCostDates(db,actor,lines,batch.AsAt!.Value);
+        if (batch.Type == ImportType.OpeningBalances) await CheckOpeningBalances(db,actor,lines,batch.AsAt!.Value);
         var failed = lines.Where(x => x.Errors.Count > 0).ToList();
         if (failed.Count > 0)
             throw new BusinessException(batch.Errors > 0
                 ? $"{failed.Count} row(s) have errors. Download the error workbook, fix the rows marked Error and import again."
                 : $"Records changed since this file was validated (row {failed[0].Row}: {failed[0].Errors[0]}). Validate the file again.");
-        if (IsStock(batch.Type) && batch.AsAt <= await PeriodControls.ClosedThrough(db, actor.Branch, options.Value.ClosedThrough)) throw new BusinessException("The opening stock date is now in a closed period. Validate again with an open date.");
+        if (NeedsDate(batch.Type) && batch.AsAt <= await PeriodControls.ClosedThrough(db, actor.Branch, options.Value.ClosedThrough)) throw new BusinessException("The opening date is now in a closed period. Validate again with an open date.");
         return (rows, lines);
     }
 

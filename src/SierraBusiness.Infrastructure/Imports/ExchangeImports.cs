@@ -31,7 +31,15 @@ public sealed partial class ImportService
             else if (Path.GetExtension(input.FileName).Equals(".xml", StringComparison.OrdinalIgnoreCase))
             {
                 using var stream = new MemoryStream(input.Content); using var reader = XmlReader.Create(stream, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 10 * 1024 * 1024 }); var xml = XDocument.Load(reader);
-                if (input.Type != ImportType.Vouchers || xml.Root?.Name.LocalName != "ENVELOPE") throw new BusinessException("The XML adapter accepts Tally ENVELOPE accounting vouchers only. Use reviewed JSON or Excel templates for masters and stock.");
+                if (xml.Root?.Name.LocalName != "ENVELOPE") throw new BusinessException("The XML adapter accepts Tally ENVELOPE exports only.");
+                if (input.Type != ImportType.Vouchers)
+                {
+                    await using var masters = await factory.CreateDbContextAsync();
+                    rows.AddRange(await TallyMasters.Rows(masters, actor.Branch, xml, input.Type, headers));
+                    if (rows.Count < 2) throw new BusinessException("No supported Tally masters for this template were found in the file.");
+                    if (rows.Count > 10001) throw new BusinessException("Split XML files into batches of at most 10,000 rows.");
+                    return WorkbookWriter.Write([("Data", rows)]);
+                }
                 var vouchers = xml.Descendants("VOUCHER").ToArray(); if (vouchers.Length is < 1 or > 10000) throw new BusinessException("No supported accounting vouchers found.");
                 await using var db = await factory.CreateDbContextAsync(); var accounts = await db.LedgerAccounts.AsNoTracking().ToListAsync();
                 foreach (var voucher in vouchers)

@@ -252,3 +252,16 @@ Workforce attendance, leave and configurable pay heads; advanced accounting grou
 ## Release continuation — 11 October 2026
 
 Windows 0.32.0 implements the authorized period, inventory, banking/import and group-adjustment workflows. The immutable source snapshot passed 380 Release tests with zero failures and six skipped live SQL Server/PostgreSQL tests. Authenticated HTTP workflows and the offline Windows capture/OCR smoke check passed. Native publish, installer compilation and all 26 release artifact checks passed. The installer is unsigned. Native visual, physical peripheral, clean-machine and two-device acceptance remain unverified; execution policy blocked isolated UI-preview startup without a specific reason. See [scope and evidence](remaining-features-0.32.0.md).
+
+## Remaining implementation — 16 October 2026
+
+The 11 October backlog's source items are implemented. They cover:
+
+- group non-controlling interests, translation and transaction matching;
+- interest charges;
+- standard-cost migration and allowance;
+- GST recovery after issue and return corrections;
+- retrospective and synced-branch period splits with verified compaction;
+- Tally company migration, opening balances, Tally XML export and live company search.
+
+Full Release regression: 421 passed, 0 failed, 12 skipped. No installer was built. See [scope and evidence](remaining-implementation-2026-10-16.md).
