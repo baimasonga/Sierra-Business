@@ -8,14 +8,16 @@ public sealed partial class StatementsService
     {
         if (input is null || input.Pairs is null || input.Pairs.Count is < 1 or > 100 || input.Pairs.Any(p => p is null || string.IsNullOrWhiteSpace(p.Reference))) throw new BusinessException("Review between one and one hundred reciprocal account pairs with references.");
         await Consolidate(input.Report);
+        // Compare in NLe after translation, so a foreign member's balance is matched at the rates used in the report.
+        var members = Prepare(input.Report).Members;
         if (input.Pairs.Select(p => p.Reference.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() != input.Pairs.Count) throw new BusinessException("Each proposed elimination needs a unique reference.");
         var used = new HashSet<(Guid, int)>(); var proposals = new List<IntercompanyProposal>();
         foreach (var pair in input.Pairs)
         {
             Rules.Required(pair.Reference, "Elimination reference", 80); Rules.Required(pair.Reason, "Elimination reason", 200);
             if (pair.DebitSource == pair.CreditSource || !used.Add((pair.DebitSource, pair.DebitAccount)) || !used.Add((pair.CreditSource, pair.CreditAccount))) throw new BusinessException("Choose different companies and use each reciprocal account once in a review.");
-            var debit = input.Report.Members.SingleOrDefault(m => m.SourceId == pair.DebitSource)?.Accounts.SingleOrDefault(a => a.Code == pair.DebitAccount) ?? throw new BusinessException("Debit member account not found.");
-            var credit = input.Report.Members.SingleOrDefault(m => m.SourceId == pair.CreditSource)?.Accounts.SingleOrDefault(a => a.Code == pair.CreditAccount) ?? throw new BusinessException("Credit member account not found.");
+            var debit = members.SingleOrDefault(m => m.SourceId == pair.DebitSource)?.Accounts.SingleOrDefault(a => a.Code == pair.DebitAccount) ?? throw new BusinessException("Debit member account not found.");
+            var credit = members.SingleOrDefault(m => m.SourceId == pair.CreditSource)?.Accounts.SingleOrDefault(a => a.Code == pair.CreditAccount) ?? throw new BusinessException("Credit member account not found.");
             var pl = input.Report.Statement == "Profit and loss";
             if (pl ? debit.Nature != LedgerGroup.Expense || credit.Nature != LedgerGroup.Income : debit.Nature != LedgerGroup.Asset || credit.Nature != LedgerGroup.Liability) throw new BusinessException("Pair expense with income for profit and loss, or asset with liability for balance sheet.");
             var d = pl ? debit.PeriodBalance : debit.ClosingBalance; var c = pl ? credit.PeriodBalance : credit.ClosingBalance;
