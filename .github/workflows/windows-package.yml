@@ -5,20 +5,52 @@ on:
       version:
         description: Installer version (major.minor.patch)
         required: true
-        default: '0.10.0'
+        default: '0.33.0'
       webview2_url:
         description: Microsoft Evergreen Standalone Installer x64 HTTPS download URL
         required: true
+        default: 'https://go.microsoft.com/fwlink/?linkid=2124701'
+      publish:
+        description: Publish a GitHub release after acceptance passes (default branch only)
+        type: boolean
+        default: true
+      reuse_run:
+        description: Re-run only the acceptance check, on the installer built by this earlier run ID (never publishes)
+        required: false
+        default: ''
 
 permissions:
   contents: read
 
+concurrency:
+  group: windows-package-${{ inputs.version }}
+  cancel-in-progress: false
+
+env:
+  PACKAGE_VERSION: ${{ inputs.version }}
+  INSTALLER: RokelaBusinessAdmin-Setup-x64.exe
+
 jobs:
   package:
+    if: inputs.reuse_run == ''
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+      # Releases are immutable: refuse a version that is already published or older than the newest release before spending
+      # an hour building it.
+      - name: Check the version
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ($env:PACKAGE_VERSION -notmatch '^\d+\.\d+\.\d+$') { throw 'Version must be major.minor.patch.' }
+          $current = [version]$env:PACKAGE_VERSION
+          $published = @(gh release list --repo $env:GITHUB_REPOSITORY --exclude-drafts --limit 100 --json tagName | ConvertFrom-Json |
+            Where-Object { $_.tagName -match '^v\d+\.\d+\.\d+$' } | ForEach-Object { [version]$_.tagName.Substring(1) })
+          if ($published -contains $current) { throw "Version $current is already released. Choose a new version." }
+          $newest = $published | Sort-Object -Descending | Select-Object -First 1
+          if ($newest -and $current -lt $newest) { throw "Version $current is older than the newest release $newest." }
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -41,20 +73,102 @@ jobs:
           # The packaging script requires a valid Microsoft signature and rejects the online bootstrapper.
       - name: Test, publish and compile installer
         shell: pwsh
-        env:
-          PACKAGE_VERSION: ${{ inputs.version }}
         run: |
           ./scripts/package-windows.ps1 -Version $env:PACKAGE_VERSION -WebView2Installer .tools/WebView2-x64.exe
       - uses: actions/upload-artifact@v4
         with:
-          name: SierraBusiness-Windows-${{ inputs.version }}
+          name: installer
           path: |
-            artifacts/windows/${{ inputs.version }}/SierraBusiness-Setup-x64.exe
+            artifacts/windows/${{ inputs.version }}/RokelaBusinessAdmin-Setup-x64.exe
             artifacts/windows/${{ inputs.version }}/SHA256SUMS.txt
+            artifacts/windows/${{ inputs.version }}/tests/tests.trx
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
 
+  # A fresh runner is a clean Windows machine: install, set up, restart, upgrade and uninstall the package there.
+  accept:
+    needs: package
+    if: always() && (needs.package.result == 'success' || (inputs.reuse_run != '' && needs.package.result == 'skipped'))
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: installer
+          path: dist
+          run-id: ${{ inputs.reuse_run || github.run_id }}
+          github-token: ${{ github.token }}
+      - name: Fetch the previous release for the upgrade check
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $current = [version]$env:PACKAGE_VERSION
+          $previous = gh release list --repo $env:GITHUB_REPOSITORY --exclude-drafts --exclude-pre-releases --limit 100 --json tagName | ConvertFrom-Json |
+            Where-Object { $_.tagName -match '^v\d+\.\d+\.\d+$' } | ForEach-Object { [version]$_.tagName.Substring(1) } |
+            Where-Object { $_ -lt $current } | Sort-Object -Descending | Select-Object -First 1
+          if ($previous) {
+            gh release download "v$previous" --repo $env:GITHUB_REPOSITORY --pattern $env:INSTALLER --pattern SHA256SUMS.txt --dir .previous
+            if ($LASTEXITCODE -ne 0) { throw "Could not download release v$previous." }
+            "PREVIOUS_VERSION=$previous" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          } else { Write-Output 'No earlier release: the upgrade check reinstalls this version over itself.' }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install the acceptance driver
+        shell: pwsh
+        run: |
+          npm install --no-save --no-audit --no-fund --prefix "$env:RUNNER_TEMP/driver" playwright-core@1.56.1 axe-core@4.10.2
+          if ($LASTEXITCODE -ne 0) { throw 'Driver installation failed.' }
+          "NODE_PATH=$env:RUNNER_TEMP\driver\node_modules" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Clean-machine acceptance
+        shell: pwsh
+        run: |
+          $arguments = @{ Installer = "dist/$env:INSTALLER"; Version = $env:PACKAGE_VERSION; Driver = 'tools/desktop-acceptance.cjs'; OutputDirectory = 'acceptance' }
+          if ($env:PREVIOUS_VERSION) { $arguments.PreviousInstaller = ".previous/$env:INSTALLER"; $arguments.PreviousVersion = $env:PREVIOUS_VERSION }
+          ./scripts/accept-windows-install.ps1 @arguments
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: acceptance
+          path: acceptance
+          if-no-files-found: warn
+          retention-days: 30
 
-
-
-
+  release:
+    needs: [package, accept]
+    if: inputs.publish && inputs.reuse_run == '' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd out
+          (cd installer && sha256sum -c SHA256SUMS.txt)
+          cp installer/tests/tests.trx test-results.trx
+          {
+            echo "Windows installer for Rokela Business Admin ${PACKAGE_VERSION}, built from ${GITHUB_SHA::7}."
+            echo
+            echo "Download **${INSTALLER}**, close Rokela Business Admin if it is open, make a backup, then run the installer. Business data stays in your Windows account and is kept on update and uninstall."
+            echo
+            echo "The installer is not code-signed yet, so Windows SmartScreen may warn: choose **More info**, then **Run anyway**."
+            echo
+            echo "SHA-256: \`$(cut -d' ' -f1 installer/SHA256SUMS.txt)\`"
+            echo
+            cat acceptance/acceptance.md
+          } > notes.md
+          gh release create "v${PACKAGE_VERSION}" \
+            "installer/${INSTALLER}" installer/SHA256SUMS.txt test-results.trx acceptance/acceptance.json \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest \
+            --title "Rokela Business Admin ${PACKAGE_VERSION}" --notes-file notes.md
