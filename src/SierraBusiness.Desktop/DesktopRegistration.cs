@@ -39,7 +39,7 @@ public static class DesktopRegistration
         services.AddDbContextFactory<BusinessDb>(o =>
         {
             o.UseSqlite(store.ConnectionString);
-            o.AddInterceptors(new CompanyArchiveInterceptor(dataDirectory));
+            o.AddInterceptors(SqliteBusyTimeout.Instance, new CompanyArchiveInterceptor(dataDirectory));
             if (sync.Role == SyncRole.Branch) o.AddInterceptors(new SyncCaptureInterceptor(SyncRole.Branch, branch)); // changes queue for head office in the same save
         });
         services.AddIdentityCore<IdentityUser>(o =>

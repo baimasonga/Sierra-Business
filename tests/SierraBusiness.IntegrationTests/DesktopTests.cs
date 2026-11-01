@@ -174,6 +174,25 @@ public sealed class DesktopTests : IAsyncLifetime
         for (var i = 0; i < 5; i++) await Assert.ThrowsAsync<BusinessException>(() => Accounts.SignIn("owner@example.test", "wrong"));
         await Assert.ThrowsAsync<BusinessException>(() => Accounts.SignIn("owner@example.test", Password));
     }
+    // The automatic backup reads the live database while people work. A sign-in (and its failed-attempt count) that commits during
+    // a backup must wait for it, not fail with "database is locked".
+    [Fact] public async Task SignInsDuringABackupWaitInsteadOfFailing()
+    {
+        await CreateAndSignIn();
+        var store = services.GetRequiredService<DesktopStore>();
+        using var stop = new CancellationTokenSource();
+        var backups = Task.Run(async () => { var count = 0; while (!stop.IsCancellationRequested) { await store.CreateBackup(); count++; } return count; });
+        try
+        {
+            for (var i = 0; i < 40; i++)
+            {
+                await Assert.ThrowsAsync<BusinessException>(() => Accounts.SignIn("owner@example.test", "wrong"));
+                await Accounts.SignIn("owner@example.test", Password); // also resets the failed-attempt count
+            }
+        }
+        finally { stop.Cancel(); }
+        Assert.True(await backups > 0);
+    }
     [Fact] public async Task AnotherInstanceCannotInitializeTheSameDatabase()
     {
         using var second = new DesktopStore(directory);

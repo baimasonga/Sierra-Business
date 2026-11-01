@@ -81,6 +81,7 @@ public sealed class DesktopStore(string directory) : IDisposable, IAsyncDisposab
             await using (var destination = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = temporary, Pooling = false }.ToString()))
             {
                 await source.OpenAsync();
+                SqliteBusyTimeout.Apply(source); // wait for a commit in progress instead of failing it, or the backup
                 await destination.OpenAsync();
                 source.BackupDatabase(destination);
                 if (await Scalar(destination, "PRAGMA integrity_check") != "ok") throw new InvalidOperationException("Backup verification failed. Try again before relying on this backup.");
