@@ -52,9 +52,29 @@ function Test-Installed([string]$Expected, [string]$Label) {
 }
 function Get-DataFiles { @(Get-ChildItem -LiteralPath (Join-Path $dataRoot 'Data') -Recurse -File -Filter 'sierra.db' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName.Substring($dataRoot.Length) } | Sort-Object) }
 
+# When the driver cannot work in the window, keep what explains it: the desktop, the embedded browser's command lines and open ports.
+function Save-Diagnostics([string]$Label) {
+    try {
+        Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+        $bounds = [Windows.Forms.SystemInformation]::VirtualScreen
+        $bitmap = New-Object Drawing.Bitmap $bounds.Width, $bounds.Height
+        $graphics = [Drawing.Graphics]::FromImage($bitmap)
+        $graphics.CopyFromScreen($bounds.Location, [Drawing.Point]::Empty, $bounds.Size)
+        $bitmap.Save((Join-Path $out "$Label-desktop.png"), [Drawing.Imaging.ImageFormat]::Png)
+        $graphics.Dispose(); $bitmap.Dispose()
+    } catch { Write-Output "Desktop screenshot failed: $($_.Exception.Message)" }
+    $lines = @(Get-CimInstance Win32_Process -Filter "Name = 'msedgewebview2.exe'" | ForEach-Object { $_.CommandLine })
+    $lines += @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalAddress -in '127.0.0.1', '::1', '0.0.0.0' } | ForEach-Object { "listening $($_.LocalAddress):$($_.LocalPort) pid $($_.OwningProcess)" })
+    $lines | Set-Content -LiteralPath (Join-Path $out "$Label-webview2.txt") -Encoding utf8
+}
+
 # Launch the program, let the driver work in its window, then close it the way a user does and require a clean exit.
 function Invoke-Session([string]$Step, [string]$Label) {
-    # Remote debugging is enabled only for this process, so the driver can reach the embedded page; installed copies never have it.
+    # Remote debugging is enabled only for these test launches, so the driver can reach the embedded page; a user's launch never has
+    # it. WebView2 reads extra browser arguments from the environment and from a per-program policy; set both, and remove both after.
+    $policy = 'HKCU:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
+    New-Item -Path $policy -Force | Out-Null
+    New-ItemProperty -Path $policy -Name 'SierraBusiness.Maui.exe' -Value "--remote-debugging-port=$port" -PropertyType String -Force | Out-Null
     $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$port"
     try { $process = Start-Process -FilePath $exe -WorkingDirectory $appDir -PassThru } finally { Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS }
     $deadline = [DateTime]::UtcNow.AddSeconds(120)
@@ -63,6 +83,8 @@ function Invoke-Session([string]$Step, [string]$Label) {
     Record "$Label`: window title" ($process.MainWindowTitle -eq 'Rokela Business Admin') $process.MainWindowTitle
     & node $Driver --step $Step --port $port --out $out --label $Label
     $driverExit = $LASTEXITCODE
+    if ($driverExit -ne 0) { Save-Diagnostics $Label }
+    Remove-ItemProperty -Path $policy -Name 'SierraBusiness.Maui.exe' -ErrorAction SilentlyContinue
     $process.Refresh()
     Record "$Label`: still responding" (!$process.HasExited -and $process.Responding) 'After the driver finished'
     Record "$Label`: $Step in the window" ($driverExit -eq 0) "Driver exit code $driverExit (details in $Label-$Step.json)"
@@ -120,6 +142,7 @@ try {
     Write-Output "Stopped: $($_.Exception.Message)"
 } finally {
     Remove-Item Env:ACCEPT_PASSWORD, Env:ACCEPT_EMAIL -ErrorAction SilentlyContinue
+    Remove-Item -Path 'HKCU:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments' -Recurse -ErrorAction SilentlyContinue
     Get-Process -Name 'SierraBusiness.Maui' -ErrorAction SilentlyContinue | Stop-Process -Force
 }
 
