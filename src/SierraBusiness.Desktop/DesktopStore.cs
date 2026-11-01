@@ -16,6 +16,7 @@ public sealed class DesktopStore(string directory) : IDisposable, IAsyncDisposab
     private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly CancellationTokenSource stopping = new();
+    private readonly TaskCompletionSource firstAutomaticCheck = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private FileStream? instanceLock;
     private IDbContextFactory<BusinessDb>? factory;
     private bool ready;
@@ -181,10 +182,17 @@ public sealed class DesktopStore(string directory) : IDisposable, IAsyncDisposab
         }
     }
 
+    /// <summary>Completes once the automatic-backup check made when the workspace opens has finished. Until then that check may still
+    /// take the first automatic backup (for example, right after the owner account is created).</summary>
+    public Task FirstAutomaticCheck => firstAutomaticCheck.Task;
+
     private async Task AutomaticLoop()
     {
         using var timer = new PeriodicTimer(TimeSpan.FromMinutes(30));
-        try { do await RunAutomaticIfDue(stopping.Token); while (await timer.WaitForNextTickAsync(stopping.Token)); }
+        try { await RunAutomaticIfDue(stopping.Token); }
+        catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException) { return; } // Application closing.
+        finally { firstAutomaticCheck.TrySetResult(); }
+        try { while (await timer.WaitForNextTickAsync(stopping.Token)) await RunAutomaticIfDue(stopping.Token); }
         catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException) { } // Application closing.
     }
 
