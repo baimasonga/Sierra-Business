@@ -150,6 +150,10 @@ async function inspectWorkspace(page) {
     console.log(`Scaling ${s.name}: ${JSON.stringify(layout)}`);
   }
   await cdp.send('Emulation.clearDeviceMetricsOverride');
+  // Every setting is measured and photographed first, so a failure still leaves the whole picture in the report.
+  for (const s of result.scaling)
+    check(`Layout at ${s.name}`, !s.horizontalScroll && s.navigationVisible && s.headingVisible,
+      `horizontal scroll ${s.horizontalScroll}, navigation visible ${s.navigationVisible}, heading visible ${s.headingVisible}`);
 }
 
 (async () => {
