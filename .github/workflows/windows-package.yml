@@ -1,5 +1,18 @@
 name: Windows desktop package
+# Release: push a tag vX.Y.Z on a commit of the default branch (or run this workflow by hand). The installer is built, tested on a
+# clean Windows machine and only then published as a GitHub release. Pull requests that change packaging get the same build and
+# acceptance check as version 0.0.0, never published.
 on:
+  push:
+    tags: ['v*.*.*']
+  pull_request:
+    paths:
+      - .github/workflows/windows-package.yml
+      - packaging/**
+      - scripts/package-windows.ps1
+      - scripts/accept-windows-install.ps1
+      - tools/desktop-acceptance.cjs
+      - src/SierraBusiness.Maui/**
   workflow_dispatch:
     inputs:
       version:
@@ -23,34 +36,63 @@ permissions:
   contents: read
 
 concurrency:
-  group: windows-package-${{ inputs.version }}
-  cancel-in-progress: false
+  group: windows-package-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  PACKAGE_VERSION: ${{ inputs.version }}
   INSTALLER: RokelaBusinessAdmin-Setup-x64.exe
+  WEBVIEW2_URL: ${{ inputs.webview2_url || 'https://go.microsoft.com/fwlink/?linkid=2124701' }}
 
 jobs:
-  package:
-    if: inputs.reuse_run == ''
-    runs-on: windows-latest
-    timeout-minutes: 90
+  # Decide the version and whether this run may publish. Releases are immutable, so a version that is already released or older
+  # than the newest release is refused before an hour is spent building it.
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.decide.outputs.version }}
+      publish: ${{ steps.decide.outputs.publish }}
     steps:
       - uses: actions/checkout@v4
-      # Releases are immutable: refuse a version that is already published or older than the newest release before spending
-      # an hour building it.
-      - name: Check the version
-        shell: pwsh
+        with:
+          fetch-depth: 0
+      - id: decide
         env:
           GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+          REUSE_RUN: ${{ inputs.reuse_run }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          if ($env:PACKAGE_VERSION -notmatch '^\d+\.\d+\.\d+$') { throw 'Version must be major.minor.patch.' }
-          $current = [version]$env:PACKAGE_VERSION
-          $published = @(gh release list --repo $env:GITHUB_REPOSITORY --exclude-drafts --limit 100 --json tagName | ConvertFrom-Json |
-            Where-Object { $_.tagName -match '^v\d+\.\d+\.\d+$' } | ForEach-Object { [version]$_.tagName.Substring(1) })
-          if ($published -contains $current) { throw "Version $current is already released. Choose a new version." }
-          $newest = $published | Sort-Object -Descending | Select-Object -First 1
-          if ($newest -and $current -lt $newest) { throw "Version $current is older than the newest release $newest." }
+          set -euo pipefail
+          case "$EVENT" in
+            workflow_dispatch) version="$INPUT_VERSION"; publish="$INPUT_PUBLISH" ;;
+            push) version="${GITHUB_REF_NAME#v}"; publish=true ;;
+            *) version=0.0.0; publish=false ;;
+          esac
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Version must be major.minor.patch, not '$version'."; exit 1; }
+          [ -z "$REUSE_RUN" ] || publish=false
+          if [ "$publish" = true ]; then
+            git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH" \
+              || { echo "::error::Only commits on $DEFAULT_BRANCH are released."; exit 1; }
+            released=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 --json tagName --jq '.[].tagName' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' || true)
+            if printf '%s\n' "$released" | grep -qx "$version"; then echo "::error::Version $version is already released."; exit 1; fi
+            newest=$(printf '%s\n' "$released" "$version" | sed '/^$/d' | sort -V | tail -1)
+            [ "$newest" = "$version" ] || { echo "::error::Version $version is older than the newest release $newest."; exit 1; }
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "Version $version; publish: $publish"
+
+  package:
+    needs: prepare
+    if: inputs.reuse_run == '' || inputs.reuse_run == null
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -63,8 +105,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed.' }
       - name: Download offline WebView2 prerequisite
         shell: pwsh
-        env:
-          WEBVIEW2_URL: ${{ inputs.webview2_url }}
         run: |
           $uri = [Uri]$env:WEBVIEW2_URL
           if ($uri.Scheme -ne 'https') { throw 'An HTTPS download URL is required.' }
@@ -79,21 +119,23 @@ jobs:
         with:
           name: installer
           path: |
-            artifacts/windows/${{ inputs.version }}/RokelaBusinessAdmin-Setup-x64.exe
-            artifacts/windows/${{ inputs.version }}/SHA256SUMS.txt
-            artifacts/windows/${{ inputs.version }}/tests/tests.trx
+            artifacts/windows/${{ needs.prepare.outputs.version }}/RokelaBusinessAdmin-Setup-x64.exe
+            artifacts/windows/${{ needs.prepare.outputs.version }}/SHA256SUMS.txt
+            artifacts/windows/${{ needs.prepare.outputs.version }}/tests/tests.trx
           if-no-files-found: error
           retention-days: 30
 
   # A fresh runner is a clean Windows machine: install, set up, restart, upgrade and uninstall the package there.
   accept:
-    needs: package
-    if: always() && (needs.package.result == 'success' || (inputs.reuse_run != '' && needs.package.result == 'skipped'))
+    needs: [prepare, package]
+    if: always() && needs.prepare.result == 'success' && (needs.package.result == 'success' || (inputs.reuse_run != '' && inputs.reuse_run != null && needs.package.result == 'skipped'))
     runs-on: windows-latest
     timeout-minutes: 45
     permissions:
       contents: read
       actions: read
+    env:
+      PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -140,11 +182,13 @@ jobs:
           retention-days: 30
 
   release:
-    needs: [package, accept]
-    if: inputs.publish && inputs.reuse_run == '' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    needs: [prepare, package, accept]
+    if: needs.prepare.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -168,7 +212,9 @@ jobs:
             echo
             cat acceptance/acceptance.md
           } > notes.md
-          gh release create "v${PACKAGE_VERSION}" \
+          tag="v${PACKAGE_VERSION}"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then echo "::error::$tag already exists."; exit 1; fi
+          gh release create "$tag" \
             "installer/${INSTALLER}" installer/SHA256SUMS.txt test-results.trx acceptance/acceptance.json \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest \
             --title "Rokela Business Admin ${PACKAGE_VERSION}" --notes-file notes.md
