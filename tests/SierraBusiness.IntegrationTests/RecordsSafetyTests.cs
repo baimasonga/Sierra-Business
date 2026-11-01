@@ -26,6 +26,7 @@ public sealed class RecordsSafetyTests : IAsyncLifetime
         var collection = new ServiceCollection(); collection.AddLogging(); collection.AddSierraDesktop(directory);
         services = collection.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
         await Store.Initialize(services.GetRequiredService<IDbContextFactory<BusinessDb>>());
+        await Store.FirstAutomaticCheck; // otherwise a slow start-up check can take the first automatic backup during a test
     }
     public async Task DisposeAsync()
     {

@@ -13,3 +13,49 @@ jobs:
       - run: dotnet test SierraBusiness.sln --no-build --configuration Release --logger trx
       - run: dotnet workload install maui-windows
       - run: dotnet build src/SierraBusiness.Maui/SierraBusiness.Maui.csproj --configuration Release
+  # The SQL Server and PostgreSQL head-office tests skip unless a server is configured. Run them here against throwaway
+  # containers; the passwords below protect nothing but these short-lived services.
+  live-databases:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: Sierra_Test_2026
+        ports: ['1433:1433']
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P Sierra_Test_2026 -Q 'SELECT 1'"
+          --health-interval 10s --health-timeout 5s --health-retries 20
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: sierra_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      SIERRA_SQLSERVER: Server=localhost,1433;User Id=sa;Password=Sierra_Test_2026;TrustServerCertificate=True
+      SIERRA_POSTGRES: Host=localhost;Port=5432;Username=postgres;Password=sierra_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet test tests/SierraBusiness.IntegrationTests --configuration Release --filter "FullyQualifiedName~SqlServer|FullyQualifiedName~Postgres" --logger "console;verbosity=normal" --logger trx
+      # A configured server must actually be used: fail if any of these tests was skipped. The PowerShell launcher test
+      # needs Windows and runs in the verify job.
+      - name: Require that no live-database test was skipped
+        shell: bash
+        run: |
+          trx=$(find tests -name '*.trx' | head -1)
+          python3 - "$trx" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          ns = {'t': 'http://microsoft.com/schemas/VisualStudio/TeamTest/2010'}
+          results = ET.parse(sys.argv[1]).getroot().findall('.//t:UnitTestResult', ns)
+          skipped = [r.get('testName') for r in results if r.get('outcome') == 'NotExecuted' and 'Launcher' not in r.get('testName', '')]
+          passed = [r for r in results if r.get('outcome') == 'Passed']
+          print(f'{len(passed)} passed; skipped: {skipped}')
+          sys.exit(1 if skipped or not passed else 0)
+          PY

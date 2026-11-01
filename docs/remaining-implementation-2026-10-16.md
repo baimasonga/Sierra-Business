@@ -97,11 +97,10 @@ Test files: `ConsolidationTests`, `AdvancedAccountingTests`, `AdvancedAccounting
 These require hardware, credentials, live services or a Windows machine. They cannot be completed or verified from source changes alone:
 
 - **Live Google Drive:** sign-in, upload and scheduled backup task registration.
-- **Windows acceptance:** native accessibility, display scaling (DPI), keyboard and visual acceptance.
+- **Windows acceptance:** sign-in, keyboard order and screen readers (Narrator), and Windows display-scaling settings. Install, first launch, restart, upgrade and uninstall are now checked on a clean machine for every release; see [the Windows release pipeline](windows-release-pipeline.md).
 - **Hardware:** printers, scanners, cash drawers, cheque alignment.
-- **Installation:** clean-machine install, upgrade and rollback.
 - **Networks:** two-device network outages.
-- **Live databases:** configured SQL Server and PostgreSQL checks.
-- **Release:** code signing and distribution; a new installer containing this work.
+- **Live databases:** now run in CI against throwaway SQL Server and PostgreSQL servers. A customer's own configured server still needs checking at installation.
+- **Release:** code signing (needs a publisher certificate). Installers are now published as GitHub releases by the release pipeline.
 - **Tax:** NRA submission and independent jurisdiction acceptance of the GST treatments.
 - **Deferred connectors:** bank, fiscal-device, email and WhatsApp.
