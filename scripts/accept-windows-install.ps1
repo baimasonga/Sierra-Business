@@ -3,13 +3,14 @@ param(
     [Parameter(Mandatory)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version,
     [string]$PreviousInstaller,
     [ValidatePattern('^(\d+\.\d+\.\d+)?$')][string]$PreviousVersion,
-    [Parameter(Mandatory)][string]$Driver,
     [string]$OutputDirectory = 'artifacts/windows/acceptance'
 )
-# Clean-machine acceptance for the Windows installer: silent install, first launch, keyboard-only owner setup, accessibility and
-# display-scaling checks, restart, upgrade (from the previous release when one is given, otherwise a reinstall over itself) and
-# uninstall. It installs into the current Windows account and creates an owner account, so it refuses to run where Rokela Business
-# Admin or its data already exist: use a disposable machine or account (the release workflow uses a fresh runner).
+# Clean-machine acceptance for the Windows installer: silent install, first launch, keyboard-only owner setup, accessible names and
+# layout at the minimum window size, restart, upgrade (from the previous release when one is given, otherwise a reinstall over itself)
+# and uninstall. It works the window the way assistive technology does, through Windows UI Automation, and types with real keystrokes;
+# the installed program is not changed or started in any special mode. It installs into the current Windows account and creates an
+# owner account, so it refuses to run where Rokela Business Admin or its data already exist: use a disposable machine or account (the
+# release workflow uses a fresh runner).
 $ErrorActionPreference = 'Stop'
 if ([bool]$PreviousInstaller -ne [bool]$PreviousVersion) { throw 'Pass -PreviousInstaller and -PreviousVersion together.' }
 $installerName = 'RokelaBusinessAdmin-Setup-x64.exe'
@@ -18,13 +19,27 @@ $appDir = Join-Path $env:LOCALAPPDATA 'Programs\Rokela Business Admin'
 $exe = Join-Path $appDir 'SierraBusiness.Maui.exe'
 $dataRoot = Join-Path $env:LOCALAPPDATA 'SierraBusiness'
 $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'Rokela Business Admin\Rokela Business Admin.lnk'
-$port = 9333
 if ((Test-Path -LiteralPath $appKey) -or (Test-Path -LiteralPath $appDir) -or (Test-Path -LiteralPath $dataRoot)) {
     throw 'Rokela Business Admin or its data already exist in this Windows account. Run acceptance only on a clean machine or account.'
 }
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, WindowsBase, System.Windows.Forms, System.Drawing
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class AcceptanceWindow
+{
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+}
+'@
+$Ui = [System.Windows.Automation.AutomationElement]
+$Scope = [System.Windows.Automation.TreeScope]
 $out = (New-Item -ItemType Directory -Force $OutputDirectory).FullName
 $checks = [Collections.Generic.List[object]]::new()
 $failed = $false
+$email = 'owner@example.com'
+$password = 'Ra1!' + [Guid]::NewGuid().ToString('N')   # meets the 12-character mixed rule; never written out
+
 function Record([string]$Name, [bool]$Passed, [string]$Detail) {
     $checks.Add([pscustomobject]@{ name = $Name; passed = $Passed; detail = $Detail })
     Write-Output "$(if ($Passed) { 'PASS' } else { 'FAIL' }): $Name - $Detail"
@@ -52,10 +67,42 @@ function Test-Installed([string]$Expected, [string]$Label) {
 }
 function Get-DataFiles { @(Get-ChildItem -LiteralPath (Join-Path $dataRoot 'Data') -Recurse -File -Filter 'sierra.db' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName.Substring($dataRoot.Length) } | Sort-Object) }
 
-# When the driver cannot work in the window, keep what explains it: the desktop, the embedded browser's command lines and open ports.
-function Save-Diagnostics([string]$Label) {
+# --- Working the window through UI Automation ---------------------------------------------------------------------------------------
+
+function New-Condition([string]$Name, [System.Windows.Automation.ControlType]$ControlType) {
+    $named = [System.Windows.Automation.PropertyCondition]::new($Ui::NameProperty, $Name)
+    if (!$ControlType) { return $named }
+    $typed = [System.Windows.Automation.PropertyCondition]::new($Ui::ControlTypeProperty, $ControlType)
+    [System.Windows.Automation.AndCondition]::new([System.Windows.Automation.Condition[]]@($named, $typed))
+}
+function Find-Named($Root, [string]$Name, [System.Windows.Automation.ControlType]$ControlType = $null, [int]$Seconds = 60) {
+    $condition = New-Condition $Name $ControlType
+    $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
+    do {
+        $element = $Root.FindFirst($Scope::Descendants, $condition)
+        if ($element) { return $element }
+        Start-Sleep -Milliseconds 500
+    } while ([DateTime]::UtcNow -lt $deadline)
+    $null
+}
+function Get-FocusedName { try { $Ui::FocusedElement.Current.Name } catch { '' } }
+function Send-Keys([string]$Keys) { [System.Windows.Forms.SendKeys]::SendWait($Keys); Start-Sleep -Milliseconds 200 }
+function Send-Text([string]$Text) { Send-Keys ([regex]::Replace($Text, '[+^%~(){}\[\]]', '{$0}')) }
+
+function Save-WindowShot($Window, [string]$Name) {
     try {
-        Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+        $r = $Window.Current.BoundingRectangle
+        $bitmap = New-Object Drawing.Bitmap ([int]$r.Width), ([int]$r.Height)
+        $graphics = [Drawing.Graphics]::FromImage($bitmap)
+        $graphics.CopyFromScreen([int]$r.Left, [int]$r.Top, 0, 0, $bitmap.Size)
+        $bitmap.Save((Join-Path $out "$Name.png"), [Drawing.Imaging.ImageFormat]::Png)
+        $graphics.Dispose(); $bitmap.Dispose()
+    } catch { Write-Output "Screenshot $Name failed: $($_.Exception.Message)" }
+}
+
+# When a step fails, keep what explains it: the whole desktop and the window's automation tree.
+function Save-Diagnostics($Window, [string]$Label) {
+    try {
         $bounds = [Windows.Forms.SystemInformation]::VirtualScreen
         $bitmap = New-Object Drawing.Bitmap $bounds.Width, $bounds.Height
         $graphics = [Drawing.Graphics]::FromImage($bitmap)
@@ -63,31 +110,104 @@ function Save-Diagnostics([string]$Label) {
         $bitmap.Save((Join-Path $out "$Label-desktop.png"), [Drawing.Imaging.ImageFormat]::Png)
         $graphics.Dispose(); $bitmap.Dispose()
     } catch { Write-Output "Desktop screenshot failed: $($_.Exception.Message)" }
-    $lines = @(Get-CimInstance Win32_Process -Filter "Name = 'msedgewebview2.exe'" | ForEach-Object { $_.CommandLine })
-    $lines += @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalAddress -in '127.0.0.1', '::1', '0.0.0.0' } | ForEach-Object { "listening $($_.LocalAddress):$($_.LocalPort) pid $($_.OwningProcess)" })
-    $lines | Set-Content -LiteralPath (Join-Path $out "$Label-webview2.txt") -Encoding utf8
+    try {
+        $lines = foreach ($e in $Window.FindAll($Scope::Descendants, [System.Windows.Automation.Condition]::TrueCondition)) {
+            "$($e.Current.ControlType.ProgrammaticName)`t$($e.Current.Name)`t$($e.Current.AutomationId)`toffscreen=$($e.Current.IsOffscreen)"
+        }
+        @("Focused: $(Get-FocusedName)") + @($lines | Select-Object -First 600) | Set-Content -LiteralPath (Join-Path $out "$Label-tree.txt") -Encoding utf8
+    } catch { Write-Output "Automation tree dump failed: $($_.Exception.Message)" }
 }
 
-# Launch the program, let the driver work in its window, then close it the way a user does and require a clean exit.
+# Screen readers announce controls by their accessible name; every visible field, button and link must have one.
+function Test-AccessibleNames($Window, [string]$Label, [string]$Screen, [int]$Minimum) {
+    $types = 'Edit', 'Button', 'Hyperlink', 'CheckBox', 'ComboBox', 'RadioButton' | ForEach-Object {
+        [System.Windows.Automation.PropertyCondition]::new($Ui::ControlTypeProperty, [System.Windows.Automation.ControlType]::$_)
+    }
+    $interactive = [System.Windows.Automation.OrCondition]::new([System.Windows.Automation.Condition[]]$types)
+    $controls = @($Window.FindAll($Scope::Descendants, $interactive) | Where-Object { !$_.Current.IsOffscreen })
+    $unnamed = @($controls | Where-Object { [string]::IsNullOrWhiteSpace($_.Current.Name) } |
+        ForEach-Object { "$($_.Current.ControlType.ProgrammaticName) $($_.Current.AutomationId) $($_.Current.ClassName)".Trim() })
+    Record "$Label`: $Screen controls found" ($controls.Count -ge $Minimum) "$($controls.Count) visible controls"
+    Record "$Label`: $Screen controls have accessible names" ($unnamed.Count -eq 0) $(if ($unnamed.Count) { 'Unnamed: ' + ($unnamed -join '; ') } else { 'All named' })
+}
+
+# Sign in (or create the owner on first launch) with the keyboard only: Tab to each field, type, Enter.
+function Enter-Credentials($Window, $Process, [string]$Label, [bool]$FirstRun) {
+    [void][AcceptanceWindow]::SetForegroundWindow($Process.MainWindowHandle)
+    try { $Window.SetFocus() } catch { }
+    Start-Sleep -Milliseconds 500
+    # The page inside the window belongs to WebView2's own process, so compare the foreground window, not the focused element's process.
+    Record "$Label`: window is in front" ([AcceptanceWindow]::GetForegroundWindow() -eq $Process.MainWindowHandle) "Focused: '$(Get-FocusedName)'"
+    $presses = 0
+    while ($presses -lt 25 -and (Get-FocusedName) -ne 'Email') { Send-Keys '{TAB}'; $presses++ }
+    Record "$Label`: Email reachable with Tab" ((Get-FocusedName) -eq 'Email') "$presses presses"
+    Send-Text $email
+    $typed = $Ui::FocusedElement.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+    Record "$Label`: typing reaches the Email field" ($typed -eq $email) $typed
+    Send-Keys '{TAB}'
+    Record "$Label`: Tab moves to Password" ((Get-FocusedName) -eq 'Password') "Focused: '$(Get-FocusedName)'"
+    Send-Text $password
+    if ($FirstRun) {
+        Send-Keys '{TAB}'
+        Record "$Label`: Tab moves to Confirm password" ((Get-FocusedName) -eq 'Confirm password') "Focused: '$(Get-FocusedName)'"
+        Send-Text $password
+    }
+    Send-Keys '{ENTER}'
+    $signOut = Find-Named $Window 'Sign out' ([System.Windows.Automation.ControlType]::Button) 60
+    Record "$Label`: $(if ($FirstRun) { 'owner account created and signed in' } else { 'signed in' })" ($null -ne $signOut) 'Workspace shows Sign out'
+}
+
+# Windows display scaling and small screens leave the window fewer pixels. Shrink the real window to its minimum (800 x 600) and
+# check that the navigation, Sign out and the page heading still fit across it.
+function Test-Layout($Window, [string]$Label) {
+    $transform = $Window.GetCurrentPattern([System.Windows.Automation.TransformPattern]::Pattern)
+    $original = $Window.Current.BoundingRectangle
+    foreach ($size in @(@(800, 600), @(1024, 700))) {
+        $transform.Resize($size[0], $size[1])
+        Start-Sleep -Milliseconds 1500
+        $frame = $Window.Current.BoundingRectangle
+        $parts = @(
+            @('Main navigation', $null),
+            @('Sign out', [System.Windows.Automation.ControlType]::Button),
+            @('Overview', $null)
+        ) | ForEach-Object {
+            $element = Find-Named $Window $_[0] $_[1] 5
+            $r = if ($element) { $element.Current.BoundingRectangle } else { [System.Windows.Rect]::Empty }
+            [pscustomobject]@{ name = $_[0]; fits = ($element -and !$r.IsEmpty -and $r.Left -ge $frame.Left - 1 -and $r.Right -le $frame.Right + 1) }
+        }
+        Save-WindowShot $Window "$Label-layout-$($size[0])x$($size[1])"
+        $outside = @($parts | Where-Object { !$_.fits } | ForEach-Object { $_.name })
+        Record "$Label`: layout at $([int]$frame.Width) x $([int]$frame.Height)" ($outside.Count -eq 0) $(if ($outside.Count) { 'Cut off or missing: ' + ($outside -join ', ') } else { 'Navigation, Sign out and heading fit' })
+    }
+    $transform.Resize($original.Width, $original.Height)
+}
+
+# Launch the program, work in its window, then close it the way a user does and require a clean exit.
 function Invoke-Session([string]$Step, [string]$Label) {
-    # Remote debugging is enabled only for these test launches, so the driver can reach the embedded page; a user's launch never has
-    # it. WebView2 reads extra browser arguments from the environment and from a per-program policy; set both, and remove both after.
-    $policy = 'HKCU:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
-    New-Item -Path $policy -Force | Out-Null
-    New-ItemProperty -Path $policy -Name 'SierraBusiness.Maui.exe' -Value "--remote-debugging-port=$port" -PropertyType String -Force | Out-Null
-    $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$port"
-    try { $process = Start-Process -FilePath $exe -WorkingDirectory $appDir -PassThru } finally { Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS }
+    $process = Start-Process -FilePath $exe -WorkingDirectory $appDir -PassThru
     $deadline = [DateTime]::UtcNow.AddSeconds(120)
     do { Start-Sleep -Milliseconds 500; $process.Refresh() } while (!$process.HasExited -and ($process.MainWindowHandle -eq 0 -or !$process.MainWindowTitle) -and [DateTime]::UtcNow -lt $deadline)
     Record "$Label`: window opens" (!$process.HasExited -and $process.MainWindowHandle -ne 0) "Title '$($process.MainWindowTitle)'"
     Record "$Label`: window title" ($process.MainWindowTitle -eq 'Rokela Business Admin') $process.MainWindowTitle
-    & node $Driver --step $Step --port $port --out $out --label $Label
-    $driverExit = $LASTEXITCODE
-    if ($driverExit -ne 0) { Save-Diagnostics $Label }
-    Remove-ItemProperty -Path $policy -Name 'SierraBusiness.Maui.exe' -ErrorAction SilentlyContinue
+    $window = $Ui::FromHandle($process.MainWindowHandle)
+    try {
+        $firstRun = $Step -eq 'setup'
+        $heading = if ($firstRun) { 'Set up your business.' } else { 'Welcome back.' }
+        Record "$Label`: '$heading' screen" ($null -ne (Find-Named $window $heading -Seconds 120)) 'Shown in the window'
+        Save-WindowShot $window "$Label-start"
+        if ($Step -ne 'signin') { Test-AccessibleNames $window $Label $(if ($firstRun) { 'owner setup' } else { 'sign-in' }) 3 }
+        Enter-Credentials $window $process $Label $firstRun
+        Save-WindowShot $window "$Label-workspace"
+        if ($Step -eq 'inspect') {
+            Test-AccessibleNames $window $Label 'workspace' 5
+            Test-Layout $window $Label
+        }
+    } catch {
+        Save-Diagnostics $window $Label
+        throw
+    }
     $process.Refresh()
-    Record "$Label`: still responding" (!$process.HasExited -and $process.Responding) 'After the driver finished'
-    Record "$Label`: $Step in the window" ($driverExit -eq 0) "Driver exit code $driverExit (details in $Label-$Step.json)"
+    Record "$Label`: still responding" (!$process.HasExited -and $process.Responding) 'After the session'
     [void]$process.CloseMainWindow()
     $closed = $process.WaitForExit(30000)
     if (!$closed) { $process.Kill() }
@@ -96,8 +216,6 @@ function Invoke-Session([string]$Step, [string]$Label) {
     Record "$Label`: no copy left running" (@(Get-Process -Name 'SierraBusiness.Maui' -ErrorAction SilentlyContinue).Count -eq 0) 'SierraBusiness.Maui'
 }
 
-$env:ACCEPT_EMAIL = 'owner@example.com'
-$env:ACCEPT_PASSWORD = 'Ra1!' + [Guid]::NewGuid().ToString('N')   # meets the 12-character mixed rule; never written to the report
 try {
     Test-Checksum $Installer
     if ($PreviousInstaller) {
@@ -141,30 +259,30 @@ try {
     $failed = $true
     Write-Output "Stopped: $($_.Exception.Message)"
 } finally {
-    Remove-Item Env:ACCEPT_PASSWORD, Env:ACCEPT_EMAIL -ErrorAction SilentlyContinue
-    Remove-Item -Path 'HKCU:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments' -Recurse -ErrorAction SilentlyContinue
     Get-Process -Name 'SierraBusiness.Maui' -ErrorAction SilentlyContinue | Stop-Process -Force
 }
 
 $windows = Get-CimInstance Win32_OperatingSystem
+$screen = [Windows.Forms.SystemInformation]::PrimaryMonitorSize
 $report = [pscustomobject]@{
     version = $Version
     upgradedFrom = if ($PreviousVersion) { $PreviousVersion } else { $null }
     verifiedAtUtc = [DateTime]::UtcNow.ToString('o')
-    machine = "$($windows.Caption) $($windows.Version)"
+    machine = "$($windows.Caption) $($windows.Version), $($screen.Width) x $($screen.Height) screen"
     passed = !$failed
     signature = (Get-AuthenticodeSignature -LiteralPath $Installer).Status.ToString()
     checks = $checks
     notCovered = @(
         'WebView2 was already present on the test machine, so the bundled WebView2 installer was not exercised.',
-        'Display scaling is emulated inside the window (125%, 150%, 200%); Windows display settings were not changed.',
-        'Screen readers, physical printers, scanners, cash drawers and cheque alignment need a person and the hardware.',
+        'Accessible names were read through Windows UI Automation, which screen readers use; nobody has tried the program with a screen reader yet, and visible keyboard focus was not checked.',
+        'Layout was checked at the minimum window size on a small screen; Windows display-scaling settings were not changed.',
+        'Physical printers, scanners, cash drawers and cheque alignment need a person and the hardware.',
         'Network outages between two branch computers need two machines.'
     )
 }
 $report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $out 'acceptance.json') -Encoding utf8
 $lines = @("## Clean-machine acceptance: $(if ($failed) { 'FAILED' } else { 'passed' })", '',
-    "Tested on a fresh $($report.machine) runner$(if ($PreviousVersion) { ", upgrading from $PreviousVersion" })." , '')
+    "Tested on a fresh $($report.machine) runner$(if ($PreviousVersion) { ", upgrading from $PreviousVersion" }).", '')
 $lines += $checks | ForEach-Object { "- $(if ($_.passed) { '✅' } else { '❌' }) $($_.name)" }
 $lines += '', '**Not covered by this automated check:**', ''
 $lines += $report.notCovered | ForEach-Object { "- $_" }

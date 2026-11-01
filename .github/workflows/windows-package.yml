@@ -11,7 +11,6 @@ on:
       - packaging/**
       - scripts/package-windows.ps1
       - scripts/accept-windows-install.ps1
-      - tools/desktop-acceptance.cjs
       - src/SierraBusiness.Maui/**
   workflow_dispatch:
     inputs:
@@ -55,6 +54,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # Fail in seconds, not after an hour of building, if a packaging or acceptance script does not parse.
+      - name: Parse the PowerShell scripts
+        shell: pwsh
+        run: |
+          $bad = 0
+          foreach ($file in Get-ChildItem scripts -Filter *.ps1) {
+            $tokens = $null; $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors)
+            foreach ($e in $errors) { Write-Output "::error file=scripts/$($file.Name),line=$($e.Extent.StartLineNumber)::$($e.Message)"; $bad++ }
+          }
+          if ($bad) { exit 1 }
       - id: decide
         env:
           GH_TOKEN: ${{ github.token }}
@@ -158,19 +168,10 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Could not download release v$previous." }
             "PREVIOUS_VERSION=$previous" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           } else { Write-Output 'No earlier release: the upgrade check reinstalls this version over itself.' }
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Install the acceptance driver
-        shell: pwsh
-        run: |
-          npm install --no-save --no-audit --no-fund --prefix "$env:RUNNER_TEMP/driver" playwright-core@1.56.1 axe-core@4.10.2
-          if ($LASTEXITCODE -ne 0) { throw 'Driver installation failed.' }
-          "NODE_PATH=$env:RUNNER_TEMP\driver\node_modules" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Clean-machine acceptance
         shell: pwsh
         run: |
-          $arguments = @{ Installer = "dist/$env:INSTALLER"; Version = $env:PACKAGE_VERSION; Driver = 'tools/desktop-acceptance.cjs'; OutputDirectory = 'acceptance' }
+          $arguments = @{ Installer = "dist/$env:INSTALLER"; Version = $env:PACKAGE_VERSION; OutputDirectory = 'acceptance' }
           if ($env:PREVIOUS_VERSION) { $arguments.PreviousInstaller = ".previous/$env:INSTALLER"; $arguments.PreviousVersion = $env:PREVIOUS_VERSION }
           ./scripts/accept-windows-install.ps1 @arguments
       - uses: actions/upload-artifact@v4
