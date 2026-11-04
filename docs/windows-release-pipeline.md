@@ -13,7 +13,10 @@ test results and acceptance report.
 ## Publishing a release
 
 1. Merge the work into `main`.
-2. Push a tag such as `v0.33.0` on a `main` commit, or run **Windows desktop package** by hand with that version.
+2. Start the release in one of three ways:
+   - set the new version in `packaging/windows/VERSION` and merge that change into `main`;
+   - push a tag such as `v0.33.0` on a `main` commit;
+   - run **Windows desktop package** by hand with that version.
 3. The workflow then:
    1. refuses a version that is already released or older than the newest release;
    2. runs the full test suite, the offline OCR check, the native build and the installer compilation (`scripts/package-windows.ps1`);
