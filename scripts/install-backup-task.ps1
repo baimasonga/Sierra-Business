@@ -9,7 +9,10 @@ $companyPath = (Resolve-Path -LiteralPath $DataDirectory).Path
 if (!(Test-Path -LiteralPath (Join-Path $companyPath 'sierra.db'))) { throw 'Select an existing company data directory.' }
 if ([IO.Path]::GetFileName($workerPath) -ne 'SierraBusiness.BackupWorker.exe') { throw 'Select the published SierraBusiness.BackupWorker.exe.' }
 if ($companyPath.Contains('"')) { throw 'The company path cannot contain quotation marks.' }
-$pathHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($companyPath.ToUpperInvariant()))).Substring(0,16)
+# Windows PowerShell 5.1 runs on .NET Framework, without HashData or ToHexString.
+$sha = [Security.Cryptography.SHA256]::Create()
+try { $pathHash = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($companyPath.ToUpperInvariant()))).Replace("-", "").Substring(0,16) }
+finally { $sha.Dispose() }
 $taskName = 'Rokela company backup ' + $pathHash
 $taskAction = New-ScheduledTaskAction -Execute $workerPath -Argument ('--data-directory "' + $companyPath + '"')
 $taskTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) -RepetitionInterval (New-TimeSpan -Hours $IntervalHours)
