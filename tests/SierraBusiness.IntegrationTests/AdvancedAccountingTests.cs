@@ -70,6 +70,28 @@ public sealed class AdvancedAccountingTests : IAsyncLifetime
         Assert.Equal(7.60m, (await finance.Interest(new(date.AddDays(1), today, 36.5m, 0, InterestBasis.Actual360))).Total);
         var count = (await business.Read(session.Actor)).Documents.Count; await finance.ExportAdvanced(date, today, [], report.Request); Assert.Equal(count, (await business.Read(session.Actor)).Documents.Count);
     }
+    [Fact] public async Task ReviewedSupplierInterestCanBeSettledWithoutCompounding()
+    {
+        var date = today.AddDays(-10);
+        var product = await business.AddProduct(session.Actor, new(Guid.NewGuid(), "INT-S", "Stock", "General", "piece", 100, TrackingMode.Quantity, MinimumPrice: 1));
+        var bill = await business.Post(session.Actor, new(Guid.NewGuid(), DocumentKind.Receipt, "Supplier", date, [new(product, 10, 100)], null, DueDate: date));
+        var request = new InterestRequest(date.AddDays(1), today, 36.5m, 0, InterestBasis.Actual365, false);
+        var command = new InterestChargeCommand(Guid.NewGuid(), request, bill, 10m, today, 6001, "Supplier interest invoice reviewed", 0);
+        await Assert.ThrowsAsync<BusinessException>(() => finance.PostInterestCharge(command with { IncomeAccount = 6002 }));
+        var id = await finance.PostInterestCharge(command);
+        Assert.Equal(id, await finance.PostInterestCharge(command));
+        Assert.Contains((await finance.Read(date,today)).Bills, b => b.Id == id && !b.Receivable && b.Outstanding == 10m);
+        await using var db = factory.CreateDbContext();
+        var lines = await db.Journal.Where(l => l.DocumentId == id).ToListAsync();
+        Assert.Equal(10m, lines.Single(l => l.Account == Account.Payables).Credit);
+        Assert.Equal(10m, lines.Single(l => (int)l.Account == 6001).Debit);
+        await Assert.ThrowsAsync<BusinessException>(() => finance.PostInterestCharge(command with { OperationId = Guid.NewGuid() }));
+        var payment = await finance.PostVoucher(new(Guid.NewGuid(), VoucherType.Payment, today, "Supplier interest paid", [new(2000,10,0),new(1000,0,10)], [new(id,10)]));
+        Assert.DoesNotContain((await finance.Read(date,today)).Bills,b => b.Id == id);
+        await Assert.ThrowsAsync<BusinessException>(() => business.Reverse(session.Actor,new(Guid.NewGuid(),id,"Waived")));
+        await business.Reverse(session.Actor,new(Guid.NewGuid(),payment,"Payment cancelled"));
+        await business.Reverse(session.Actor,new(Guid.NewGuid(),id,"Interest waived"));
+    }
     [Fact] public async Task ReviewedInterestChargesBecomeCustomerBillsOncePerPeriod()
     {
         await TestParties.Register(factory, "School"); var date = today.AddDays(-10);

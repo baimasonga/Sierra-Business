@@ -133,8 +133,14 @@ public sealed partial class FinanceService
     }
     public async Task<InterestReport> Interest(InterestRequest q)
     {
-        var actor = await Authorize(); if (q.From > q.To || q.From.Year < 2000 || q.To > DateOnly.FromDateTime(DateTime.UtcNow) || q.To.DayNumber - q.From.DayNumber > 3660 || q.GraceDays is < 0 or > 3660 || q.AnnualPercent < 0 || q.AnnualPercent > 100 || AccountingEngine.Money(q.AnnualPercent) != q.AnnualPercent || !Enum.IsDefined(q.Basis)) throw new BusinessException("Choose a past/current period of at most ten years, a 0–100 percent annual rate and a valid day-count basis.");
-        await using var db = await factory.CreateDbContextAsync(); var docs = await db.Documents.AsNoTracking().Where(d => d.Branch == actor.Branch && d.BusinessDate <= q.To).ToDictionaryAsync(d => d.Id);
+        var actor = await Authorize();
+        await using var db = await factory.CreateDbContextAsync();
+        return await CalculateInterest(db, actor, q);
+    }
+    private static async Task<InterestReport> CalculateInterest(BusinessDb db, Actor actor, InterestRequest q)
+    {
+        if (q.From > q.To || q.From.Year < 2000 || q.To > DateOnly.FromDateTime(DateTime.UtcNow) || q.To.DayNumber - q.From.DayNumber > 3660 || q.GraceDays is < 0 or > 3660 || q.AnnualPercent < 0 || q.AnnualPercent > 100 || AccountingEngine.Money(q.AnnualPercent) != q.AnnualPercent || !Enum.IsDefined(q.Basis)) throw new BusinessException("Choose a past/current period of at most ten years, a 0–100 percent annual rate and a valid day-count basis.");
+        var docs = await db.Documents.AsNoTracking().Where(d => d.Branch == actor.Branch && d.BusinessDate <= q.To).ToDictionaryAsync(d => d.Id);
         var reverseDates = docs.Values.Where(d => d.Reverses != null).ToDictionary(d => d.Reverses!.Value, d => d.BusinessDate);
         var allocations = await db.BillAllocations.AsNoTracking().Where(a => db.Documents.Any(d => d.Id == a.VoucherId && d.Branch == actor.Branch)).ToListAsync();
         var returns = await db.ReturnAllocations.AsNoTracking().Where(a => db.Documents.Any(d => d.Id == a.OriginalDocumentId && d.Branch == actor.Branch)).ToListAsync();

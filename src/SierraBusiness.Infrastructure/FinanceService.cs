@@ -128,7 +128,7 @@ public sealed partial class FinanceService(IDbContextFactory<BusinessDb> factory
         {
             Money(allocation.Amount, "Allocated amount");
             var invoice = allDocuments.SingleOrDefault(x => x.Id == allocation.DocumentId) ?? throw new BusinessException("Allocated bill not found in this branch.");
-            if (reversed.Contains(invoice.Id) || invoice.BusinessDate > input.Date || (receivable ? !ServiceRules.IsReceivable(invoice) : !(invoice.Kind is DocumentKind.Receipt or DocumentKind.LandedCost or DocumentKind.SupplierInvoice or DocumentKind.OpeningBalance && invoice.Settlement.StartsWith("Supplier payable", StringComparison.Ordinal)))) throw new BusinessException("Allocate only to an unreversed credit bill dated on or before this voucher.");
+            if (reversed.Contains(invoice.Id) || invoice.BusinessDate > input.Date || (receivable ? !ServiceRules.IsReceivable(invoice) : !(invoice.Kind is DocumentKind.Receipt or DocumentKind.LandedCost or DocumentKind.SupplierInvoice or DocumentKind.SupplierInterestCharge or DocumentKind.OpeningBalance && invoice.Settlement.StartsWith("Supplier payable", StringComparison.Ordinal)))) throw new BusinessException("Allocate only to an unreversed credit bill dated on or before this voucher.");
             await Fx.RejectLocalSettlement(db, invoice.Id);
             var settled = allocations.Where(x => x.InvoiceId == invoice.Id && !reversed.Contains(x.VoucherId)).Sum(x => x.Amount);
             var credited = returned.Where(x => x.OriginalDocumentId == invoice.Id).Sum(x => x.BillCredit);
@@ -227,7 +227,7 @@ public sealed partial class FinanceService(IDbContextFactory<BusinessDb> factory
         }).OrderByDescending(x => x.Date).ThenBy(x => x.Number).ToArray();
         var allocations = await db.BillAllocations.AsNoTracking().Where(x => db.Documents.Any(d => d.Id == x.VoucherId && d.Branch == actor.Branch)).ToListAsync();
         var returned = await db.ReturnAllocations.AsNoTracking().Where(x => db.Documents.Any(d => d.Id == x.OriginalDocumentId && d.Branch == actor.Branch)).ToListAsync();
-        var bills = documents.Values.Where(x => !reversed.Contains(x.Id) && (x.Kind is DocumentKind.Receipt or DocumentKind.LandedCost or DocumentKind.SupplierInvoice or DocumentKind.OpeningBalance && x.Settlement.StartsWith("Supplier payable", StringComparison.Ordinal) || ServiceRules.IsReceivable(x))).Select(x =>
+        var bills = documents.Values.Where(x => !reversed.Contains(x.Id) && (x.Kind is DocumentKind.Receipt or DocumentKind.LandedCost or DocumentKind.SupplierInvoice or DocumentKind.SupplierInterestCharge or DocumentKind.OpeningBalance && x.Settlement.StartsWith("Supplier payable", StringComparison.Ordinal) || ServiceRules.IsReceivable(x))).Select(x =>
         {
             var settled = allocations.Where(a => a.InvoiceId == x.Id && documents.ContainsKey(a.VoucherId) && !reversed.Contains(a.VoucherId)).Sum(a => a.Amount);
             settled += returned.Where(a => a.OriginalDocumentId == x.Id && documents.ContainsKey(a.ReturnDocumentId) && !reversed.Contains(a.ReturnDocumentId)).Sum(a => a.BillCredit);

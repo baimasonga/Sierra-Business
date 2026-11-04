@@ -29,9 +29,7 @@ public sealed partial class FinanceService
     public async Task<Guid> PostInterestCharge(InterestChargeCommand input)
     {
         if (input?.Request is null) throw new BusinessException("Calculate the interest worksheet before charging it.");
-        if (!input.Request.Receivable) throw new BusinessException("Only customer interest can be billed. Record supplier interest as a reviewed payment or journal.");
-        // Recalculated before entering the transaction, so the charge reflects the current settlements and reversals.
-        var worksheet = await Interest(input.Request);
+        var customer = input.Request.Receivable;
         return await Execute(input.OperationId, InterestChargeAction, input, async (db, actor) =>
         {
             Rules.Required(input.Reason, "Review reason", 300);
@@ -40,6 +38,7 @@ public sealed partial class FinanceService
             await OpenDate(db, actor.Branch, input.Date);
             if (input.Date < input.Request.To) throw new BusinessException("Charge interest on or after the end of the period it covers.");
             if (Controls.Backdated(await Controls.Current(db, actor.Branch), input.Date) is not null) throw new BusinessException("This charge date requires backdating approval. Charge it on an allowed current date.");
+            var worksheet = await CalculateInterest(db, actor, input.Request);
             var row = worksheet.Rows.SingleOrDefault(r => r.DocumentId == input.BillId) ?? throw new BusinessException("This bill has no interest in the recalculated worksheet. Recalculate and review it again.");
             if (input.Amount > row.Interest) throw new BusinessException($"The charge cannot exceed the recalculated interest of {row.Interest:N2}. Recalculate if settlements changed.");
             var bill = await db.Documents.SingleAsync(d => d.Id == input.BillId);
@@ -47,15 +46,15 @@ public sealed partial class FinanceService
             var earlier = await InterestChargesFor(db, actor.Branch);
             if (earlier.Any(c => !c.Reversed && c.BillId == bill.Id && c.From <= input.Request.To && input.Request.From <= c.To)) throw new BusinessException("Interest for part of this period has already been charged on this bill. Start the worksheet after the last charged period.");
             var income = await db.LedgerAccounts.SingleOrDefaultAsync(a => a.Id == input.IncomeAccount);
-            if (income is null || income.Group != LedgerGroup.Income || income.Control) throw new BusinessException("Choose a custom income ledger for interest charged.");
+            if (income is null || income.Group != (customer ? LedgerGroup.Income : LedgerGroup.Expense) || income.Control) throw new BusinessException("Choose an income ledger for customer interest or an expense ledger for supplier interest.");
             var doc = new BusinessDocument
             {
-                Id = Guid.NewGuid(), Branch = actor.Branch, Number = $"{actor.Branch}-{options.Value.Device}-INT-{input.OperationId:N}", Kind = DocumentKind.InterestCharge, BusinessDate = input.Date, DueDate = input.Date.AddDays(input.PaymentDays),
-                Party = bill.Party, Total = input.Amount, Settlement = "Credit",
+                Id = Guid.NewGuid(), Branch = actor.Branch, Number = $"{actor.Branch}-{options.Value.Device}-INT-{input.OperationId:N}", Kind = customer ? DocumentKind.InterestCharge : DocumentKind.SupplierInterestCharge, BusinessDate = input.Date, DueDate = input.Date.AddDays(input.PaymentDays),
+                Party = bill.Party, Total = input.Amount, Settlement = customer ? "Credit" : "Supplier payable",
                 Detail = JsonSerializer.Serialize(new { Source = bill.Id, SourceNumber = bill.Number, input.Request.From, input.Request.To, input.Request.AnnualPercent, input.Request.GraceDays, Basis = input.Request.Basis.ToString(), row.ChargedDays, Calculated = row.Interest, input.Reason })
             };
             db.Documents.Add(doc);
-            db.Journal.AddRange(new JournalLine { Id = Guid.NewGuid(), Branch = actor.Branch, DocumentId = doc.Id, Account = Account.Receivables, Debit = input.Amount }, new JournalLine { Id = Guid.NewGuid(), Branch = actor.Branch, DocumentId = doc.Id, Account = (Account)income.Id, Credit = input.Amount });
+            db.Journal.AddRange(new JournalLine { Id = Guid.NewGuid(), Branch = actor.Branch, DocumentId = doc.Id, Account = customer ? Account.Receivables : (Account)income.Id, Debit = input.Amount }, new JournalLine { Id = Guid.NewGuid(), Branch = actor.Branch, DocumentId = doc.Id, Account = customer ? (Account)income.Id : Account.Payables, Credit = input.Amount });
             return doc.Id;
         });
     }

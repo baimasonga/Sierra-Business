@@ -10,9 +10,9 @@ public static class SyncContract
 {
     public const string ProtocolHeader = "X-Rokela-Sync-Protocol", SchemaHeader = "X-Rokela-Sync-Schema";
     // Protocol 3 adds currency-unit advances and current-period tax corrections. Protocol 4 adds interest-charge customer bills
-    // and the later costing, tax and period records. Physical schema remains 1.
+    // and the later costing, tax and period records. Protocol 5 adds supplier interest bills. Physical schema remains 1.
     // Older peers cannot safely interpret these journals and metadata, even though their tables match.
-    public static SyncCompatibility Current { get; } = new(4, 1);
+    public static SyncCompatibility Current { get; } = new(5, 1);
     public static bool Supports(SyncCompatibility? value) => value == Current;
     public const string UpgradeMessage = "Sync versions are incompatible. Upgrade head office and every branch to a compatible Rokela Business Admin release. Local changes remain queued.";
 }
