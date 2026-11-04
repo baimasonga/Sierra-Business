@@ -116,10 +116,15 @@ function Invoke-Session([string]$Label, [string]$Heading, [switch]$Inspect) {
     Record "$Label`: window title" ($process.MainWindowTitle -eq 'Rokela Business Admin') $process.MainWindowTitle
     $window = $Ui::FromHandle($process.MainWindowHandle)
     try {
-        Start-Sleep -Seconds 15   # let the embedded page load and the local workspace start
-        $shot = Save-WindowShot $window "$Label-window"
-        $variety = Get-ColourVariety $shot; $shot.Dispose()
-        Record "$Label`: page drawn in the window" ($variety -ge 50) "$variety distinct colours (a blank window has 1-2)"
+        # Wait for the embedded page to replace the plain "Opening Rokela Business Admin..." placeholder (about 13 colours), for at most
+        # two minutes: a first launch also prepares WebView2 and creates the database, and runners vary in speed.
+        $started = [DateTime]::UtcNow
+        do {
+            Start-Sleep -Seconds 3
+            $shot = Save-WindowShot $window "$Label-window"
+            $variety = Get-ColourVariety $shot; $shot.Dispose()
+        } while ($variety -lt 50 -and [DateTime]::UtcNow -lt $started.AddSeconds(120))
+        Record "$Label`: page drawn in the window" ($variety -ge 50) "$variety distinct colours after $([int]([DateTime]::UtcNow - $started).TotalSeconds) s (the loading placeholder has about 13, a blank window 1-2)"
         if ($Inspect) {
             $automation["$Label`: '$Heading' reachable through UI Automation"] = Find-PageText $window $Heading 30
             $transform = $window.GetCurrentPattern([System.Windows.Automation.TransformPattern]::Pattern)
