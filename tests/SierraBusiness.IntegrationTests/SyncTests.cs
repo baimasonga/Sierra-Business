@@ -166,6 +166,58 @@ public sealed class SyncTests : IAsyncLifetime
         await Verified(hq); await Verified(bo);
     }
 
+    [Fact] public async Task TwoBranchesTradeDuringHttpOutageAndReconnectWithoutDuplicateSales()
+    {
+        Microsoft.AspNetCore.Builder.WebApplication Host(string url)
+        {
+            var builder = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder();
+            builder.WebHost.UseUrls(url);
+            builder.Services.AddSingleton(server);
+            SierraBusiness.Web.SyncEndpoints.AddSyncRateLimiting(builder.Services);
+            var app = builder.Build();
+            Microsoft.AspNetCore.Builder.RateLimiterApplicationBuilderExtensions.UseRateLimiter(app);
+            SierraBusiness.Web.SyncEndpoints.MapSyncEndpoints(app);
+            return app;
+        }
+        await using var initial = Host("http://127.0.0.1:0");
+        await initial.StartAsync();
+        var address = initial.Urls.Single();
+        var item = await hq.Business.AddProduct(hq.Owner, new(Guid.NewGuid(), "OUTAGE", "Paper", "General", "piece", 20, TrackingMode.Quantity, MinimumPrice: 1));
+        var branches = new[] { freetown, bo };
+        ISyncTransport Transport(Site site) => HttpSyncTransport.Create(new SyncOptions { Role = SyncRole.Branch, Server = address, Key = site == bo ? BoKey : FreetownKey }, site.Branch);
+        foreach (var site in branches) await Sync(site, Transport(site));
+        await initial.StopAsync();
+
+        var sales = new Dictionary<string, Guid>();
+        foreach (var site in branches)
+        {
+            await site.Business.Post(site.Owner, new(Guid.NewGuid(), DocumentKind.Receipt, "Supplier", today, [new(item, 5, 10)], null));
+            sales[site.Branch] = await site.Business.Post(site.Owner, new(Guid.NewGuid(), DocumentKind.Sale, "Walk-in", today, [new(item, 2, 20)], PaymentMethod.Cash));
+            await Assert.ThrowsAsync<HttpRequestException>(() => Sync(site, Transport(site)));
+            Assert.Equal(3m, (await site.Business.Read(site.Owner)).Stock.Sum(s => s.Quantity));
+        }
+        Assert.False(await In(hq, db => db.Documents.AnyAsync(d => d.Kind == DocumentKind.Sale)));
+        await using var restarted = Host(address);
+        await restarted.StartAsync();
+        foreach (var site in branches)
+        {
+            var run = await Sync(site, Transport(site));
+            Assert.True(run.Pushed > 0); Assert.Equal(0, run.Conflicts);
+        }
+        foreach (var site in branches)
+        {
+            Assert.Equal(0, (await Sync(site, Transport(site))).Pushed);
+            var id = sales[site.Branch];
+            Assert.Equal(1, await In(hq, db => db.Documents.CountAsync(d => d.Branch == site.Branch && d.Kind == DocumentKind.Sale && d.Id == id)));
+            Assert.Equal(40m, await In(hq, async db => (await db.Journal.Where(j => j.DocumentId == id && j.Account == Account.Sales).Select(j => j.Credit).ToListAsync()).Sum()));
+            Assert.False(await In(site, db => db.Documents.AnyAsync(d => d.Kind == DocumentKind.Sale && d.Branch != site.Branch)));
+            await Verified(site);
+        }
+        Assert.Equal(2, await In(hq, db => db.Documents.CountAsync(d => d.Kind == DocumentKind.Sale)));
+        await Verified(hq);
+        await restarted.StopAsync();
+    }
+
     [Fact] public async Task BranchesSyncOverHttpWithTheirKeys()
     {
         var builder = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder();

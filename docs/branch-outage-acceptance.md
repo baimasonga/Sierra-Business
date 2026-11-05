@@ -1,0 +1,6 @@
+# Two-branch outage acceptance
+
+The SyncTests.TwoBranchesTradeDuringHttpOutageAndReconnectWithoutDuplicateSales test runs the production HTTP sync endpoints with independent disposable databases for Freetown, Bo and head office. It stops the listening endpoint, posts a receipt and a cash sale at each branch, attempts synchronization while disconnected, then starts a new listener at the same address. A second sync checks for repeat uploads. The test checks stock after offline trading, sale IDs and sales-ledger credit at head office, separation of branch records and protected history at all three sites.
+
+This single-host loopback test does not certify two physical devices, HTTPS deployment, power loss, or installed desktop behavior. For a deployment rehearsal, use disposable companies on separate machines on the same sync protocol. Repeat the above sequence with branch-to-head-office connectivity disabled, then restore it and check the sync queues, document registers, stock and journals at each site. Record software versions, outage duration, each sale number, final reconciliation and any conflicts.
+Verified on 5 November 2026: the focused Release test passed (one passed, zero failures or skips).
