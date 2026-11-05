@@ -97,6 +97,32 @@ public sealed class RecordsSafetyTests : IAsyncLifetime
         File.Delete(copyFolder);
     }
 
+    [Fact] public async Task EncryptedCloudFileImportsForReviewBeforeRestoringTrade()
+    {
+        var actor = await Owner(); var product = await Product(actor); await Sell(actor, product);
+        var backup = await Backups.Create();
+        var manifest = System.Text.Json.JsonSerializer.Deserialize<BackupManifest>(await File.ReadAllTextAsync(backup.Path + ".manifest.json"))!;
+        var encrypted = Path.Combine(directory, "download.backup");
+        var key = BackupEncryption.NewRecoveryKey();
+        await BackupEncryption.Encrypt(backup.Path, encrypted, key, manifest);
+        await Sell(actor, product);
+        var cloud = services.GetRequiredService<ICloudBackupManager>();
+        await using (var wrong = File.OpenRead(encrypted))
+            await Assert.ThrowsAnyAsync<System.Security.Cryptography.CryptographicException>(() => cloud.ImportEncrypted(wrong, BackupEncryption.NewRecoveryKey()));
+        Assert.Empty(Directory.GetFiles(Store.BackupDirectory, "cloud-*"));
+        string name;
+        await using (var download = File.OpenRead(encrypted)) name = await cloud.ImportEncrypted(download, key);
+        Assert.Equal(8, (await Business.Read(actor)).Stock.Sum(x => x.Quantity));
+        var imported = (await Backups.List()).Single(x => x.Kind == "cloud-import");
+        Assert.Equal(name, Path.GetFileName(Store.ListBackups().Single(b => b.Manifest.Kind == "cloud-import").Path));
+        var restored = await Backups.Restore(imported.Id, "RESTORE");
+        Assert.True(restored.Integrity.Ok);
+        Assert.True(File.Exists(restored.SafetyBackup));
+        actor = await Accounts.SignIn("owner@example.test", Password);
+        Assert.Equal(9, (await Business.Read(actor)).Stock.Sum(x => x.Quantity));
+        await Sell(actor, product);
+        Assert.Equal(8, (await Business.Read(actor)).Stock.Sum(x => x.Quantity));
+    }
     [Fact] public async Task RestoreReturnsToTheBackupTakesASafetyCopyAndSignsOut()
     {
         var actor = await Owner(); var product = await Product(actor); await Sell(actor, product);
