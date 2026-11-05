@@ -48,14 +48,16 @@ window.sierraPreferenceWrite = (key, json) => {
 window.sierraPreferenceRemove = (key) => localStorage.removeItem('rokela.preferences.' + key);
 window.sierraConfigureShortcuts = (keys) => { window.rokelaShortcutKeys = new Set(keys); };
 document.addEventListener('keydown', event => {
-    if (!event.target?.closest?.('.workspace')) return;
+    const workspace = event.target?.closest?.('.workspace');
+    if (!workspace || event.defaultPrevented || event.isComposing) return;
     if (!event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && window.rokelaShortcutKeys?.has(event.key)) event.preventDefault();
-    if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === 's') {
-        const button = document.querySelector('.workspace [data-post-document]');
+    if (event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === 's') {
+        const button = workspace.querySelector('[data-post-document]');
         if (!button) return;
         event.preventDefault();
+        if (event.repeat || button.disabled) return;
         event.target.blur?.(); // commit the focused Blazor field before clicking the same visible posting action
-        setTimeout(() => { if (!button.disabled) button.click(); }, 0);
+        setTimeout(() => { if (workspace.isConnected && workspace.contains(button) && !button.disabled) button.click(); }, 0);
     }
 }, true);
 

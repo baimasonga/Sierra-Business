@@ -1,0 +1,38 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Posting shortcut verification</title>
+<div class="workspace"><button data-post-document id="other">Other workspace</button></div>
+<div class="workspace"><input id="price"><button data-post-document id="post">Post</button></div>
+<output id="result">PENDING</output>
+<script src="../src/SierraBusiness.Web/wwwroot/print.js"></script>
+<script>
+(async () => {
+    const field = document.querySelector('#price'), post = document.querySelector('#post');
+    const events = [];
+    field.onblur = () => events.push('commit');
+    post.onclick = () => events.push('post');
+    document.querySelector('#other').onclick = () => events.push('wrong workspace');
+    const press = (options = {}) => {
+        const key = new KeyboardEvent('keydown', {key:'s', ctrlKey:true, bubbles:true, cancelable:true, ...options});
+        field.dispatchEvent(key);
+        return key.defaultPrevented;
+    };
+    const tick = () => new Promise(resolve => setTimeout(resolve, 10));
+    field.focus();
+    for (const options of [{shiftKey:true}, {altKey:true}, {metaKey:true}, {isComposing:true}]) {
+        if (press(options)) throw Error('Intercepted modified or composing input');
+    }
+    await tick();
+    if (events.length || document.activeElement !== field) throw Error('Unexpected post or lost focus');
+    if (!press()) throw Error('Ctrl+S did not override Save');
+    press({repeat:true});
+    await tick();
+    if (events.join(',') !== 'commit,post') throw Error('Wrong order, duplicate or wrong workspace: ' + events);
+    field.focus(); post.disabled = true;
+    press();
+    await tick();
+    if (document.activeElement !== field || events.length !== 2) throw Error('Disabled action took focus or posted');
+    post.disabled = false; press(); post.remove();
+    await tick();
+    if (events.join(',') !== 'commit,post,commit') throw Error('Detached action posted');
+    document.querySelector('#result').textContent = 'PASS';
+})().catch(error => document.querySelector('#result').textContent = 'FAIL: ' + error.message);
+</script></html>
